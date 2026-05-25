@@ -10,7 +10,6 @@ import {
   FolderOpen,
   ListTodo,
   MessageSquareQuote,
-  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
@@ -85,18 +84,18 @@ function inlineAgentPosition(selection: ReturnType<typeof useWriteWorkspaceStore
 }
 
 function modeButtonClass(active: boolean): string {
-  return `inline-flex h-8 items-center justify-center rounded-full border px-2.5 text-[13px] transition ${
+  return `inline-flex h-8 items-center justify-center rounded-lg px-2.5 text-[13px] transition ${
     active
-      ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
-      : 'border-transparent bg-white/38 text-ds-faint hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink dark:bg-white/4 dark:hover:bg-white/8'
+      ? 'bg-white text-ds-ink shadow-sm ring-1 ring-ds-border-muted dark:bg-white/10 dark:ring-white/10'
+      : 'text-ds-faint hover:bg-white/70 hover:text-ds-ink dark:hover:bg-white/8'
   }`
 }
 
-function modeOptionClass(active: boolean): string {
-  return `flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-[12.5px] transition ${
+function toolbarIconButtonClass(active = false): string {
+  return `inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ds-faint transition ${
     active
       ? 'bg-accent/10 text-accent'
-      : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+      : 'hover:bg-white/70 hover:text-ds-ink dark:hover:bg-white/8'
   }`
 }
 
@@ -136,14 +135,15 @@ export function WriteWorkspaceView({
   } = useWriteWorkspaceStore()
   const saveTimerRef = useRef<number | null>(null)
   const inlineAgentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
-  const viewModeMenuRef = useRef<HTMLDivElement | null>(null)
   const [inlineAgentValue, setInlineAgentValue] = useState('')
   const [inlineAgentOpen, setInlineAgentOpen] = useState(false)
-  const [viewModeMenuOpen, setViewModeMenuOpen] = useState(false)
   const workspaceReady = workspaceRoot.trim().length > 0
   const isMarkdown = activeFilePath ? isMarkdownFile(activeFilePath) : true
   const saveLabel = formatSaveLabel(saveStatus, t)
   const selectionAction = selection.charCount > 0 ? inlineAgentPosition(selection) : null
+  const selectionActionActive = Boolean(selectionAction)
+  const selectionActionLeft = selectionAction?.left
+  const selectionActionTop = selectionAction?.top
   const activeFileLabel = activeFilePath
     ? writeRelativeToWorkspace(workspaceRoot, activeFilePath)
     : t('writeNoFileOpen')
@@ -205,25 +205,14 @@ export function WriteWorkspaceView({
   }, [loadWriteSettings])
 
   useEffect(() => {
-    if (!selectionAction || !inlineAgentOpen) return
+    if (!selectionActionActive || !inlineAgentOpen) return
     window.requestAnimationFrame(() => inlineAgentTextareaRef.current?.focus())
-  }, [inlineAgentOpen, selectionAction?.left, selectionAction?.top])
+  }, [inlineAgentOpen, selectionActionActive, selectionActionLeft, selectionActionTop])
 
   useEffect(() => {
     setInlineAgentOpen(false)
     setInlineAgentValue('')
   }, [selection.charCount, selection.text])
-
-  useEffect(() => {
-    if (!viewModeMenuOpen) return
-    const closeOnOutsidePointer = (event: PointerEvent): void => {
-      const target = event.target
-      if (target instanceof Node && viewModeMenuRef.current?.contains(target)) return
-      setViewModeMenuOpen(false)
-    }
-    window.addEventListener('pointerdown', closeOnOutsidePointer)
-    return () => window.removeEventListener('pointerdown', closeOnOutsidePointer)
-  }, [viewModeMenuOpen])
 
   useEffect(() => {
     if (saveTimerRef.current) {
@@ -346,33 +335,11 @@ export function WriteWorkspaceView({
     </button>
   )
 
-  const renderModeOption = (
-    nextMode: WritePreviewMode,
-    label: string,
-    icon: ReactElement
-  ): ReactElement => (
-    <button
-      type="button"
-      onClick={() => {
-        setPreviewMode(nextMode)
-        setViewModeMenuOpen(false)
-      }}
-      className={modeOptionClass(previewMode === nextMode)}
-      title={label}
-      aria-label={label}
-    >
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-white/55 text-current dark:bg-white/8">
-        {icon}
-      </span>
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-    </button>
-  )
-
   return (
     <div className="ds-no-drag flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-3 sm:px-4 md:px-6 lg:px-8">
-      <header className="ds-topbar-surface relative z-10 mt-3 flex min-h-[46px] w-full shrink-0 items-stretch overflow-visible rounded-[24px]">
-        <div className="flex w-full min-w-0 flex-wrap items-center justify-between gap-2 px-3 py-2 sm:px-4 md:pl-5 md:pr-4">
-          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+      <header className="ds-topbar-surface relative z-10 mt-3 flex min-h-[56px] w-full shrink-0 items-stretch overflow-visible rounded-[18px]">
+        <div className="grid w-full min-w-0 grid-cols-1 items-center gap-2 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:gap-4">
+          <div className="flex min-w-0 items-center gap-2.5">
             <button
               type="button"
               onClick={onToggleLeftSidebar}
@@ -386,33 +353,20 @@ export function WriteWorkspaceView({
                 <PanelLeftClose className="h-4 w-4" strokeWidth={1.85} />
               )}
             </button>
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-accent/10 text-accent">
-                  <FilePenLine className="h-4 w-4" strokeWidth={1.9} />
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[15px] font-semibold tracking-[-0.02em] text-ds-ink">
-                  {activeFileName}
-                </span>
-                <span className="rounded-full bg-accent/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">
-                  {t('write')}
-                </span>
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+              <FilePenLine className="h-4 w-4" strokeWidth={1.9} />
+            </span>
+            <div className="min-w-0 flex-1 leading-none">
+              <div className="truncate text-[15px] font-semibold tracking-[-0.01em] text-ds-ink">
+                {activeFileName}
               </div>
-              <div className="mt-1 truncate text-[12.5px] text-ds-faint">
+              <div className="mt-1.5 truncate text-[12px] text-ds-faint">
                 {activeFileLabel}
               </div>
             </div>
           </div>
 
-          <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1.5">
-            <button
-              type="button"
-              onClick={() => void pickWriteWorkspace()}
-              className="inline-flex h-8 items-center justify-center rounded-full border border-transparent bg-white/38 px-2.5 text-[13px] text-ds-faint shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink dark:bg-white/4 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] dark:hover:bg-white/8"
-              title={t('changeWorkspace')}
-            >
-              <FolderOpen className="h-4 w-4" strokeWidth={1.85} />
-            </button>
+          <div className="flex min-w-0 items-center justify-start gap-1 rounded-xl border border-ds-border-muted bg-white/42 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.5)] dark:bg-white/[0.035] dark:shadow-none sm:justify-end lg:justify-center">
             <button
               type="button"
               onClick={() => setPreviewMode('live')}
@@ -423,29 +377,32 @@ export function WriteWorkspaceView({
               <BookOpen className="h-4 w-4" strokeWidth={1.85} />
               <span className="hidden text-[12.5px] font-semibold sm:inline">{t('writeModeLiveShort')}</span>
             </button>
-            <div ref={viewModeMenuRef} className="relative">
-              <button
-                type="button"
-                onClick={() => setViewModeMenuOpen((open) => !open)}
-                className={modeButtonClass(previewMode !== 'live' || viewModeMenuOpen)}
-                title={t('writeMoreViewModes')}
-                aria-label={t('writeMoreViewModes')}
-                aria-expanded={viewModeMenuOpen}
-              >
-                <MoreHorizontal className="h-4 w-4" strokeWidth={1.85} />
-              </button>
-              {viewModeMenuOpen ? (
-                <div className="absolute right-0 top-10 z-50 w-48 rounded-[18px] border border-ds-border bg-ds-card/96 p-1.5 shadow-[0_18px_48px_rgba(15,23,42,0.16)] backdrop-blur-xl dark:bg-ds-card-strong/96">
-                  {renderModeOption('source', t('writeModeSource'), <FileCode2 className="h-3.5 w-3.5" strokeWidth={1.85} />)}
-                  {renderModeOption('split', t('writeModeSplit'), <Columns2 className="h-3.5 w-3.5" strokeWidth={1.85} />)}
-                  {renderModeOption('preview', t('writeModePreview'), <Eye className="h-3.5 w-3.5" strokeWidth={1.85} />)}
-                </div>
-              ) : null}
-            </div>
+            {renderModeButton('source', t('writeModeSource'), <FileCode2 className="h-4 w-4" strokeWidth={1.85} />)}
+            {renderModeButton('split', t('writeModeSplit'), <Columns2 className="h-4 w-4" strokeWidth={1.85} />)}
+            <button
+              type="button"
+              onClick={() => setPreviewMode('preview')}
+              className={modeButtonClass(previewMode === 'preview')}
+              title={t('writeModePreview')}
+              aria-label={t('writeModePreview')}
+            >
+              <Eye className="h-4 w-4" strokeWidth={1.85} />
+            </button>
+          </div>
+
+          <div className="flex min-w-0 items-center justify-start gap-1.5 sm:col-span-2 sm:justify-end lg:col-span-1">
+            <button
+              type="button"
+              onClick={() => void pickWriteWorkspace()}
+              className={toolbarIconButtonClass()}
+              title={t('changeWorkspace')}
+            >
+              <FolderOpen className="h-4 w-4" strokeWidth={1.85} />
+            </button>
             <button
               type="button"
               onClick={() => setAssistantOpen(!assistantOpen)}
-              className={modeButtonClass(assistantOpen)}
+              className={toolbarIconButtonClass(assistantOpen)}
               title={t('writeToggleAssistant')}
               aria-label={t('writeToggleAssistant')}
             >
@@ -458,13 +415,13 @@ export function WriteWorkspaceView({
                 void flushSave(workspaceRoot)
               }}
               disabled={!activeFilePath}
-              className="inline-flex h-8 items-center justify-center rounded-full border border-transparent bg-white/38 px-2.5 text-ds-faint shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white/4 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] dark:hover:bg-white/8"
+              className={`${toolbarIconButtonClass()} disabled:cursor-not-allowed disabled:opacity-40`}
               title={t('writeSaveFile')}
               aria-label={t('writeSaveFile')}
             >
               <Save className="h-4 w-4" strokeWidth={1.85} />
             </button>
-            <span className={`ml-1 hidden rounded-full px-2.5 py-1 text-[11.5px] font-semibold xl:inline-flex ${
+            <span className={`ml-1 inline-flex min-w-[64px] justify-center rounded-lg px-2.5 py-1 text-[11.5px] font-semibold ${
               saveStatus === 'error'
                 ? 'bg-red-500/12 text-red-600 dark:text-red-300'
                 : saveStatus === 'dirty'
@@ -557,6 +514,7 @@ export function WriteWorkspaceView({
                 <div className={`${editorWidth} min-h-0 overflow-hidden`}>
                   <WriteMarkdownEditor
                     value={fileContent}
+                    workspaceRoot={workspaceRoot}
                     filePath={activeFilePath}
                     appearance={editorAppearance}
                     completionModel={inlineCompletion.model}
