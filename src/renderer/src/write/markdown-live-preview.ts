@@ -1,8 +1,15 @@
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language'
-import { EditorSelection, Facet, RangeSetBuilder, type Extension } from '@codemirror/state'
+import { EditorSelection, Facet, StateField, type EditorState, type Extension } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
-import { resolveWriteMarkdownResource } from '../components/write/WriteMarkdownPreview'
+import {
+  resolveWriteMarkdownResource,
+  resolveWriteMarkdownResourcePath
+} from '../components/write/WriteMarkdownPreview'
+import {
+  highlightCodeHtml,
+  renderFallbackCodeHtml
+} from '../lib/code-highlighting'
 
 type DecorationRange = {
   from: number
@@ -156,13 +163,14 @@ class TaskCheckboxWidget extends WidgetType {
 class ImageWidget extends WidgetType {
   constructor(
     private src: string,
-    private alt: string
+    private alt: string,
+    private localPath?: string
   ) {
     super()
   }
 
   eq(other: ImageWidget): boolean {
-    return other.src === this.src && other.alt === this.alt
+    return other.src === this.src && other.alt === this.alt && other.localPath === this.localPath
   }
 
   toDOM(): HTMLElement {
@@ -174,6 +182,13 @@ class ImageWidget extends WidgetType {
     image.alt = this.alt
     image.loading = 'lazy'
     wrapper.appendChild(image)
+    if (this.localPath && typeof window.dsGui?.readWorkspaceImage === 'function') {
+      void window.dsGui.readWorkspaceImage({ path: this.localPath })
+        .then((result) => {
+          if (result.ok) image.src = result.dataUrl
+        })
+        .catch(() => undefined)
+    }
     return wrapper
   }
 }
@@ -211,17 +226,6 @@ function parseFencedCodeBlock(source: string): ParsedCodeBlock {
     body.pop()
   }
   return { code: body.join('\n'), language }
-}
-
-function parseIndentedCodeBlock(source: string): ParsedCodeBlock {
-  return {
-    code: source
-      .replace(/\r\n?/g, '\n')
-      .split('\n')
-      .map((line) => line.replace(/^(?: {4}|\t)/, ''))
-      .join('\n'),
-    language: ''
-  }
 }
 
 function openingFence(line: string): { marker: string; language: string } | null {
@@ -275,28 +279,90 @@ class TableWidget extends WidgetType {
 }
 
 class CodeBlockWidget extends WidgetType {
-  constructor(private block: ParsedCodeBlock) {
+  constructor(
+    private block: ParsedCodeBlock,
+    private from: number,
+    private to: number
+  ) {
     super()
   }
 
   eq(other: CodeBlockWidget): boolean {
-    return other.block.code === this.block.code && other.block.language === this.block.language
+    return other.block.code === this.block.code &&
+      other.block.language === this.block.language &&
+      other.from === this.from &&
+      other.to === this.to
   }
 
-  toDOM(): HTMLElement {
+  private lineIndexFromClick(event: MouseEvent, html: HTMLElement): number {
+    const lines = Array.from(html.querySelectorAll<HTMLElement>('.line'))
+    if (lines.length === 0) return 0
+
+    const target = event.target instanceof Element ? event.target.closest<HTMLElement>('.line') : null
+    const targetIndex = target ? lines.indexOf(target) : -1
+    if (targetIndex >= 0) return targetIndex
+
+    const firstRect = lines[0].getBoundingClientRect()
+    const lastRect = lines[lines.length - 1].getBoundingClientRect()
+    if (event.clientY <= firstRect.top) return 0
+    if (event.clientY >= lastRect.bottom) return lines.length - 1
+
+    const index = lines.findIndex((line) => {
+      const rect = line.getBoundingClientRect()
+      return event.clientY >= rect.top && event.clientY <= rect.bottom
+    })
+    return index >= 0 ? index : 0
+  }
+
+  private editSourceAtClick(view: EditorView, event: MouseEvent, html: HTMLElement): void {
+    const startLine = view.state.doc.lineAt(this.from)
+    const endLine = view.state.doc.lineAt(Math.max(this.from, this.to - 1))
+    const sourceLineNumber = Math.min(
+      endLine.number,
+      startLine.number + 1 + this.lineIndexFromClick(event, html)
+    )
+    const sourceLine = view.state.doc.line(sourceLineNumber)
+    const columnOffset = Math.min(sourceLine.length, Math.max(0, Math.round((event.offsetX - 20) / 8)))
+
+    view.focus()
+    view.dispatch({
+      selection: EditorSelection.cursor(sourceLine.from + columnOffset),
+      scrollIntoView: true
+    })
+  }
+
+  toDOM(view: EditorView): HTMLElement {
     const wrapper = document.createElement('div')
     wrapper.className = 'cm-write-md-code-block'
+    wrapper.tabIndex = -1
+    wrapper.title = 'Click to edit code'
+
     if (this.block.language) {
       const label = document.createElement('div')
       label.className = 'cm-write-md-code-lang'
       label.textContent = this.block.language
       wrapper.appendChild(label)
     }
-    const pre = document.createElement('pre')
-    const code = document.createElement('code')
-    code.textContent = this.block.code
-    pre.appendChild(code)
-    wrapper.appendChild(pre)
+
+    const body = document.createElement('div')
+    body.className = 'cm-write-md-code-block-body'
+    const html = document.createElement('div')
+    html.className = 'cm-write-md-code-block-html'
+    html.innerHTML = renderFallbackCodeHtml(this.block.code)
+    body.appendChild(html)
+    wrapper.appendChild(body)
+
+    wrapper.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return
+      event.preventDefault()
+      this.editSourceAtClick(view, event, html)
+    })
+
+    void highlightCodeHtml(this.block.code, this.block.language).then((nextHtml) => {
+      if (!wrapper.isConnected) return
+      html.innerHTML = nextHtml
+    })
+
     return wrapper
   }
 }
@@ -336,17 +402,52 @@ class CodeBlockToolbarWidget extends WidgetType {
       event.stopPropagation()
       const reset = (): void => {
         button.dataset.copied = 'false'
+        button.dataset.copyFailed = 'false'
         button.textContent = 'copy'
         button.title = 'Copy code'
         button.setAttribute('aria-label', 'Copy code')
       }
-      void navigator.clipboard?.writeText?.(this.block.code).then(() => {
+      const fallbackCopy = (): boolean => {
+        const textarea = document.createElement('textarea')
+        textarea.value = this.block.code
+        textarea.setAttribute('readonly', 'true')
+        textarea.style.position = 'fixed'
+        textarea.style.left = '-9999px'
+        textarea.style.top = '0'
+        document.body.appendChild(textarea)
+        textarea.focus()
+        textarea.select()
+        const ok = document.execCommand('copy')
+        document.body.removeChild(textarea)
+        return ok
+      }
+      const markCopied = (): void => {
         button.dataset.copied = 'true'
+        button.dataset.copyFailed = 'false'
         button.textContent = 'copied'
         button.title = 'Copied'
         button.setAttribute('aria-label', 'Copied')
         window.setTimeout(reset, 1400)
-      })
+      }
+      const markFailed = (): void => {
+        button.dataset.copied = 'false'
+        button.dataset.copyFailed = 'true'
+        button.textContent = 'failed'
+        button.title = 'Copy failed'
+        button.setAttribute('aria-label', 'Copy failed')
+        window.setTimeout(reset, 1400)
+      }
+
+      if (navigator?.clipboard?.writeText) {
+        void navigator.clipboard.writeText(this.block.code).then(markCopied).catch(() => {
+          if (fallbackCopy()) markCopied()
+          else markFailed()
+        })
+        return
+      }
+
+      if (fallbackCopy()) markCopied()
+      else markFailed()
     })
 
     toolbar.appendChild(button)
@@ -355,8 +456,7 @@ class CodeBlockToolbarWidget extends WidgetType {
 }
 
 const hrDecoration = Decoration.replace({
-  widget: new HrWidget(),
-  block: true
+  widget: new HrWidget()
 })
 
 const listBulletDeco = Decoration.replace({
@@ -364,31 +464,44 @@ const listBulletDeco = Decoration.replace({
 })
 
 function collectActiveLines(view: EditorView): Set<number> {
+  if (!view.hasFocus) return new Set()
+  return collectActiveLinesFromState(view.state)
+}
+
+function collectActiveLinesFromState(state: EditorState): Set<number> {
   const active = new Set<number>()
-  if (!view.hasFocus) return active
-  for (const range of view.state.selection.ranges) {
-    const start = view.state.doc.lineAt(range.from).number
-    const end = view.state.doc.lineAt(range.to).number
+  for (const range of state.selection.ranges) {
+    const start = state.doc.lineAt(range.from).number
+    const end = state.doc.lineAt(range.to).number
     for (let line = start; line <= end; line += 1) active.add(line)
   }
   return active
 }
 
 function nodeTouchesActiveLine(view: EditorView, from: number, to: number, activeLines: Set<number>): boolean {
-  const start = view.state.doc.lineAt(from).number
-  const end = view.state.doc.lineAt(Math.max(from, to - 1)).number
+  return rangeTouchesActiveLine(view.state, from, to, activeLines)
+}
+
+function rangeTouchesActiveLine(state: EditorState, from: number, to: number, activeLines: Set<number>): boolean {
+  const start = state.doc.lineAt(from).number
+  const end = state.doc.lineAt(Math.max(from, to - 1)).number
   for (let line = start; line <= end; line += 1) {
     if (activeLines.has(line)) return true
   }
   return false
 }
 
-function markdownImageFromSource(source: string, filePath?: string | null): { src: string; alt: string } | null {
+function markdownImageFromSource(source: string, filePath?: string | null): {
+  src: string
+  alt: string
+  localPath?: string
+} | null {
   const match = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)$/.exec(source.trim())
   if (!match) return null
   const resolved = resolveWriteMarkdownResource(match[2], filePath)
   if (!resolved) return null
-  return { alt: match[1] || '', src: resolved }
+  const localPath = resolveWriteMarkdownResourcePath(match[2], filePath)
+  return { alt: match[1] || '', src: resolved, ...(localPath ? { localPath } : {}) }
 }
 
 function splitTableLine(line: string): string[] {
@@ -432,43 +545,52 @@ function collectMarkdownTableRanges(
   to: number,
   activeLines: Set<number>
 ): Array<BlockRange & { table: ParsedTable }> {
+  return collectMarkdownTableRangesFromState(view.state, from, to, activeLines)
+}
+
+function collectMarkdownTableRangesFromState(
+  state: EditorState,
+  from: number,
+  to: number,
+  activeLines: Set<number>
+): Array<BlockRange & { table: ParsedTable }> {
   const tables: Array<BlockRange & { table: ParsedTable }> = []
-  let line = view.state.doc.lineAt(from)
-  const endLine = view.state.doc.lineAt(to).number
+  let line = state.doc.lineAt(from)
+  const endLine = state.doc.lineAt(to).number
 
   while (line.number < endLine) {
     const headerText = line.text
     if (!looksLikeTableRow(headerText)) {
       if (line.to >= to) break
-      line = view.state.doc.line(line.number + 1)
+      line = state.doc.line(line.number + 1)
       continue
     }
 
-    const delimiterLine = view.state.doc.line(line.number + 1)
+    const delimiterLine = state.doc.line(line.number + 1)
     const headers = splitTableLine(headerText)
     if (!looksLikeTableDelimiter(delimiterLine.text, headers.length)) {
       if (line.to >= to) break
-      line = view.state.doc.line(line.number + 1)
+      line = state.doc.line(line.number + 1)
       continue
     }
 
     let lastLine = delimiterLine
     let nextNumber = delimiterLine.number + 1
-    while (nextNumber <= view.state.doc.lines) {
-      const nextLine = view.state.doc.line(nextNumber)
+    while (nextNumber <= state.doc.lines) {
+      const nextLine = state.doc.line(nextNumber)
       if (!looksLikeTableRow(nextLine.text)) break
       lastLine = nextLine
       nextNumber += 1
     }
 
-    if (!nodeTouchesActiveLine(view, line.from, lastLine.to, activeLines)) {
-      const source = view.state.doc.sliceString(line.from, lastLine.to)
+    if (!rangeTouchesActiveLine(state, line.from, lastLine.to, activeLines)) {
+      const source = state.doc.sliceString(line.from, lastLine.to)
       const table = parseMarkdownTable(source)
       if (table) tables.push({ from: line.from, to: lastLine.to, table })
     }
 
     if (lastLine.number >= endLine || lastLine.to >= to) break
-    line = view.state.doc.line(lastLine.number + 1)
+    line = state.doc.line(lastLine.number + 1)
   }
 
   return tables
@@ -480,36 +602,52 @@ function collectMarkdownCodeBlockRanges(
   to: number,
   activeLines: Set<number>
 ): CodeBlockRange[] {
-  const blocks: CodeBlockRange[] = []
-  let line = view.state.doc.lineAt(from)
-  const endLine = view.state.doc.lineAt(to).number
+  return collectMarkdownCodeBlockRangesFromState(view.state, from, to, activeLines)
+}
 
-  while (line.number <= endLine) {
+function collectMarkdownCodeBlockRangesFromState(
+  state: EditorState,
+  from: number,
+  to: number,
+  _activeLines: Set<number>
+): CodeBlockRange[] {
+  const blocks: CodeBlockRange[] = []
+  let line = state.doc.line(1)
+  const rangeFrom = Math.max(0, from)
+  const rangeTo = Math.max(rangeFrom, to)
+
+  while (line.number <= state.doc.lines) {
     const fence = openingFence(line.text)
     if (!fence) {
-      if (line.to >= to || line.number >= view.state.doc.lines) break
-      line = view.state.doc.line(line.number + 1)
+      if (line.number >= state.doc.lines) break
+      line = state.doc.line(line.number + 1)
       continue
     }
 
     const closePattern = closingFencePattern(fence.marker)
     let lastLine = line
     let nextNumber = line.number + 1
-    while (nextNumber <= view.state.doc.lines) {
-      const nextLine = view.state.doc.line(nextNumber)
+    while (nextNumber <= state.doc.lines) {
+      const nextLine = state.doc.line(nextNumber)
       lastLine = nextLine
       if (closePattern.test(nextLine.text)) break
       nextNumber += 1
     }
 
-    const source = view.state.doc.sliceString(line.from, lastLine.to)
-    blocks.push({ from: line.from, to: lastLine.to, block: parseFencedCodeBlock(source) })
+    if (lastLine.to >= rangeFrom && line.from <= rangeTo) {
+      const source = state.doc.sliceString(line.from, lastLine.to)
+      blocks.push({ from: line.from, to: lastLine.to, block: parseFencedCodeBlock(source) })
+    }
 
-    if (lastLine.number >= endLine || lastLine.to >= to || lastLine.number >= view.state.doc.lines) break
-    line = view.state.doc.line(lastLine.number + 1)
+    if (lastLine.number >= state.doc.lines) break
+    line = state.doc.line(lastLine.number + 1)
   }
 
   return blocks
+}
+
+export const markdownLivePreviewTestInternals = {
+  collectMarkdownCodeBlockRangesFromState
 }
 
 function addFencedCodeLineDecorations(
@@ -533,7 +671,7 @@ function addFencedCodeLineDecorations(
     ranges.push({ from: line.from, to: line.from, deco: codeBlockLineDeco })
   }
 
-  if (blockActive) return
+  if (!blockActive) return
 
   if (startLine.from < startLine.to) {
     ranges.push({
@@ -576,6 +714,58 @@ function addTaskMarker(view: EditorView, from: number, to: number, ranges: Decor
   })
 }
 
+function buildDecorationSet(ranges: DecorationRange[]): DecorationSet {
+  return Decoration.set(
+    ranges
+      .filter((range) => range.to >= range.from)
+      .map((range) => range.deco.range(range.from, range.to)),
+    true
+  )
+}
+
+function buildMarkdownBlockDecorations(state: EditorState): DecorationSet {
+  const activeLines = collectActiveLinesFromState(state)
+  const ranges: DecorationRange[] = []
+  const renderedBlocks: BlockRange[] = []
+
+  for (const codeRange of collectMarkdownCodeBlockRangesFromState(state, 0, state.doc.length, activeLines)) {
+    if (rangeTouchesActiveLine(state, codeRange.from, codeRange.to, activeLines)) continue
+    renderedBlocks.push({ from: codeRange.from, to: codeRange.to })
+    ranges.push({
+      from: codeRange.from,
+      to: codeRange.to,
+      deco: Decoration.replace({
+        widget: new CodeBlockWidget(codeRange.block, codeRange.from, codeRange.to),
+        block: true
+      })
+    })
+  }
+
+  for (const tableRange of collectMarkdownTableRangesFromState(state, 0, state.doc.length, activeLines)) {
+    if (isInsideBlockRanges(tableRange.from, tableRange.to, renderedBlocks)) continue
+    ranges.push({
+      from: tableRange.from,
+      to: tableRange.to,
+      deco: Decoration.replace({ widget: new TableWidget(tableRange.table), block: true })
+    })
+  }
+
+  return buildDecorationSet(ranges)
+}
+
+const markdownBlockPreviewField = StateField.define<DecorationSet>({
+  create(state) {
+    return buildMarkdownBlockDecorations(state)
+  },
+  update(decorations, transaction) {
+    if (transaction.docChanged || transaction.selection) {
+      return buildMarkdownBlockDecorations(transaction.state)
+    }
+    return decorations
+  },
+  provide: (field) => EditorView.decorations.from(field)
+})
+
 function buildMarkdownDecorations(view: EditorView): DecorationSet {
   const activeLines = collectActiveLines(view)
   const imageContext = view.state.facet(markdownImageContextFacet)
@@ -592,11 +782,6 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
   for (const { from, to } of view.visibleRanges) {
     for (const tableRange of collectMarkdownTableRanges(view, from, to, activeLines)) {
       renderedBlocks.push({ from: tableRange.from, to: tableRange.to })
-      ranges.push({
-        from: tableRange.from,
-        to: tableRange.to,
-        deco: Decoration.replace({ widget: new TableWidget(tableRange.table), block: true })
-      })
     }
   }
 
@@ -614,17 +799,6 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
         switch (node.name) {
           case 'FencedCode':
           case 'CodeBlock':
-            if (!nodeTouchesActiveLine(view, node.from, node.to, activeLines)) {
-              const source = view.state.doc.sliceString(node.from, node.to)
-              const block = node.name === 'FencedCode'
-                ? parseFencedCodeBlock(source)
-                : parseIndentedCodeBlock(source)
-              ranges.push({
-                from: node.from,
-                to: node.to,
-                deco: Decoration.replace({ widget: new CodeBlockWidget(block), block: true })
-              })
-            }
             return false
           case 'ATXHeading1':
             ranges.push({ from: line.from, to: line.from, deco: centerLineDeco })
@@ -659,7 +833,7 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
               ranges.push({
                 from: node.from,
                 to: node.to,
-                deco: Decoration.replace({ widget: new ImageWidget(parsed.src, parsed.alt) })
+                deco: Decoration.replace({ widget: new ImageWidget(parsed.src, parsed.alt, parsed.localPath) })
               })
               return false
             }
@@ -668,14 +842,7 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
           case 'Table': {
             if (nodeTouchesActiveLine(view, node.from, node.to, activeLines)) return false
             const parsed = parseMarkdownTable(view.state.doc.sliceString(node.from, node.to))
-            if (parsed) {
-              ranges.push({
-                from: node.from,
-                to: node.to,
-                deco: Decoration.replace({ widget: new TableWidget(parsed), block: true })
-              })
-              return false
-            }
+            if (parsed) return false
             break
           }
           case 'Autolink': {
@@ -713,16 +880,7 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
     })
   }
 
-  ranges.sort((a, b) => a.from - b.from || a.to - b.to)
-  const builder = new RangeSetBuilder<Decoration>()
-  let previousTo = -1
-  for (const range of ranges) {
-    if (range.to < range.from) continue
-    if (range.from < previousTo && range.to > range.from) continue
-    builder.add(range.from, range.to, range.deco)
-    previousTo = Math.max(previousTo, range.to)
-  }
-  return builder.finish()
+  return buildDecorationSet(ranges)
 }
 
 const markdownLivePreviewPlugin = ViewPlugin.fromClass(
@@ -756,6 +914,7 @@ export function writeMarkdownLivePreviewExtensions(filePath?: string | null): Ex
     markdownImageContextFacet.of({ filePath }),
     syntaxHighlighting(writeMarkdownHighlight),
     writeMarkdownLiveTheme,
+    markdownBlockPreviewField,
     markdownLivePreviewPlugin
   ]
 }

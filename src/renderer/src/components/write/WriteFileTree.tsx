@@ -1,7 +1,8 @@
 import type { PointerEvent as ReactPointerEvent, ReactElement, ReactNode } from 'react'
-import { ChevronDown, ChevronRight, FileText, FilePlus2, Folder, FolderPlus, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileText, FilePlus2, Folder, FolderPlus, Image, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { WorkspaceEntry } from '@shared/workspace-file'
+import { isWriteImageFileExtension, isWriteWorkspaceEntry } from '@shared/write-text-file'
 
 type Props = {
   rootDirectory: string
@@ -48,8 +49,11 @@ function isAssistantInternalDirectory(entry: WorkspaceEntry): boolean {
 }
 
 function isWriteDocument(entry: WorkspaceEntry): boolean {
-  if (isAssistantInternalDirectory(entry)) return false
-  return entry.type === 'directory' || ['.md', '.markdown', '.mdx'].includes(entry.ext.toLowerCase())
+  return !isAssistantInternalDirectory(entry) && isWriteWorkspaceEntry(entry)
+}
+
+function isImageEntry(entry: WorkspaceEntry): boolean {
+  return entry.type === 'file' && isWriteImageFileExtension(entry.ext)
 }
 
 function stopButtonPointer(event: ReactPointerEvent<HTMLButtonElement>): void {
@@ -121,6 +125,7 @@ export function WriteFileTree({
       const expanded = isDirectory && expandedDirs.has(entry.path)
       const loading = isDirectory && loadingDirs[entry.path]
       const selected = !isDirectory && selectedFilePath === entry.path
+      const imageEntry = isImageEntry(entry)
       const row = (
         <div key={entry.path}>
           <div
@@ -154,6 +159,8 @@ export function WriteFileTree({
               )}
               {isDirectory ? (
                 <Folder className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.75} />
+              ) : imageEntry ? (
+                <Image className={`h-3.5 w-3.5 shrink-0 ${selected ? 'text-accent' : 'text-emerald-600/75 dark:text-emerald-300/80'}`} strokeWidth={1.8} />
               ) : (
                 <FileText className={`h-3.5 w-3.5 shrink-0 ${selected ? 'text-accent' : 'text-ds-faint/90'}`} strokeWidth={1.8} />
               )}
@@ -207,7 +214,7 @@ export function WriteFileTree({
       {showHeader ? (
         <div className="flex items-center justify-between px-2 pb-1 pt-0.5">
           <span className="min-w-0 truncate text-[12px] font-semibold uppercase tracking-[0.08em] text-ds-faint">
-            {t('writeMarkdownFiles')}
+            {t('writeWorkspaceFiles')}
           </span>
           <div className="flex items-center gap-0.5">
             <TreeActionButton

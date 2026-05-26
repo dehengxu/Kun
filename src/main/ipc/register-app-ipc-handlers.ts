@@ -39,6 +39,7 @@ import {
   terminalLifecyclePayloadSchema,
   terminalResizePayloadSchema,
   workspaceDirectoryCreatePayloadSchema,
+  workspaceClipboardImageSavePayloadSchema,
   workspaceDirectoryTargetPayloadSchema,
   workspaceEntryDeletePayloadSchema,
   workspaceEntryRenamePayloadSchema,
@@ -46,6 +47,8 @@ import {
   workspaceFileTargetPayloadSchema,
   workspaceFileWatchPayloadSchema,
   workspaceFileWritePayloadSchema,
+  writeExportPayloadSchema,
+  writeRichClipboardPayloadSchema,
   writeInlineCompletionPayloadSchema,
   workspaceRootSchema
 } from './app-ipc-schemas'
@@ -64,13 +67,16 @@ import {
   normalizeSkillFolderName,
   openEditorPath,
   openPathWithShell,
+  readWorkspaceImage,
   readWorkspaceFile,
   renameWorkspaceEntry,
   resolveWorkspaceFile,
+  saveWorkspaceClipboardImage,
   writeWorkspaceFile
 } from '../services/workspace-service'
 import type { createTerminalService } from '../services/terminal-service'
 import { requestWriteInlineCompletion } from '../services/write-inline-completion-service'
+import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
 
 type GuiUpdaterModule = typeof import('../gui-updater')
 type TerminalService = ReturnType<typeof createTerminalService>
@@ -648,6 +654,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:read-workspace', workspaceFileTargetPayloadSchema, payload)
     )
   )
+  ipcMain.handle('file:read-workspace-image', async (_, payload: unknown) =>
+    readWorkspaceImage(
+      parseIpcPayload('file:read-workspace-image', workspaceFileTargetPayloadSchema, payload)
+    )
+  )
   ipcMain.handle('file:write-workspace', async (_, payload: unknown) =>
     writeWorkspaceFile(
       parseIpcPayload('file:write-workspace', workspaceFileWritePayloadSchema, payload)
@@ -663,6 +674,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:create-workspace-directory', workspaceDirectoryCreatePayloadSchema, payload)
     )
   )
+  ipcMain.handle('file:save-workspace-clipboard-image', async (_, payload: unknown) =>
+    saveWorkspaceClipboardImage(
+      parseIpcPayload(
+        'file:save-workspace-clipboard-image',
+        workspaceClipboardImageSavePayloadSchema,
+        payload
+      )
+    )
+  )
   ipcMain.handle('file:rename-workspace-entry', async (_, payload: unknown) =>
     renameWorkspaceEntry(
       parseIpcPayload('file:rename-workspace-entry', workspaceEntryRenamePayloadSchema, payload)
@@ -676,17 +696,33 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   ipcMain.handle('file:watch-workspace', async (event, payload: unknown) => {
     const request = parseIpcPayload('file:watch-workspace', workspaceFileWatchPayloadSchema, payload)
     const initial = await readWorkspaceFile(request)
-    if (!initial.ok) return initial
+    let watchedPath: string
+    let initialContent: string
+    let initialSize: number
+    let initialTruncated: boolean
+    if (initial.ok) {
+      watchedPath = initial.path
+      initialContent = initial.content
+      initialSize = initial.size
+      initialTruncated = initial.truncated
+    } else {
+      const initialImage = await readWorkspaceImage(request)
+      if (!initialImage.ok) return initial
+      watchedPath = initialImage.path
+      initialContent = ''
+      initialSize = initialImage.size
+      initialTruncated = false
+    }
 
     const watchId = randomUUID()
     try {
-      const watcher = watch(initial.path, { persistent: false }, () => {
+      const watcher = watch(watchedPath, { persistent: false }, () => {
         scheduleWorkspaceFileChange(watchId)
       })
       workspaceFileWatchers.set(watchId, {
         watcher,
         sender: event.sender,
-        path: initial.path,
+        path: watchedPath,
         workspaceRoot: request.workspaceRoot,
         timer: null
       })
@@ -694,10 +730,10 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       return {
         ok: true as const,
         watchId,
-        path: initial.path,
-        content: initial.content,
-        size: initial.size,
-        truncated: initial.truncated,
+        path: watchedPath,
+        content: initialContent,
+        size: initialSize,
+        truncated: initialTruncated,
         startedAt: new Date().toISOString()
       }
     } catch (error) {
@@ -709,6 +745,17 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
   ipcMain.handle('file:unwatch-workspace', async (_, watchId: unknown) =>
     disposeWorkspaceFileWatch(parseIpcPayload('file:unwatch-workspace', streamIdSchema, watchId))
+  )
+  ipcMain.handle('write:export', async (_, payload: unknown) =>
+    exportWriteDocument(
+      parseIpcPayload('write:export', writeExportPayloadSchema, payload),
+      { parentWindow: getMainWindow() }
+    )
+  )
+  ipcMain.handle('write:copy-rich-text', async (_, payload: unknown) =>
+    copyWriteDocumentAsRichText(
+      parseIpcPayload('write:copy-rich-text', writeRichClipboardPayloadSchema, payload)
+    )
   )
   ipcMain.handle('write:inline-completion', async (_, payload: unknown) =>
     requestWriteInlineCompletion(

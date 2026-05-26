@@ -25,7 +25,10 @@ import type {
   TerminalResizePayload
 } from './terminal-session'
 import type {
+  WorkspaceClipboardImageSavePayload,
+  WorkspaceClipboardImageSaveResult,
   WorkspaceFileReadResult,
+  WorkspaceImageReadResult,
   WorkspaceDirectoryCreatePayload,
   WorkspaceDirectoryCreateResult,
   WorkspaceDirectoryListResult,
@@ -48,6 +51,12 @@ import type {
   WriteInlineCompletionRequest,
   WriteInlineCompletionResult
 } from './write-inline-completion'
+import type {
+  WriteExportPayload,
+  WriteExportResult,
+  WriteRichClipboardPayload,
+  WriteRichClipboardResult
+} from './write-export'
 
 export type RuntimeRequestResult = { ok: boolean; status: number; body: string }
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
@@ -171,11 +180,15 @@ export type DsGuiApi = {
   listWorkspaceDirectory: (options: WorkspaceDirectoryTarget) => Promise<WorkspaceDirectoryListResult>
   resolveWorkspaceFile: (options: WorkspaceFileTarget) => Promise<WorkspaceFileResolveResult>
   readWorkspaceFile: (options: WorkspaceFileTarget) => Promise<WorkspaceFileReadResult>
+  readWorkspaceImage: (options: WorkspaceFileTarget) => Promise<WorkspaceImageReadResult>
   writeWorkspaceFile: (payload: WorkspaceFileWritePayload) => Promise<WorkspaceFileWriteResult>
   createWorkspaceFile: (payload: WorkspaceFileCreatePayload) => Promise<WorkspaceFileCreateResult>
   createWorkspaceDirectory: (
     payload: WorkspaceDirectoryCreatePayload
   ) => Promise<WorkspaceDirectoryCreateResult>
+  saveWorkspaceClipboardImage: (
+    payload: WorkspaceClipboardImageSavePayload
+  ) => Promise<WorkspaceClipboardImageSaveResult>
   renameWorkspaceEntry: (
     payload: WorkspaceEntryRenamePayload
   ) => Promise<WorkspaceEntryRenameResult>
@@ -188,6 +201,10 @@ export type DsGuiApi = {
   requestWriteInlineCompletion: (
     payload: WriteInlineCompletionRequest
   ) => Promise<WriteInlineCompletionResult>
+  exportWriteDocument: (payload: WriteExportPayload) => Promise<WriteExportResult>
+  copyWriteDocumentAsRichText: (
+    payload: WriteRichClipboardPayload
+  ) => Promise<WriteRichClipboardResult>
   startSse: (threadId: string, sinceSeq: number, streamId?: string) => Promise<{ streamId: string }>
   stopSse: (streamId: string) => Promise<boolean>
   onSseEvent: (handler: (payload: SseEventPayload) => void) => () => void

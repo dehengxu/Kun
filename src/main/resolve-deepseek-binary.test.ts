@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   managedPackageBinaryName,
+  managedPackageCompanionBinaryName,
   managedPackageInstallModuleRequest
 } from './resolve-deepseek-binary'
 
@@ -34,5 +35,15 @@ describe('managedPackageBinaryName', () => {
 
   it('maps the renamed package to the codewhale binary name', () => {
     expect(managedPackageBinaryName('codewhale')).toBe('codewhale')
+  })
+})
+
+describe('managedPackageCompanionBinaryName', () => {
+  it('maps the legacy package to the deepseek-tui companion name', () => {
+    expect(managedPackageCompanionBinaryName('deepseek-tui')).toBe('deepseek-tui')
+  })
+
+  it('maps the renamed package to the codewhale-tui companion name', () => {
+    expect(managedPackageCompanionBinaryName('codewhale')).toBe('codewhale-tui')
   })
 })

@@ -1,14 +1,49 @@
-import { Component, type ReactElement, type ReactNode } from 'react'
+import {
+  Component,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentPropsWithoutRef,
+  type DetailedHTMLProps,
+  type HTMLAttributes,
+  type ReactElement,
+  type ReactNode
+} from 'react'
+import {
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Copy
+} from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { harden } from 'rehype-harden'
 import type { PluggableList } from 'unified'
+import { useTranslation } from 'react-i18next'
+import {
+  resolveWriteMarkdownResource,
+  resolveWriteMarkdownResourcePath
+} from '@shared/write-markdown-resource'
+import {
+  highlightCodeHtml,
+  renderFallbackCodeHtml
+} from '../../lib/code-highlighting'
+
+export {
+  resolveWriteMarkdownResource,
+  resolveWriteMarkdownResourcePath,
+  writePathToFileUrl
+} from '@shared/write-markdown-resource'
 
 type Props = {
   content: string
   isMarkdown: boolean
   filePath?: string | null
   previewErrorMessage?: string
+}
+
+type CodeProps = DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement> & {
+  node?: { tagName?: string }
 }
 
 export const writeMarkdownHardenOptions = {
@@ -24,64 +59,259 @@ const rehypePlugins = [
   ]
 ] as unknown as PluggableList
 
-function normalizePath(value: string): string {
-  return value.replaceAll('\\', '/')
-}
-
-function dirnamePortable(filePath: string): string {
-  const normalized = normalizePath(filePath)
-  const slash = normalized.lastIndexOf('/')
-  if (slash < 0) return ''
-  if (slash === 0) return '/'
-  return normalized.slice(0, slash)
-}
-
-function isExplicitUrl(value: string): boolean {
-  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)
-}
-
-function normalizeJoinedPath(pathname: string): string {
-  const normalized = normalizePath(pathname)
-  const prefix = normalized.startsWith('/') ? '/' : ''
-  const parts: string[] = []
-  for (const part of normalized.slice(prefix.length).split('/')) {
-    if (!part || part === '.') continue
-    if (part === '..') {
-      if (parts.length > 0) parts.pop()
-      continue
-    }
-    parts.push(part)
-  }
-  return `${prefix}${parts.join('/')}`
-}
-
-function pathToFileUrl(pathname: string): string {
-  const normalized = normalizeJoinedPath(pathname)
-  const encoded = normalized
-    .split('/')
-    .map((part) => encodeURIComponent(part))
-    .join('/')
-  return `file://${encoded.startsWith('/') ? encoded : `/${encoded}`}`
-}
-
-export function resolveWriteMarkdownResource(src: string | undefined, filePath?: string | null): string | undefined {
-  if (!src?.trim() || !filePath) return src
-  const value = src.trim()
-  if (isExplicitUrl(value) || value.startsWith('#')) return src
-  const [pathname, suffix = ''] = value.split(/([?#].*)/, 2)
-  const baseDir = dirnamePortable(filePath)
-  if (!baseDir) return src
-  const resolved = pathname.startsWith('/')
-    ? normalizeJoinedPath(pathname)
-    : normalizeJoinedPath(`${baseDir}/${pathname}`)
-  return `${pathToFileUrl(resolved)}${suffix}`
-}
+const LANGUAGE_REGEX = /language-([^\s]+)/
+const TRAILING_NEWLINES_REGEX = /\n+$/
+const COLLAPSE_HEIGHT = 200
+const COPY_RESET_MS = 2000
 
 function plainTextFallback(content: string): ReactElement {
   return (
     <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[13.5px] leading-6 text-ds-ink">
       {content}
     </pre>
+  )
+}
+
+function isMissingImageIpc(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes('No handler registered for') ||
+    message.includes('readWorkspaceImage is not a function')
+}
+
+function extractText(node: ReactNode): string {
+  if (typeof node === 'string') return node
+  if (typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(extractText).join('')
+  if (node && typeof node === 'object' && 'props' in node) {
+    const props = node.props as { children?: ReactNode }
+    return extractText(props.children)
+  }
+  return ''
+}
+
+function copyTextFallback(text: string): boolean {
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  const ok = document.execCommand('copy')
+  document.body.removeChild(textarea)
+  return ok
+}
+
+function PreviewCodeBlock({
+  code,
+  language
+}: {
+  code: string
+  language: string
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const trimmedCode = code.replace(TRAILING_NEWLINES_REGEX, '')
+  const [html, setHtml] = useState(() => renderFallbackCodeHtml(trimmedCode))
+  const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
+  const [expandable, setExpandable] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const copyResetRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setHtml(renderFallbackCodeHtml(trimmedCode))
+
+    void highlightCodeHtml(trimmedCode, language).then((nextHtml) => {
+      if (!cancelled) setHtml(nextHtml)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [trimmedCode, language])
+
+  useEffect(() => {
+    const element = bodyRef.current
+    if (!element) return
+
+    const update = (): void => {
+      setExpandable(element.scrollHeight > COLLAPSE_HEIGHT)
+    }
+
+    update()
+    if (typeof ResizeObserver === 'undefined') return
+
+    const observer = new ResizeObserver(() => update())
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [html, trimmedCode])
+
+  useEffect(() => {
+    setExpanded(false)
+  }, [trimmedCode, language])
+
+  useEffect(
+    () => () => {
+      if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current)
+    },
+    []
+  )
+
+  const handleCopy = async (): Promise<void> => {
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(trimmedCode)
+      } else if (!copyTextFallback(trimmedCode)) {
+        throw new Error('copy-failed')
+      }
+      setCopied(true)
+      setCopyFailed(false)
+    } catch {
+      setCopyFailed(true)
+      return
+    }
+    if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current)
+    copyResetRef.current = window.setTimeout(() => {
+      setCopied(false)
+      setCopyFailed(false)
+    }, COPY_RESET_MS)
+  }
+
+  return (
+    <div className="ds-code-block" data-language={language}>
+      <div className="ds-code-block-header">
+        <span className="ds-code-block-language">{language || 'text'}</span>
+        <div className="ds-code-block-actions">
+          <button
+            type="button"
+            className="ds-code-block-action"
+            title={copied ? t('copySuccess') : copyFailed ? t('copyFailed') : t('copyMessage')}
+            aria-label={copied ? t('copySuccess') : copyFailed ? t('copyFailed') : t('copyMessage')}
+            onClick={() => void handleCopy()}
+          >
+            {copied ? (
+              <Check className="h-3.5 w-3.5" strokeWidth={2.1} />
+            ) : (
+              <Copy className="h-3.5 w-3.5" strokeWidth={1.9} />
+            )}
+          </button>
+          {expandable ? (
+            <button
+              type="button"
+              className="ds-code-block-action"
+              title={expanded ? 'Collapse code' : 'Expand code'}
+              aria-label={expanded ? 'Collapse code' : 'Expand code'}
+              onClick={() => setExpanded((value) => !value)}
+            >
+              {expanded ? (
+                <ChevronUp className="h-3.5 w-3.5" strokeWidth={1.9} />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.9} />
+              )}
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className={`ds-code-block-body ${expandable && !expanded ? 'is-collapsed' : ''}`}>
+        <div
+          ref={bodyRef}
+          className="ds-code-block-html"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+        {expandable && !expanded ? (
+          <button
+            type="button"
+            className="ds-code-block-fade"
+            aria-label="Expand code"
+            onClick={() => setExpanded(true)}
+          />
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function PreviewCode({ className, children, node, ...props }: CodeProps): ReactNode {
+  const text = extractText(children)
+  const isInline = node?.tagName !== 'code' || (!LANGUAGE_REGEX.test(className ?? '') && !text.includes('\n'))
+
+  if (isInline) {
+    return (
+      <code
+        className={className ? `ds-code-inline ${className}` : 'ds-code-inline'}
+        {...props}
+      >
+        {children}
+      </code>
+    )
+  }
+
+  const match = className?.match(LANGUAGE_REGEX)
+  const language = match?.[1] ?? ''
+  return <PreviewCodeBlock code={text} language={language} />
+}
+
+type ResolvedMarkdownImageProps = {
+  src?: string
+  alt?: string | null
+  filePath?: string | null
+} & Omit<ComponentPropsWithoutRef<'img'>, 'src' | 'alt'>
+
+function ResolvedMarkdownImage({
+  src,
+  alt,
+  filePath,
+  ...props
+}: ResolvedMarkdownImageProps): ReactElement {
+  const [resolvedSrc, setResolvedSrc] = useState(() => resolveWriteMarkdownResource(src, filePath))
+  const [loadFailed, setLoadFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoadFailed(false)
+    const localPath = resolveWriteMarkdownResourcePath(src, filePath)
+    const fallback = resolveWriteMarkdownResource(src, filePath)
+    setResolvedSrc(fallback)
+
+    if (!localPath || typeof window.dsGui?.readWorkspaceImage !== 'function') return
+
+    void window.dsGui.readWorkspaceImage({ path: localPath })
+      .then((result) => {
+        if (cancelled) return
+        if (result.ok) {
+          setResolvedSrc(result.dataUrl)
+        } else {
+          setLoadFailed(true)
+        }
+      })
+      .catch((error) => {
+        if (!cancelled && !isMissingImageIpc(error)) setLoadFailed(true)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [src, filePath])
+
+  if (loadFailed) {
+    return (
+      <span className="inline-flex max-w-full items-center rounded-lg border border-red-200/70 bg-red-50/80 px-2 py-1 text-[12px] text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200">
+        {alt || src || 'Image could not be loaded'}
+      </span>
+    )
+  }
+
+  return (
+    <img
+      {...props}
+      src={resolvedSrc}
+      alt={alt ?? ''}
+    />
   )
 }
 
@@ -148,11 +378,21 @@ function WriteMarkdownPreviewContent({ content, isMarkdown, filePath }: Props): 
             </a>
           ),
           img: ({ src, alt, ...props }): ReactNode => (
-            <img
+            <ResolvedMarkdownImage
               {...props}
-              src={resolveWriteMarkdownResource(src, filePath)}
-              alt={alt ?? ''}
+              src={src}
+              alt={alt}
+              filePath={filePath}
             />
+          ),
+          code: ({ className, children, node, ...props }): ReactNode => (
+            <PreviewCode
+              className={className}
+              node={node}
+              {...props}
+            >
+              {children}
+            </PreviewCode>
           )
         }}
       >

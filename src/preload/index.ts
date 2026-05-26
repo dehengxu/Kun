@@ -76,12 +76,16 @@ const api = {
     ipcRenderer.invoke('file:resolve-workspace', options),
   readWorkspaceFile: (options) =>
     ipcRenderer.invoke('file:read-workspace', options),
+  readWorkspaceImage: (options) =>
+    ipcRenderer.invoke('file:read-workspace-image', options),
   writeWorkspaceFile: (payload) =>
     ipcRenderer.invoke('file:write-workspace', payload),
   createWorkspaceFile: (payload) =>
     ipcRenderer.invoke('file:create-workspace', payload),
   createWorkspaceDirectory: (payload) =>
     ipcRenderer.invoke('file:create-workspace-directory', payload),
+  saveWorkspaceClipboardImage: (payload) =>
+    ipcRenderer.invoke('file:save-workspace-clipboard-image', payload),
   renameWorkspaceEntry: (payload) =>
     ipcRenderer.invoke('file:rename-workspace-entry', payload),
   deleteWorkspaceEntry: (payload) =>
@@ -98,6 +102,10 @@ const api = {
     ipcRenderer.on('file:workspace-changed', wrapped)
     return () => ipcRenderer.removeListener('file:workspace-changed', wrapped)
   },
+  exportWriteDocument: (payload) =>
+    ipcRenderer.invoke('write:export', payload),
+  copyWriteDocumentAsRichText: (payload) =>
+    ipcRenderer.invoke('write:copy-rich-text', payload),
   requestWriteInlineCompletion: (payload) =>
     ipcRenderer.invoke('write:inline-completion', payload),
   startSse: (threadId, sinceSeq, streamId) =>

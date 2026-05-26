@@ -323,12 +323,6 @@ async function ensureBundledRuntime(context) {
 
   assertBundledPackageShape(packageRoot)
   await mkdir(downloadsDir, { recursive: true })
-  // The GUI launches only the DeepSeek CLI, so keep the larger TUI binary out
-  // of packaged resources and avoid extra Windows scanning/signing work.
-  await Promise.all([
-    unlink(join(downloadsDir, target.tuiLocal)).catch(() => {}),
-    unlink(join(downloadsDir, `${target.tuiLocal}.version`)).catch(() => {})
-  ])
 
   const version = releaseVersion()
   const repo = releaseRepo()
@@ -341,6 +335,11 @@ async function ensureBundledRuntime(context) {
       assetName: target.cliAsset,
       filePath: join(downloadsDir, target.cliLocal),
       markerPath: join(downloadsDir, `${target.cliLocal}.version`)
+    },
+    {
+      assetName: target.tuiAsset,
+      filePath: join(downloadsDir, target.tuiLocal),
+      markerPath: join(downloadsDir, `${target.tuiLocal}.version`)
     }
   ]
 

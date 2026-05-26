@@ -80,11 +80,47 @@ export function managedPackageBinaryName(packageName: ManagedPackageName): strin
   return packageName === UPDATED_MANAGED_PACKAGE_NAME ? 'codewhale' : 'deepseek'
 }
 
-function managedPackageExecutableCandidates(packageName: ManagedPackageName): string[] {
+export function managedPackageCompanionBinaryName(packageName: ManagedPackageName): string {
+  return packageName === UPDATED_MANAGED_PACKAGE_NAME ? 'codewhale-tui' : 'deepseek-tui'
+}
+
+function managedPackageBinaryPairs(
+  packageName: ManagedPackageName
+): { cli: string; companion: string }[] {
+  const primary = {
+    cli: managedPackageBinaryName(packageName),
+    companion: managedPackageCompanionBinaryName(packageName)
+  }
+  const fallbackPackageName =
+    packageName === UPDATED_MANAGED_PACKAGE_NAME
+      ? LEGACY_MANAGED_PACKAGE_NAME
+      : UPDATED_MANAGED_PACKAGE_NAME
+  return [
+    primary,
+    {
+      cli: managedPackageBinaryName(fallbackPackageName),
+      companion: managedPackageCompanionBinaryName(fallbackPackageName)
+    }
+  ]
+}
+
+function managedPackageExecutablePairs(
+  packageName: ManagedPackageName
+): { cli: string; companion: string }[] {
   const suffix = process.platform === 'win32' ? '.exe' : ''
-  const primary = managedPackageBinaryName(packageName)
-  const fallback = primary === 'deepseek' ? 'codewhale' : 'deepseek'
-  return [`${primary}${suffix}`, `${fallback}${suffix}`]
+  return managedPackageBinaryPairs(packageName).map((pair) => ({
+    cli: `${pair.cli}${suffix}`,
+    companion: `${pair.companion}${suffix}`
+  }))
+}
+
+function existingFile(path: string): boolean {
+  if (!existsSync(path)) return false
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
 }
 
 function bundledManagedPackageRoots(packageName: ManagedPackageName): string[] {
@@ -160,15 +196,16 @@ function packageInfoForResolver(
 }
 
 function resolveBundledDeepseekCliPath(managedPackage: ManagedDeepseekPackage): string | null {
-  for (const executableName of managedPackageExecutableCandidates(managedPackage.packageName)) {
-    const candidate = join(managedPackage.packageRoot, 'bin', 'downloads', executableName)
-    if (!existsSync(candidate)) continue
-    try {
-      if (statSync(candidate).isFile()) {
-        return candidate
-      }
-    } catch {
-      /* ignore unreadable candidates and keep searching */
+  for (const executableNames of managedPackageExecutablePairs(managedPackage.packageName)) {
+    const cliPath = join(managedPackage.packageRoot, 'bin', 'downloads', executableNames.cli)
+    const companionPath = join(
+      managedPackage.packageRoot,
+      'bin',
+      'downloads',
+      executableNames.companion
+    )
+    if (existingFile(cliPath) && existingFile(companionPath)) {
+      return cliPath
     }
   }
   return null
@@ -249,8 +286,14 @@ function mirrorBundledDownloads(
   packageName: ManagedPackageName
 ): void {
   const copied = new Set<string>()
-  const cliName = managedPackageExecutableCandidates(packageName)[0]
-  const requiredNames = new Set([cliName, `${cliName}.version`])
+  const requiredNames = new Set(
+    managedPackageExecutablePairs(packageName).flatMap((pair) => [
+      pair.cli,
+      `${pair.cli}.version`,
+      pair.companion,
+      `${pair.companion}.version`
+    ])
+  )
   for (const sourceRoot of sourceRoots) {
     const sourceDownloads = join(sourceRoot, 'bin', 'downloads')
     if (!existsSync(sourceDownloads)) continue
@@ -379,10 +422,9 @@ export async function resolveDeepseekExecutableFromPackageJson(
 ): Promise<string> {
   const managedPackage = packageInfoForResolver(resolverPackageJsonPath, 'updated')
 
-  // The GUI only launches the `deepseek` CLI (`config` / `serve`) and never
-  // invokes the package entrypoint. Reuse an already bundled or mirrored CLI binary
-  // directly so Windows first-run setup does not block on downloading the
-  // unrelated TUI executable.
+  // The GUI launches the CLI (`config` / `serve`), but the CLI dispatcher may
+  // delegate to its sibling TUI binary for interactive sessions. Reuse bundled
+  // binaries only when the pair is complete.
   const bundledCli = resolveBundledDeepseekCliPath(managedPackage)
   if (bundledCli) {
     return bundledCli

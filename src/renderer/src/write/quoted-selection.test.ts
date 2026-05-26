@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { harden } from 'rehype-harden'
 import {
   resolveWriteMarkdownResource,
+  resolveWriteMarkdownResourcePath,
+  writePathToFileUrl,
   writeMarkdownHardenOptions
 } from '../components/write/WriteMarkdownPreview'
 import {
@@ -107,9 +109,18 @@ describe('write markdown preview resources', () => {
   it('resolves relative image paths from the current markdown file', () => {
     const resolved = resolveWriteMarkdownResource('../assets/hero image.png', '/tmp/workspace/docs/draft.md')
     expect(resolved).toBe('file:///tmp/workspace/assets/hero%20image.png')
+    expect(resolveWriteMarkdownResourcePath('../assets/hero image.png', '/tmp/workspace/docs/draft.md')).toBe(
+      '/tmp/workspace/assets/hero image.png'
+    )
   })
 
   it('keeps explicit external URLs unchanged', () => {
     expect(resolveWriteMarkdownResource('https://example.com/a.png', '/tmp/workspace/docs/draft.md')).toBe('https://example.com/a.png')
+    expect(resolveWriteMarkdownResourcePath('https://example.com/a.png', '/tmp/workspace/docs/draft.md')).toBeUndefined()
+  })
+
+  it('does not pass through explicit file URLs from markdown content', () => {
+    expect(resolveWriteMarkdownResource('file:///tmp/secret.png', '/tmp/workspace/docs/draft.md')).toBeUndefined()
+    expect(writePathToFileUrl('/tmp/workspace/assets/hero image.png')).toBe('file:///tmp/workspace/assets/hero%20image.png')
   })
 })
