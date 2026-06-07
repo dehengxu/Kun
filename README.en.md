@@ -20,34 +20,34 @@ The goal is not to ship another chat wrapper. The goal is to make DeepSeek feel 
 ---
 
 <p align="center">
-  <video autoplay loop muted playsinline style="width: 49%; max-width: 100%;">
-    <source src="src/asset/img/code.mp4" type="video/mp4">
-  </video>
-  <video autoplay loop muted playsinline style="width: 49%; max-width: 100%;">
-    <source src="src/asset/img/write.mp4" type="video/mp4">
-  </video>
+  <a href="src/asset/img/code.mp4">
+    <img src="src/asset/img/code.gif" width="410" alt="DeepSeek GUI Code mode demo">
+  </a>
+  <a href="src/asset/img/write.mp4">
+    <img src="src/asset/img/write.gif" width="410" alt="DeepSeek GUI Write mode demo">
+  </a>
 </p>
 
 ## More Demos
 
 <p align="center">
-  <video autoplay loop muted playsinline style="width: 860px; max-width: 100%;">
-    <source src="src/asset/img/feishu.mp4" type="video/mp4">
-  </video>
+  <a href="src/asset/img/feishu.mp4">
+    <img src="src/asset/img/feishu.gif" width="680" alt="Feishu / Lark / WeChat connection demo">
+  </a>
 </p>
 <p align="center"><em>Feishu / Lark / WeChat connection demo.</em></p>
 
 <p align="center">
-  <video autoplay loop muted playsinline style="width: 860px; max-width: 100%;">
-    <source src="src/asset/img/sdd.mp4" type="video/mp4">
-  </video>
+  <a href="src/asset/img/sdd.mp4">
+    <img src="src/asset/img/sdd.gif" width="680" alt="Requirement drafting and planning demo">
+  </a>
 </p>
 <p align="center"><em>Requirement drafting and planning demo.</em></p>
 
 <p align="center">
-  <video autoplay loop muted playsinline style="width: 860px; max-width: 100%;">
-    <source src="src/asset/img/web.mp4" type="video/mp4">
-  </video>
+  <a href="src/asset/img/web.mp4">
+    <img src="src/asset/img/web.gif" width="680" alt="Web tools demo">
+  </a>
 </p>
 <p align="center"><em>Web tools demo.</em></p>
 

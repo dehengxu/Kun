@@ -228,6 +228,11 @@ export type ChatState = {
    * If `seedText` is provided, immediately sends it as the first turn.
    */
   spawnSideConversation: (seedText?: string) => Promise<string | null>
+  /**
+   * Open the side chat surface without creating an underlying side
+   * thread. The first draft send will create the side thread.
+   */
+  openSideConversationDraft: () => void
   sendSideMessage: (sideId: string, text: string) => Promise<boolean>
   interruptSide: (sideId: string) => Promise<void>
   setSideInput: (sideId: string, text: string) => void

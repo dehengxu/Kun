@@ -241,7 +241,12 @@ export function Workbench(): ReactElement {
     renameThread,
     archiveThread,
     deleteThread,
-    spawnSideConversation
+    spawnSideConversation,
+    openSideConversationDraft,
+    selectSideConversation,
+    setSidePanelOpen,
+    sideConversations,
+    sidePanel
   } = useChatStore(
     useShallow((s) => ({
       threads: s.threads,
@@ -291,7 +296,12 @@ export function Workbench(): ReactElement {
       renameThread: s.renameThread,
       archiveThread: s.archiveThread,
       deleteThread: s.deleteThread,
-      spawnSideConversation: s.spawnSideConversation
+      spawnSideConversation: s.spawnSideConversation,
+      openSideConversationDraft: s.openSideConversationDraft,
+      selectSideConversation: s.selectSideConversation,
+      setSidePanelOpen: s.setSidePanelOpen,
+      sideConversations: s.sideConversations,
+      sidePanel: s.sidePanel
     }))
   )
   const [input, setInput] = useState('')
@@ -365,6 +375,17 @@ export function Workbench(): ReactElement {
   )
   const latestDevPreviewUrl = detectedDevPreviewUrls[0] ?? null
   const latestAutoOpenDevPreviewUrl = autoOpenDevPreviewUrls[0] ?? null
+  const currentSideConversations = useMemo(
+    () =>
+      Object.values(sideConversations)
+        .filter((side) => side.parentThreadId === activeThreadId)
+        .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)),
+    [activeThreadId, sideConversations]
+  )
+  const currentSideRunningCount = currentSideConversations.reduce(
+    (count, side) => count + (side.busy ? 1 : 0),
+    0
+  )
   const {
     beginLeftResize,
     beginRightResize,
@@ -416,6 +437,24 @@ export function Workbench(): ReactElement {
   const showDevPreviewCard =
     route === 'chat' &&
     latestDevPreviewUrl !== null
+
+  useEffect(() => {
+    const previousThreadId = prevThreadId.current
+    prevThreadId.current = activeThreadId
+    if (previousThreadId !== null && previousThreadId !== activeThreadId && sidePanel.open) {
+      setSidePanelOpen(false)
+    }
+  }, [activeThreadId, setSidePanelOpen, sidePanel.open])
+
+  const openSideChat = (): void => {
+    const latestSide = currentSideConversations.at(-1)
+    if (latestSide) {
+      selectSideConversation(latestSide.threadId)
+      return
+    }
+    openSideConversationDraft()
+  }
+
   const codeThreads = useMemo(
     () => threads.filter((thread) =>
       !isWriteThreadId(thread.id) &&
@@ -1486,6 +1525,11 @@ export function Workbench(): ReactElement {
                     rightPanelMode={rightPanelMode}
                     onToggleRightPanelMode={toggleRightPanelMode}
                     planPanelEnabled={Boolean(activeGuiPlan)}
+                    sideChatCount={currentSideConversations.length}
+                    sideChatRunningCount={currentSideRunningCount}
+                    sideChatOpen={sidePanel.open}
+                    sideChatEnabled={runtimeConnection === 'ready' && Boolean(activeThreadId)}
+                    onOpenSideChat={openSideChat}
                   />
                 </div>
               </div>
@@ -1559,14 +1603,22 @@ export function Workbench(): ReactElement {
                 onInterrupt={(options) => void interrupt(options)}
                 onPlanCommand={() => void handleGuiPlanCommand()}
                 onReviewCommand={(target) => void reviewActiveThread(target)}
-                onBtwCommand={(seedText) => void spawnSideConversation(seedText)}
+                onBtwCommand={(seedText) => {
+                  if (seedText?.trim()) {
+                    void spawnSideConversation(seedText)
+                    return
+                  }
+                  openSideConversationDraft()
+                }}
               />
             </div>
           </section>
           )}
           </div>
 
-          {route === 'chat' && !activeSddDraft ? <SideConversationPanel /> : null}
+          {route === 'chat' && !activeSddDraft ? (
+            <SideConversationPanel rightOffset={rightPanelVisible ? rightSidebarWidth + 24 : 24} />
+          ) : null}
 
           {renderRightPanel()}
         </div>

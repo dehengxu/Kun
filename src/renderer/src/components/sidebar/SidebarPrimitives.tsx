@@ -308,6 +308,10 @@ export function SidebarTreeRow({
     actionsLayout === 'overlay'
       ? 'absolute inset-y-0 right-1.5 flex items-center gap-0.5'
       : 'mr-1.5 flex shrink-0 items-center gap-0.5'
+  const trailingWrapClass =
+    actionsLayout === 'overlay'
+      ? 'mr-1.5 flex shrink-0 items-center gap-0.5 transition group-hover:opacity-0 group-focus-within:opacity-0'
+      : 'flex shrink-0 items-center gap-0.5'
 
   return (
     <div
@@ -345,14 +349,12 @@ export function SidebarTreeRow({
       >
         {children}
       </button>
-      {trailing || actions ? (
+      {trailing ? <div className={trailingWrapClass}>{trailing}</div> : null}
+      {actions ? (
         <div className={actionsWrapClass}>
-          {trailing ?? null}
-          {actions ? (
-            <div className={cx('flex shrink-0 items-center gap-0.5 transition', actionsClass)}>
-              {actions}
-            </div>
-          ) : null}
+          <div className={cx('flex shrink-0 items-center gap-0.5 transition', actionsClass)}>
+            {actions}
+          </div>
         </div>
       ) : null}
     </div>
