@@ -229,6 +229,7 @@ export async function startKunChild(settings: AppSettingsV1): Promise<void> {
     port: runtime.port,
     dataDir,
     baseUrl: runtime.baseUrl,
+    endpointFormat: runtime.endpointFormat,
     model: runtime.model,
     approvalPolicy: runtime.approvalPolicy,
     sandboxMode: runtime.sandboxMode,
@@ -265,7 +266,16 @@ export async function startKunChild(settings: AppSettingsV1): Promise<void> {
       `process error: ${error instanceof Error ? error.message : String(error)}`
     )
   })
-  await waitForKunStartup(startedChild)
+  try {
+    await waitForKunStartup(startedChild)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    startedLogCapture.logLifecycle(`startup failed before ready: ${message}`)
+    if (child === startedChild) {
+      await stopKunChildAndWait()
+    }
+    throw error
+  }
   startedLogCapture.logLifecycle(`ready marker received on port ${runtime.port}`)
 }
 

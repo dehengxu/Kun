@@ -137,6 +137,7 @@ export class ThreadService {
 
   async update(threadId: string, patch: {
     title?: string
+    workspace?: string
     status?: ThreadStatus
     approvalPolicy?: ApprovalPolicy
     sandboxMode?: SandboxMode

@@ -226,6 +226,23 @@ body,
   -webkit-app-region: drag;
 }
 
+.ds-drag {
+  -webkit-app-region: drag;
+}
+
+.ds-no-drag,
+button,
+input,
+select,
+textarea,
+option,
+a,
+summary,
+[role='button'],
+[contenteditable='true'] {
+  -webkit-app-region: no-drag;
+}
+
 html {
   color-scheme: light;
 }
@@ -496,6 +513,8 @@ body {
     'SF Pro Text', 'PingFang SC', 'Noto Sans SC', 'Helvetica Neue', Arial, sans-serif;
   background-color: var(--ds-bg-main);
   color: var(--ds-text);
+  user-select: none;
+  -webkit-user-select: none;
   zoom: var(--ds-ui-scale);
 }
 
@@ -524,6 +543,20 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+input,
+textarea,
+[contenteditable='true'],
+.ds-markdown,
+.ds-user-message-bubble,
+.ds-code-block-html,
+.ds-file-preview-code-html,
+.write-codemirror-host,
+.write-markdown-preview,
+pre {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 * {
@@ -594,6 +627,22 @@ textarea {
 .ds-composer-shell textarea::-webkit-scrollbar-thumb {
   background: rgba(95, 104, 120, 0.35);
   background-clip: padding-box;
+}
+
+.ds-floating-composer,
+.ds-floating-composer *,
+.ds-chat-composer,
+.ds-chat-composer * {
+  -webkit-app-region: no-drag;
+}
+
+.ds-chat-composer textarea {
+  width: 100%;
+  cursor: text;
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 .ds-chat-composer {
@@ -2199,20 +2248,23 @@ textarea {
 }
 
 .chat-topbar-grid {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 0.5rem;
   padding-block: 0.35rem;
 }
 
 .chat-topbar-session {
   min-width: 0;
+  align-self: start;
 }
 
 .chat-topbar-actions {
-  width: 100%;
+  width: auto;
   flex-wrap: nowrap;
-  overflow-x: auto;
+  overflow-x: visible;
   overflow-y: visible;
+  align-self: start;
   justify-self: end;
   scrollbar-width: none;
 }
@@ -2229,15 +2281,14 @@ textarea {
   overflow: hidden;
 }
 
-@container (min-width: 900px) {
+@container (max-width: 640px) {
   .chat-topbar-grid {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .chat-topbar-actions {
-    width: auto;
-    overflow-x: visible;
-    justify-content: flex-end;
+    width: 100%;
+    overflow-x: auto;
   }
 }
 

@@ -7,11 +7,13 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactElement
 } from 'react'
 import {
   Archive,
   BarChart3,
+  FileEdit,
   FileText,
   GitFork,
   ImagePlus,
@@ -76,9 +78,14 @@ import {
   FloatingComposerQueuedMessages,
   type QueuedComposerMessage
 } from './FloatingComposerQueuedMessages'
+import {
+  type ComposerExecutionSettings
+} from './FloatingComposerExecutionPicker'
 import { useComposerDraft } from './use-composer-draft'
+import type { ComposerChangedFile } from '../../lib/composer-change-summary'
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
+export type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
 
 type Props = {
   variant?: 'default' | 'compact'
@@ -107,6 +114,10 @@ type Props = {
   fileReferenceEnabled?: boolean
   fileReferences?: ComposerFileReference[]
   webAccessAvailable?: boolean
+  executionSettings?: ComposerExecutionSettings | null
+  executionSettingsApplying?: boolean
+  changedFiles?: ComposerChangedFile[]
+  changedFileStats?: { added: number; removed: number } | null
   skillCommands?: Array<{
     id: string
     name: string
@@ -129,6 +140,10 @@ type Props = {
   onInterrupt: (options?: { discard?: boolean }) => void
   onPlanCommand?: () => void
   onReviewCommand?: (target: ReviewTarget) => void
+  onExecutionSettingsChange?: (patch: Partial<ComposerExecutionSettings>) => void
+  onOpenChanges?: () => void
+  onReviewChanges?: () => void
+  reviewChangesDisabled?: boolean
   /**
    * When set, the `/btw` slash command is offered. It is omitted from
    * side-conversation composers (non-goal: no nested `/btw`).
@@ -145,6 +160,7 @@ type SkillCommand = NonNullable<Props['skillCommands']>[number]
 const EMPTY_MODEL_GROUPS: ModelProviderModelGroup[] = []
 const EMPTY_ATTACHMENTS: AttachmentReference[] = []
 const EMPTY_FILE_REFERENCES: ComposerFileReference[] = []
+const EMPTY_CHANGED_FILES: ComposerChangedFile[] = []
 const EMPTY_SKILL_COMMANDS: SkillCommand[] = []
 
 type ComposerTransferItem = {
@@ -477,6 +493,10 @@ export function FloatingComposer({
   attachmentUploadError = null,
   fileReferenceEnabled = false,
   fileReferences = EMPTY_FILE_REFERENCES,
+  executionSettings = null,
+  executionSettingsApplying = false,
+  changedFiles = EMPTY_CHANGED_FILES,
+  changedFileStats = null,
   skillCommands = EMPTY_SKILL_COMMANDS,
   onPickAttachments,
   onPasteClipboardImage,
@@ -487,6 +507,10 @@ export function FloatingComposer({
   onInterrupt,
   onPlanCommand,
   onReviewCommand,
+  onExecutionSettingsChange,
+  onOpenChanges,
+  onReviewChanges,
+  reviewChangesDisabled = false,
   onBtwCommand,
   hideBtwCommand = false
 }: Props): ReactElement {
@@ -538,6 +562,7 @@ export function FloatingComposer({
     activeClawChannel?.remoteSession?.chatId?.trim()
   )
 
+  const canEditComposer = route === 'claw' ? clawHasInboundConversation : true
   const canCompose = runtimeReady && (
     route === 'claw'
       ? clawHasInboundConversation
@@ -557,9 +582,19 @@ export function FloatingComposer({
   const canRunReview = canCompose && route !== 'claw' && Boolean(onReviewCommand)
   const canOpenComposerMenu = showComposerMenuButton && (canTogglePlanMode || canOpenGoalPanel || canRunReview)
   const showToolbarStartControls = showComposerMenuButton
+  const showChangeSummary = !compact && route === 'chat' && changedFiles.length > 0
+  const effectiveChangedFileStats = changedFileStats ?? changedFiles.reduce(
+    (stats, file) => ({
+      added: stats.added + file.added,
+      removed: stats.removed + file.removed
+    }),
+    { added: 0, removed: 0 }
+  )
+  const visibleChangedFiles = changedFiles.slice(0, 3)
+  const hiddenChangedFileCount = Math.max(0, changedFiles.length - visibleChangedFiles.length)
   const stretchModelPicker =
     compact && modelPickerMode === 'combobox' && !showToolbarStartControls && !hideModelPicker
-  const draft = useComposerDraft({ input, canCompose })
+  const draft = useComposerDraft({ input, canCompose: canEditComposer })
   const slashQuery = getSlashQuery(input)
   const [composerCursor, setComposerCursor] = useState(() => input.length)
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
@@ -570,6 +605,7 @@ export function FloatingComposer({
   const [composerMenuOpen, setComposerMenuOpen] = useState(false)
   const [goalPanelOpen, setGoalPanelOpen] = useState(false)
   const [goalRuntimeNowMs, setGoalRuntimeNowMs] = useState(() => Date.now())
+  const composerRootRef = useRef<HTMLDivElement | null>(null)
   const composerMenuButtonRef = useRef<HTMLButtonElement | null>(null)
   const composerMenuPanelRef = useRef<HTMLDivElement | null>(null)
   const goalPanelRef = useRef<HTMLDivElement | null>(null)
@@ -789,6 +825,7 @@ export function FloatingComposer({
     : canSetGoalPanelDraft
       ? false
     : !canSend
+  const primaryActionLoading = !runtimeReady
   const goalRuntimeStartedAtMs = goalRuntimeStartedAtRef.current
   const liveGoalElapsedSeconds =
     busy && activeThreadGoal?.status === 'active' && goalRuntimeStartedAtMs != null
@@ -1163,6 +1200,42 @@ export function FloatingComposer({
     handlePrimaryAction()
   }
 
+  const handleComposerShellMouseDown = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (!canEditComposer) return
+    const target = event.target
+    if (
+      target instanceof Element &&
+      target.closest("button,input,textarea,select,a,summary,[role='button'],[contenteditable='true']")
+    ) {
+      return
+    }
+    event.preventDefault()
+    draft.textareaRef.current?.focus()
+  }
+
+  useEffect(() => {
+    if (compact || route !== 'chat' || !canEditComposer) return
+    const active = document.activeElement
+    const activeIsExternalEditor =
+      active instanceof HTMLElement &&
+      Boolean(active.closest("input,textarea,select,[contenteditable='true']")) &&
+      !composerRootRef.current?.contains(active)
+    if (activeIsExternalEditor) return
+
+    const frame = window.requestAnimationFrame(() => {
+      const current = document.activeElement
+      const currentIsExternalEditor =
+        current instanceof HTMLElement &&
+        Boolean(current.closest("input,textarea,select,[contenteditable='true']")) &&
+        !composerRootRef.current?.contains(current)
+      if (!currentIsExternalEditor) {
+        draft.textareaRef.current?.focus()
+      }
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeThreadId, canEditComposer, compact, route, runtimeReady, draft.textareaRef])
+
   const handleAttachmentInput = (event: ChangeEvent<HTMLInputElement>): void => {
     const files = Array.from(event.target.files ?? [])
     event.target.value = ''
@@ -1238,9 +1311,11 @@ export function FloatingComposer({
   }
 
   return (
-    <div className={compact
-      ? 'ds-floating-composer pointer-events-auto w-full pb-0 pt-0'
-      : 'ds-floating-composer ds-chat-column-inset pointer-events-auto w-full max-w-4xl pb-3 pt-0'}
+    <div
+      ref={composerRootRef}
+      className={compact
+        ? 'ds-floating-composer ds-no-drag pointer-events-auto w-full pb-0 pt-0'
+        : 'ds-floating-composer ds-no-drag ds-chat-column-inset pointer-events-auto w-full max-w-4xl pb-3 pt-0'}
     >
       <FloatingComposerQueuedMessages
         messages={queuedMessages}
@@ -1582,22 +1657,77 @@ export function FloatingComposer({
         ) : null}
 
         <div
-          className={`ds-composer-shell ds-chat-composer ds-frosted flex flex-col gap-1 px-3 pb-2 pt-2 transition ${
+          className={`ds-composer-shell ds-chat-composer ds-frosted ds-no-drag flex flex-col gap-1 px-3 pb-2 pt-2 transition ${
             draft.focused ? 'ds-chat-composer-focus' : ''
           } ${compact ? 'rounded-[24px] px-3 py-2 shadow-none' : ''}`}
+          onMouseDown={handleComposerShellMouseDown}
           onPaste={handleComposerPaste}
           onDragOver={handleComposerDragOver}
           onDrop={handleComposerDrop}
         >
+          {showChangeSummary ? (
+            <div className="ds-no-drag mb-1 rounded-2xl border border-ds-border-muted bg-ds-card/78 px-3 py-2 shadow-sm">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-ds-hover text-ds-muted">
+                  <FileEdit className="h-4 w-4" strokeWidth={1.8} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] font-semibold text-ds-ink">
+                    <span className="truncate">{t('composerChangedFilesTitle', { count: changedFiles.length })}</span>
+                    <span className="font-mono text-[12px] text-ds-diff-added">
+                      +{effectiveChangedFileStats.added}
+                    </span>
+                    <span className="font-mono text-[12px] text-ds-diff-removed">
+                      -{effectiveChangedFileStats.removed}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ds-muted">
+                    {visibleChangedFiles.map((file) => (
+                      <span key={file.path} className="max-w-[220px] truncate" title={file.path}>
+                        {file.path}
+                      </span>
+                    ))}
+                    {hiddenChangedFileCount > 0 ? (
+                      <span className="text-ds-faint">
+                        {t('composerChangedFilesMore', { count: hiddenChangedFileCount })}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {onOpenChanges ? (
+                    <button
+                      type="button"
+                      onClick={onOpenChanges}
+                      className="rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover"
+                    >
+                      {t('composerOpenChanges')}
+                    </button>
+                  ) : null}
+                  {onReviewChanges ? (
+                    <button
+                      type="button"
+                      disabled={reviewChangesDisabled}
+                      onClick={onReviewChanges}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
+                    >
+                      <SearchCode className="h-3.5 w-3.5" strokeWidth={1.8} />
+                      {t('composerReviewChanges')}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
           <textarea
             ref={draft.textareaRef}
             rows={1}
-            className={`ds-no-drag block min-w-0 resize-none break-words bg-transparent px-1 py-2.5 text-[15px] leading-[1.45] text-ds-ink placeholder:text-ds-faint focus:outline-none [overflow-wrap:anywhere] ${
-              canCompose ? '' : 'opacity-80'
+            className={`ds-no-drag block w-full min-w-0 resize-none break-words bg-transparent px-1 py-2.5 text-[15px] leading-[1.45] text-ds-ink placeholder:text-ds-faint focus:outline-none [overflow-wrap:anywhere] ${
+              canEditComposer ? '' : 'opacity-80'
             } ${compact ? 'text-[14px] py-2' : 'min-h-[40px]'}`}
             placeholder={placeholder}
             value={input}
-            disabled={!canCompose}
+            disabled={!canEditComposer}
             onChange={(e) => {
               setInput(e.target.value)
               setComposerCursor(e.target.selectionStart ?? e.target.value.length)
@@ -1782,7 +1912,11 @@ export function FloatingComposer({
                 aria-label={primaryActionLabel}
                 title={primaryActionLabel}
               >
-                <Send className="h-4 w-4" strokeWidth={2.2} />
+                {primaryActionLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.2} />
+                ) : (
+                  <Send className="h-4 w-4" strokeWidth={2.2} />
+                )}
               </button>
             </div>
           </div>
