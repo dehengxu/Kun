@@ -231,7 +231,7 @@
   "kunInsecureForcedDesc": "Local access protection is off because no access token is set. Add a token to control this switch again.",
   "imageGen": "Image generation",
   "imageGenEnabled": "Enable image generation",
-  "imageGenEnabledDesc": "Adds a generate_image tool the assistant can call in chat. Requires an OpenAI-compatible image API (OpenAI, SiliconFlow, Doubao Seedream, Zhipu CogView, ...). The API key is stored in plaintext inside the Kun config file.",
+  "imageGenEnabledDesc": "Enables the generate_image tool in agent chats and powers infographic generation in Write. Requires an OpenAI-compatible image API (OpenAI, SiliconFlow, Doubao Seedream, Zhipu CogView, ...). The API key is stored in plaintext inside the Kun config file.",
   "imageGenBaseUrl": "API base URL",
   "imageGenBaseUrlDesc": "OpenAI-compatible endpoint root; the tool calls {baseUrl}/images/generations.",
   "imageGenBaseUrlPlaceholder": "https://api.siliconflow.cn/v1",

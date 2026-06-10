@@ -390,6 +390,12 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(html).not.toContain('<details open')
   })
 
+  it('does not render image generation settings inside the agent section', () => {
+    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
+
+    expect(html).not.toContain('imageGen')
+  })
+
   it('renders pure JSONL as a selectable storage backend', () => {
     const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
 

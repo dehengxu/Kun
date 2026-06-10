@@ -50,11 +50,12 @@ import {
   AgentsSettingsSection,
   ClawSettingsSection,
   GeneralSettingsSection,
+  ImageGenerationSettingsSection,
   KeyboardShortcutsSettingsSection,
   WriteSettingsSection
 } from './settings-sections'
 
-type SettingsCategory = 'general' | 'write' | 'agents' | 'shortcuts' | 'claw'
+type SettingsCategory = 'general' | 'write' | 'imageGeneration' | 'agents' | 'shortcuts' | 'claw'
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 type SettingsPatch = AppSettingsPatch
 type SkillRootOption = {
@@ -218,6 +219,10 @@ export function SettingsView(): ReactElement {
       setCategory('write')
       return
     }
+    if (settingsSection === 'imageGeneration') {
+      setCategory('imageGeneration')
+      return
+    }
     if (settingsSection === 'claw') {
       setCategory('claw')
       return
@@ -234,13 +239,17 @@ export function SettingsView(): ReactElement {
     if (
       settingsSection === 'general' ||
       settingsSection === 'write' ||
+      settingsSection === 'imageGeneration' ||
       settingsSection === 'claw' ||
       settingsSection === 'shortcuts' ||
       category !== 'agents'
     ) {
       return
     }
-    const refs: Record<Exclude<SettingsRouteSection, 'general' | 'write' | 'claw' | 'shortcuts'>, HTMLDivElement | null> = {
+    const refs: Record<
+      Exclude<SettingsRouteSection, 'general' | 'write' | 'imageGeneration' | 'claw' | 'shortcuts'>,
+      HTMLDivElement | null
+    > = {
       agents: agentsSectionRef.current,
       skill: skillSectionRef.current,
       mcp: mcpSectionRef.current
@@ -834,6 +843,7 @@ export function SettingsView(): ReactElement {
 
           {category === 'general' ? <GeneralSettingsSection ctx={settingsSectionContext} /> : null}
           {category === 'write' ? <WriteSettingsSection ctx={settingsSectionContext} /> : null}
+          {category === 'imageGeneration' ? <ImageGenerationSettingsSection ctx={settingsSectionContext} /> : null}
           {category === 'agents' ? <AgentsSettingsSection ctx={settingsSectionContext} /> : null}
           {category === 'shortcuts' ? <KeyboardShortcutsSettingsSection ctx={settingsSectionContext} /> : null}
           {category === 'claw' ? <ClawSettingsSection ctx={settingsSectionContext} /> : null}
