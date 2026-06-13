@@ -258,6 +258,12 @@ function settingsWithImModelProvider(
   }
 }
 
+function effectiveImRuntimeModel(settings: AppSettingsV1, requestedModel: string): string {
+  const trimmed = requestedModel.trim()
+  if (trimmed && trimmed.toLowerCase() !== DEFAULT_CLAW_MODEL) return trimmed
+  return getKunRuntimeSettings(settings).model.trim() || trimmed || DEFAULT_CLAW_MODEL
+}
+
 function imCommandHelpText(settings: AppSettingsV1): string {
   if (isChineseLocale(settings)) {
     return [
@@ -529,8 +535,9 @@ export class ClawRuntime {
   private async runPrompt(settings: AppSettingsV1, options: RunPromptOptions): Promise<ClawRunResult> {
     const workspace = options.workspaceRoot.trim() || settings.workspaceRoot
     const existingThreadId = options.threadId?.trim()
-    const model = normalizeTaskModel(options.model) ?? (settings.agents.kun.model.trim() || DEFAULT_CLAW_MODEL)
-    const runtimeSettings = settingsWithImModelProvider(settings, options.providerId, model)
+    const requestedModel = normalizeTaskModel(options.model) ?? (settings.agents.kun.model.trim() || DEFAULT_CLAW_MODEL)
+    const runtimeSettings = settingsWithImModelProvider(settings, options.providerId, requestedModel)
+    const model = effectiveImRuntimeModel(runtimeSettings, requestedModel)
     const createThread = async (): Promise<ThreadRecordJson | null> => {
       const body: Record<string, unknown> = { workspace, model, mode: options.mode }
       if (options.source === 'im') {
@@ -1970,7 +1977,7 @@ export class ClawRuntime {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.deps.logError('claw-webhook', 'Claw IM webhook request failed', { message })
-      writeJson(res, 500, { ok: false, message })
+      writeJson(res, 500, { ok: false, message: 'Internal server error.' })
     }
   }
 }

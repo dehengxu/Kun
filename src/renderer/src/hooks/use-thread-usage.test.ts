@@ -185,6 +185,73 @@ describe('thread usage formatting', () => {
     expect(runtimeRequest).toHaveBeenCalledWith(threadUsagePath('thr_native_cache'), 'GET')
   })
 
+  it('surfaces the latest-turn cache rate distinctly from the cumulative rate', async () => {
+    const runtimeRequest = vi.fn<RuntimeRequest>(async (path) => {
+      if (path === threadUsagePath('thr_last_turn')) {
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            buckets: [
+              {
+                thread_id: 'thr_last_turn',
+                input_tokens: 100,
+                output_tokens: 20,
+                total_tokens: 120,
+                cached_tokens: 80,
+                cache_miss_tokens: 20,
+                cache_hit_rate: 0.55,
+                last_turn_cache_hit_rate: 0.986,
+                turns: 2
+              }
+            ]
+          })
+        }
+      }
+      throw new Error(`unexpected request: ${path}`)
+    })
+    setRuntimeRequest(runtimeRequest)
+
+    const usage = await loadThreadUsage('thr_last_turn')
+
+    expect(usage).toMatchObject({
+      cacheHitRate: 0.55,
+      lastTurnCacheHitRate: 0.986
+    })
+  })
+
+  it('falls back to null last-turn cache rate when the field is absent', async () => {
+    const runtimeRequest = vi.fn<RuntimeRequest>(async (path) => {
+      if (path === threadUsagePath('thr_no_last_turn')) {
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            buckets: [
+              {
+                thread_id: 'thr_no_last_turn',
+                input_tokens: 100,
+                output_tokens: 20,
+                total_tokens: 120,
+                cached_tokens: 80,
+                cache_miss_tokens: 20,
+                cache_hit_rate: 0.8,
+                turns: 1
+              }
+            ]
+          })
+        }
+      }
+      throw new Error(`unexpected request: ${path}`)
+    })
+    setRuntimeRequest(runtimeRequest)
+
+    const usage = await loadThreadUsage('thr_no_last_turn')
+
+    expect(usage?.lastTurnCacheHitRate).toBeNull()
+    expect(usage?.cacheHitRate).toBe(0.8)
+  })
+
   it('reports invalid JSON thread usage responses with a stable error', async () => {
     const runtimeRequest = vi.fn<RuntimeRequest>(async (path) => {
       if (path === threadUsagePath('thr_bad_json')) {

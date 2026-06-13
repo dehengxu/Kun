@@ -62,7 +62,7 @@ Kun's directory itself is a hexagonal physical layout:
             ▼                         ▼
    ┌──────────────────────────────────────────────────────────────────────────┐
    │ adapters/  -- concrete implementations of ports                         │
-   │   model/deepseek-compat-model-client.ts                                │
+   │   model/compat-model-client.ts                                │
    │   tool/local-tool-host.ts                                              │
    │   in-memory-event-bus / in-memory-approval-gate / in-memory-thread-…  │
    │   file/file-thread-store / file-session-store                         │
@@ -137,7 +137,7 @@ export interface ModelClient {
 
 ```
 
-Implementation (`kun/src/adapters/model/deepseek-compat-model-client.ts`)
+Implementation (`kun/src/adapters/model/compat-model-client.ts`)
 Parse HTTP+SSE into a sequence of `ModelStreamChunk`.
 
 Tests (`kun/tests/ports.test.ts`) are injected directly with `makeFakeModel`
@@ -502,7 +502,7 @@ Does not involve `loop/`, `server/`, `services/`. Changes are isolated to a smal
 
 1. **ports**:`ModelClient` is already an abstract interface, **no need to change**.
 2. **adapters**:`kun/src/adapters/model/openai-compat-model-client.ts`
-   Create a new one (refer to the SSE parsing logic of `deepseek-compat-model-client.ts`).
+   Create a new one (refer to the SSE parsing logic of `compat-model-client.ts`).
 3. **adapters barrel**:`kun/src/adapters/index.ts` exports new classes.
 4. **settings**: in `kun/src/contracts/...` or the caller
    `ServeOptionsSchema` adds `modelProvider` field (if you need to switch).

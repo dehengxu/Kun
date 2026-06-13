@@ -49,6 +49,16 @@ describe('provider-model-editor', () => {
         provider({ id: 'xiaomi', baseUrl: 'https://api.xiaomimimo.com/v1' })
       )
     ).toBe('mimo-chat-completions')
+    expect(
+      defaultReasoningProtocolForProvider(
+        provider({ id: 'zhipu-coding-plan', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4' })
+      )
+    ).toBe('glm-chat-completions')
+    expect(
+      defaultReasoningProtocolForProvider(
+        provider({ id: 'custom-zai', baseUrl: 'https://api.z.ai/api/coding/paas/v4' })
+      )
+    ).toBe('glm-chat-completions')
   })
 
   it('adds a chat model with a normalized capability profile', () => {

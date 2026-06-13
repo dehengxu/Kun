@@ -53,7 +53,8 @@ function settings(dataDir: string, model = 'settings-model'): AppSettingsV1 {
     claw: defaultClawSettings(),
     schedule: defaultScheduleSettings(),
     guiUpdate: { channel: 'stable' },
-    codePromptPrefix: ''
+    codePromptPrefix: '',
+    disabledSkillIds: []
   }
 }
 
@@ -115,6 +116,7 @@ describe('upstream model picker list', () => {
     if (result.ok) {
       expect(result.modelIds).toContain('local-only-model')
       expect(result.modelIds).toContain('custom-provider-model')
+      expect(result.modelIds).toContain('deepseek-chat')
       expect(result.modelIds).not.toContain('auto')
       expect(result.defaultModelId).toBe('local-only-model')
       expect(result.modelGroups).toEqual(expect.arrayContaining([
@@ -126,9 +128,12 @@ describe('upstream model picker list', () => {
         expect.objectContaining({
           providerId: 'deepseek',
           label: 'DeepSeek',
-          modelIds: expect.arrayContaining(['deepseek-chat', 'deepseek-reasoner'])
+          modelIds: expect.arrayContaining(['deepseek-v4-flash'])
         })
       ]))
+      const deepseekGroup = result.modelGroups?.find((group) => group.providerId === 'deepseek')
+      expect(deepseekGroup?.modelIds).not.toContain('deepseek-chat')
+      expect(deepseekGroup?.modelIds).not.toContain('deepseek-reasoner')
     }
   })
 
@@ -165,6 +170,32 @@ describe('upstream model picker list', () => {
           })
         ]))
       }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('uses configured model ids without fetching models for custom full endpoint providers', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'deepseek-gui-models-'))
+    await mkdir(dataDir, { recursive: true })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const customSettings = settings(dataDir, 'custom-provider-model')
+    customSettings.provider.providers = customSettings.provider.providers.map((provider) =>
+      provider.id === 'custom-provider'
+        ? { ...provider, baseUrl: 'https://gateway.example/custom-path', endpointFormat: 'custom_endpoint' }
+        : provider
+    )
+
+    try {
+      const result = await fetchUpstreamModelIds(customSettings, 'sk-custom')
+
+      expect(result).toMatchObject({ ok: true })
+      if (result.ok) {
+        expect(result.modelIds).toContain('custom-provider-model')
+        expect(result.defaultModelId).toBe('custom-provider-model')
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
     } finally {
       vi.unstubAllGlobals()
     }

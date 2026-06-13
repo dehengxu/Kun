@@ -110,7 +110,7 @@ The toolset itself is part of the prompt prefix. Kun will do the following befor
 
 Implementation location:
 
-- `kun/src/adapters/model/deepseek-compat-model-client.ts`
+- `kun/src/adapters/model/compat-model-client.ts`
 - `kun/src/cache/tool-catalog-fingerprint.ts`
 - `kun/src/loop/agent-loop.ts`
 
@@ -137,7 +137,7 @@ Kun currently performs a shared model history repair on messages at the model re
 Implementation location:
 
 - `kun/src/domain/model-history-repair.ts`
-- `kun/src/adapters/model/deepseek-compat-model-client.ts`
+- `kun/src/adapters/model/compat-model-client.ts`
 - `kun/src/loop/agent-loop.ts`
 
 Kun will also do a shared layer of history hygiene at model request boundaries:
@@ -204,7 +204,7 @@ Only when the native field is missing will it fall back to the compatible field:
 
 Implementation location:
 
-- `kun/src/adapters/model/deepseek-compat-model-client.ts`
+- `kun/src/adapters/model/compat-model-client.ts`
 
 The hit rate formula uses:
 

@@ -28,6 +28,7 @@ import { decideApproval } from './approvals.js'
 import { resolveUserInput } from './user-inputs.js'
 import { resumeSession } from './sessions.js'
 import { usageJsonResponse } from './usage.js'
+import { llmDebugRoundsResponse } from './debug-llm.js'
 import { runtimeInfoJsonResponse, runtimeToolDiagnosticsJsonResponse } from './runtime-info.js'
 import { listSkills } from './skills.js'
 import {
@@ -74,6 +75,7 @@ import type { ServerRuntime } from './server-runtime.js'
  * - `POST /v1/user-inputs/{id}` and `/v1/user-input/{id}` (auth)
  * - `POST /v1/sessions/{id}/resume-thread` (auth)
  * - `GET /v1/usage` (auth)
+ * - `GET /v1/debug/llm-rounds` (auth)
  */
 export function buildRouter(runtime: ServerRuntime): Router {
   const router = new Router()
@@ -259,6 +261,10 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('GET', '/v1/usage', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return usageJsonResponse(request, runtime)
+  })
+  router.add('GET', '/v1/debug/llm-rounds', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return llmDebugRoundsResponse(runtime)
   })
   return router
 }

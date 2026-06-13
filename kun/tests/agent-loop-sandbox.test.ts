@@ -31,6 +31,6 @@ describe('AgentLoop sandbox policy', () => {
     expect(toolNames).not.toContain('bash')
     expect(toolNames).not.toContain('edit')
     expect(toolNames).not.toContain('write')
-    expect(request.contextInstructions?.join('\n') ?? '').not.toContain('Shell runtime:')
+    expect(request.contextInstructions?.join('\n') ?? '').not.toContain('<shell_environment>')
   })
 })

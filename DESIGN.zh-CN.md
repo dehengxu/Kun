@@ -748,7 +748,7 @@ Kun is structured as **ports & adapters**:
   `ApprovalGate`, `EventBus`, `WorkspaceInspector`, `Clock`,
   `IdGenerator`. These are intentionally small.
 - `adapters/` — concrete implementations. The default
-  `DeepseekCompatModelClient` speaks the
+  `CompatModelClient` speaks the
   `POST {baseUrl}/v1/chat/completions` shape; the default
   `LocalToolHost` runs tools in-process with approval gating.
 - `services/` — orchestration. `ThreadService` and `TurnService`
@@ -1348,7 +1348,7 @@ If any check fails, the change is not ready.
 | Immutable prefix | `kun/src/cache/immutable-prefix.ts` |
 | HTTP routes | `kun/src/server/routes/` |
 | Tool host | `kun/src/adapters/tool/local-tool-host.ts` |
-| Model client | `kun/src/adapters/model/deepseek-compat-model-client.ts` |
+| Model client | `kun/src/adapters/model/compat-model-client.ts` |
 | Cache doc | `docs/kun-cache-optimization.md` |
 | Architecture doc | `docs/kun-architecture.md` |
 | Contribution doc | `docs/kun-contributing.md` |

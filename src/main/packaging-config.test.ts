@@ -131,6 +131,10 @@ describe('electron-builder Kun packaging', () => {
     })
   })
 
+  it('uses the rounded Kun icon for Windows installers and shortcuts', () => {
+    expect(builderConfig.win.icon).toBe('./src/asset/img/kun_mac.png')
+  })
+
   it('requires Apple secure timestamps when Developer ID signing is enabled', () => {
     const signedConfig = loadBuilderConfigWithEnv({
       MAC_SIGN: '1'

@@ -9,13 +9,14 @@ import { InMemoryUserInputGate } from '../adapters/in-memory-user-input-gate.js'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { FileSessionStore, FileThreadStore } from '../adapters/file/index.js'
 import { HybridSessionStore, HybridThreadStore } from '../adapters/hybrid/index.js'
-import { DeepseekCompatModelClient } from '../adapters/model/deepseek-compat-model-client.js'
+import { CompatModelClient } from '../adapters/model/compat-model-client.js'
 import { CapabilityRegistry } from '../adapters/tool/capability-registry.js'
 import { buildGoalLocalTools } from '../adapters/tool/goal-tools.js'
 import { buildTodoLocalTools } from '../adapters/tool/todo-tools.js'
 import { LocalToolHost, buildDefaultLocalTools } from '../adapters/tool/local-tool-host.js'
 import { buildMcpToolProviders } from '../adapters/tool/mcp-tool-provider.js'
 import { buildMemoryToolProviders } from '../adapters/tool/memory-tool-provider.js'
+import { buildSkillToolProviders } from '../adapters/tool/skill-tool-provider.js'
 import { buildDelegationToolProviders } from '../adapters/tool/delegation-tool-provider.js'
 import { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
 import { buildImageGenToolProviders } from '../adapters/tool/image-gen-tool-provider.js'
@@ -25,7 +26,7 @@ import {
   buildVideoGenToolProviders
 } from '../adapters/tool/media-gen-tool-provider.js'
 import { LocalWorkspaceInspector } from '../adapters/workspace/local-workspace-inspector.js'
-import { createImmutablePrefix } from '../cache/immutable-prefix.js'
+import { createImmutablePrefix, setSystemPrompt } from '../cache/immutable-prefix.js'
 import {
   buildRuntimeCapabilityManifest,
   type KunCapabilitiesConfig
@@ -53,6 +54,7 @@ import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import { KUN_SYSTEM_PROMPT } from '../prompt/kun-system-prompt.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
+import { LlmDebugRecorder } from '../services/llm-debug-recorder.js'
 import { ThreadService } from '../services/thread-service.js'
 import { TurnService } from '../services/turn-service.js'
 import { ReviewService } from '../services/review-service.js'
@@ -129,7 +131,7 @@ export async function createKunServeRuntime(
   const nowIso = () => new Date().toISOString()
   const allocateSeq = (threadId: string) => eventBus.allocateSeq(threadId)
   const events = new RuntimeEventRecorder({ eventBus, sessionStore, allocateSeq, nowIso })
-  const prefix = createImmutablePrefix({
+  let prefix = createImmutablePrefix({
     systemPrompt: KUN_SYSTEM_PROMPT,
     pinnedConstraints: [
       'system: preserve user intent across compaction',
@@ -153,12 +155,14 @@ export async function createKunServeRuntime(
     models: options.models
   })
   const modelCapabilities = (model: string) => modelCapabilitiesForModel(model, modelProfiles)
-  const modelClient = new DeepseekCompatModelClient({
+  const llmDebug = new LlmDebugRecorder()
+  const modelClient = new CompatModelClient({
     baseUrl: options.baseUrl,
     apiKey: options.apiKey,
     endpointFormat: options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
     model: options.model,
-    modelCapabilities
+    modelCapabilities,
+    debugSink: llmDebug
   })
   const reviewService = new ReviewService({
     threadStore,
@@ -178,6 +182,13 @@ export async function createKunServeRuntime(
     SkillRuntime.create(options.capabilities?.skills),
     seedUsageCarryover({ threadStore, sessionStore, usageService })
   ])
+  // Fold the available-skills catalog into the stable prefix once per session so
+  // the model knows which skills exist (and where to read them) even when no
+  // trigger fires. Stays byte-stable across turns, preserving prompt-cache reuse.
+  const skillCatalog = skillRuntime.catalogInstruction()
+  if (skillCatalog) {
+    prefix = setSystemPrompt(prefix, `${KUN_SYSTEM_PROMPT}\n\n${skillCatalog}`)
+  }
   const webProviders = buildWebToolProviders(options.capabilities?.web)
   const attachmentStore = options.capabilities?.attachments.enabled
     ? new FileAttachmentStore({
@@ -211,6 +222,7 @@ export async function createKunServeRuntime(
     ...mcpProviders.providers,
     ...webProviders.providers,
     ...buildMemoryToolProviders(memoryStore),
+    ...buildSkillToolProviders(skillRuntime),
     ...imageGenProviders.providers,
     ...speechGenProviders.providers,
     ...musicGenProviders.providers,
@@ -367,6 +379,7 @@ export async function createKunServeRuntime(
     eventBus,
     sessionStore,
     events,
+    llmDebug,
     approvalGate,
     userInputGate,
     workspaceInspector,

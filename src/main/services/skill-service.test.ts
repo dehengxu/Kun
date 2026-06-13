@@ -115,7 +115,8 @@ describe('skill-service', () => {
       claw: defaultClawSettings(),
       schedule: defaultScheduleSettings(),
       guiUpdate: { channel: 'stable' },
-      codePromptPrefix: ''
+      codePromptPrefix: '',
+      disabledSkillIds: []
     }
   }
 })

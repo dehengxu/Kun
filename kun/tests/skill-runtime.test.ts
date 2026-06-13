@@ -111,6 +111,81 @@ describe('SkillRuntime', () => {
     expect(resolution.instructions[0]).toContain('small instructions')
   })
 
+  it('renders an always-on catalog of available skills with file paths', async () => {
+    await writeSkill('alpha', {
+      id: 'alpha',
+      name: 'Alpha',
+      description: 'Does alpha things',
+      triggers: { commands: ['/alpha'] }
+    }, 'alpha body')
+    await writeSkill('beta', { id: 'beta', name: 'Beta' }, 'beta body')
+    const runtime = await createRuntime()
+
+    const catalog = runtime.catalogInstruction()
+    expect(catalog).toBeDefined()
+    expect(catalog).toContain('### Available skills')
+    expect(catalog).toContain('- Alpha (alpha): Does alpha things (file:')
+    expect(catalog).toContain('- Beta (beta) (file:')
+    expect(catalog).toContain('### How to use skills')
+  })
+
+  it('truncates the catalog when the byte budget is exceeded', async () => {
+    await writeSkill('one', { id: 'one', name: 'One', description: 'd'.repeat(400) }, 'b')
+    await writeSkill('two', { id: 'two', name: 'Two', description: 'd'.repeat(400) }, 'b')
+    const runtime = await createRuntime({ catalogBudgetBytes: 1_300 })
+
+    const catalog = runtime.catalogInstruction()
+    expect(catalog).toContain('1 more skill')
+    expect(catalog).toContain('omitted (catalog budget reached)')
+  })
+
+  it('returns no catalog when skills are disabled', async () => {
+    const runtime = await SkillRuntime.create({ enabled: false, roots: [], legacySkillMd: true })
+    expect(runtime.catalogInstruction()).toBeUndefined()
+  })
+
+  it('loads a skill on demand by id, accepting $/@/skill: prefixes', async () => {
+    await writeSkill('gamma', {
+      id: 'gamma',
+      name: 'Gamma',
+      description: 'Handles gamma',
+      allowedTools: ['read']
+    }, 'gamma full instructions')
+    const runtime = await createRuntime()
+
+    for (const ref of ['gamma', '$gamma', '@gamma', 'skill:gamma']) {
+      const result = runtime.loadSkillById(ref)
+      expect('error' in result).toBe(false)
+      if ('error' in result) continue
+      expect(result.skillId).toBe('gamma')
+      expect(result.instruction).toContain('gamma full instructions')
+      expect(result.instruction).toContain('Allowed tools: read')
+      expect(result.allowedTools).toEqual(['read'])
+      expect(result.truncated).toBe(false)
+    }
+  })
+
+  it('reports an error with available ids for an unknown skill', async () => {
+    await writeSkill('known', { id: 'known', name: 'Known' }, 'body')
+    const runtime = await createRuntime()
+
+    const result = runtime.loadSkillById('does-not-exist')
+    expect('error' in result).toBe(true)
+    if ('error' in result) expect(result.error).toContain('known')
+  })
+
+  it('truncates an oversized skill body to the instruction budget on load', async () => {
+    await writeSkill('huge', { id: 'huge', name: 'Huge' }, 'z'.repeat(5_000))
+    const runtime = await createRuntime({ instructionBudgetBytes: 1_000 })
+
+    const result = runtime.loadSkillById('huge')
+    expect('error' in result).toBe(false)
+    if ('error' in result) return
+    expect(result.truncated).toBe(true)
+    expect(result.instruction).toContain('…(truncated)')
+    expect(Buffer.byteLength(result.instruction, 'utf8')).toBeLessThanOrEqual(1_000)
+  })
+
   it('injects allowed tool constraints and blocks omitted tools', async () => {
     await writeSkill('readonly', {
       id: 'readonly',

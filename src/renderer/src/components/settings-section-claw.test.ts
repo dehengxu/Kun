@@ -68,7 +68,8 @@ function buildSettings(): AppSettingsV1 {
     claw: defaultClawSettings(),
     schedule: defaultScheduleSettings(),
     guiUpdate: { channel: 'stable' },
-    codePromptPrefix: ''
+    codePromptPrefix: '',
+    disabledSkillIds: []
   }
   settings.claw.enabled = true
   settings.claw.im.workspaceRoot = '/tmp/claw'

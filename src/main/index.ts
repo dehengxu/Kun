@@ -301,9 +301,10 @@ function installDevPreviewWebviewGuards(): void {
 }
 
 
-const appIcon = createAppIcon(kunLogoPng)
+const appIconSource = process.platform === 'win32' ? kunMacLogoPng : kunLogoPng
+const appIcon = createAppIcon(appIconSource)
 const trayIcon = createAppIcon(kunTrayPng)
-traceStartup('app icon loaded', { source: kunLogoPng.startsWith('data:') ? 'data-url' : 'path' })
+traceStartup('app icon loaded', { source: appIconSource.startsWith('data:') ? 'data-url' : 'path' })
 const gotSingleInstanceLock = runningClawScheduleMcpServer || app.requestSingleInstanceLock()
 traceStartup('single instance lock checked', {
   gotSingleInstanceLock,

@@ -196,7 +196,7 @@ export function SessionHeader({ compact = false, className = '' }: Props): React
                       miss: formatCompactNumber(threadUsage.cacheMissTokens)
                     })}
                   >
-                    {t('sessionUsageCache', { cache: formatPercent(threadUsage.cacheHitRate) })}
+                    {t('sessionUsageCache', { cache: formatPercent(threadUsage.lastTurnCacheHitRate ?? threadUsage.cacheHitRate) })}
                   </span>
                 </>
               ) : null}

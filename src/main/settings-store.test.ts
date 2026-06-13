@@ -65,6 +65,24 @@ describe('JsonSettingsStore', () => {
     expect(loaded.write.inlineCompletion.model).toBe('deepseek-v4-pro')
   })
 
+  it('preserves disabled Skill IDs when settings are reloaded', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
+
+    await writeFile(
+      join(userDataDir, 'deepseek-gui-settings.json'),
+      JSON.stringify({
+        version: 1,
+        disabledSkillIds: ['test-skill-08', '/skill:test-skill-09', '']
+      }),
+      'utf8'
+    )
+
+    const store = new JsonSettingsStore(userDataDir)
+    const loaded = await store.load()
+
+    expect(loaded.disabledSkillIds).toEqual(['test-skill-08', 'test-skill-09'])
+  })
+
   it('treats legacy flash defaults as inherited until the user explicitly overrides them', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
 

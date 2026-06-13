@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { FileAttachmentStore } from '../src/attachments/attachment-store.js'
-import { DeepseekCompatModelClient } from '../src/adapters/model/deepseek-compat-model-client.js'
+import { CompatModelClient } from '../src/adapters/model/compat-model-client.js'
 import {
   KunCapabilitiesConfig,
   type AttachmentsCapabilityConfig,
@@ -315,7 +315,7 @@ describe('Attachment store and multimodal input', () => {
 
   it('maps image attachments to DeepSeek-compatible message parts', async () => {
     let body: { messages?: Array<{ role: string; content: unknown }> } | undefined
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://model.example.test',
       apiKey: '',
       model: 'vision-model',
@@ -366,7 +366,7 @@ describe('Attachment store and multimodal input', () => {
 
   it('maps text attachment fallbacks to structured DeepSeek-compatible user text', async () => {
     let body: { messages?: Array<{ role: string; content: unknown }> } | undefined
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://model.example.test',
       apiKey: '',
       model: 'text-model',

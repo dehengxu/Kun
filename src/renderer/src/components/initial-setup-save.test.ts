@@ -8,6 +8,7 @@ import {
 } from '@shared/app-settings'
 import {
   buildInitialSetupSettings,
+  INITIAL_SETUP_PROVIDER_PRESETS,
   initialSetupAutoWirePlan,
   initialSetupDrafts,
   initialSetupProfileId,
@@ -65,6 +66,25 @@ describe('initialSetupDrafts', () => {
 
   it('does not seed LiteLLM as an onboarding provider', () => {
     expect(initialSetupDrafts(settings()).litellm).toBeUndefined()
+  })
+
+  it('keeps coding and Moonshot presets out of onboarding', () => {
+    const excludedIds = [
+      'litellm',
+      'zhipu-coding-plan',
+      'zai-coding-plan',
+      'kimi-code',
+      'moonshot-cn',
+      'moonshot-global'
+    ]
+    const drafts = initialSetupDrafts(settings())
+
+    expect(INITIAL_SETUP_PROVIDER_PRESETS.map((preset) => preset.id)).toEqual(['xiaomi', 'minimax'])
+    for (const id of excludedIds) {
+      expect(drafts[id]).toBeUndefined()
+      expect(initialSetupSelection(settings({ agents: { kun: { providerId: id } } })))
+        .toEqual({ presetId: 'deepseek', mode: 'api' })
+    }
   })
 })
 

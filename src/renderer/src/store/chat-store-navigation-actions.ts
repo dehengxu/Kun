@@ -104,7 +104,7 @@ let runtimeStatusUnsubscribe: (() => void) | null = null
 
 export function createNavigationActions(
   { set, get, sseAbortRef }: StoreActionContext
-): Pick<ChatState, 'openCode' | 'openWrite' | 'ensureWriteThreadForWorkspace' | 'createWriteThread' | 'selectWriteThread' | 'probeRuntime' | 'boot' | 'chooseWorkspace' | 'clearWorkspace' | 'deleteWorkspace' | 'refreshThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
+): Pick<ChatState, 'openCode' | 'openWrite' | 'ensureWriteThreadForWorkspace' | 'createWriteThread' | 'selectWriteThread' | 'probeRuntime' | 'boot' | 'chooseWorkspace' | 'selectWorkspaceRoot' | 'clearWorkspace' | 'deleteWorkspace' | 'refreshThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
   return {
   openCode: async () => {
     const state = get()
@@ -399,7 +399,11 @@ export function createNavigationActions(
               )
                 ? state.activeClawChannelId
                 : channels.find((channel) => channel.enabled)?.id ?? ''
-              set({ clawChannels: channels, activeClawChannelId: activeChannelId })
+              set({
+                disabledSkillIds: settings.disabledSkillIds,
+                clawChannels: channels,
+                activeClawChannelId: activeChannelId
+              })
               void get().refreshThreads()
               if (state.route === 'claw' && state.activeClawChannelId === channelId) {
                 if (state.activeThreadId !== threadId) {
@@ -418,6 +422,7 @@ export function createNavigationActions(
           workspaceRoot,
           codeWorkspaceRoots,
           workspaceLabel: workspaceLabelFromPath(workspaceRoot),
+          disabledSkillIds: settings.disabledSkillIds,
           clawChannels: settings.claw.channels,
           activeClawChannelId: settings.claw.channels.find((channel) => channel.enabled)?.id ?? '',
           runtimeConnection: needsInitialSetup ? 'idle' : get().runtimeConnection,
@@ -498,6 +503,45 @@ export function createNavigationActions(
       set({
         error: formatWorkspacePickerError(e)
       })
+      return null
+    }
+  },
+
+  // Switch the active working directory to an already-known workspace (no native
+  // picker). Persists the choice and lands on a clean new-conversation state for
+  // that directory — typing then starts a fresh thread there. This backs the
+  // workspace picker shown beneath the composer.
+  selectWorkspaceRoot: async (workspaceRoot) => {
+    const normalized = normalizeWorkspaceRoot(workspaceRoot)
+    if (!normalized) return null
+    if (get().runtimeConnection !== 'ready') {
+      set({ error: i18n.t('common:runtimeActionNeedsConnection') })
+      return null
+    }
+    // Already on this directory with an empty composer — nothing to switch.
+    if (normalizeWorkspaceRoot(get().workspaceRoot) === normalized && !get().activeThreadId) {
+      set({ route: 'chat', error: null })
+      return normalized
+    }
+    try {
+      const next = await rendererRuntimeClient.setSettings({ workspaceRoot: normalized })
+      const persisted = normalizeWorkspaceRoot(next.workspaceRoot) || normalized
+      sseAbortRef.current?.abort()
+      sseAbortRef.current = null
+      clearBusyWatchdog()
+      resetBusyRecoveryAttempts()
+      set((s) => ({
+        ...clearedThreadSelection(),
+        route: 'chat',
+        workspaceRoot: persisted,
+        workspaceLabel: workspaceLabelFromPath(persisted),
+        codeWorkspaceRoots: rememberCodeWorkspaceRoots(s.codeWorkspaceRoots, [persisted]),
+        error: null
+      }))
+      await get().refreshThreads()
+      return persisted
+    } catch (e) {
+      set({ error: formatRuntimeError(e) })
       return null
     }
   },

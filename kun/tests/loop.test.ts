@@ -60,8 +60,8 @@ describe('AgentLoop', () => {
     const request = observedRequest as ModelRequest | null
     if (!request) throw new Error('expected model request')
     expect(request.tools.map((tool) => tool.name)).toContain('bash')
-    expect(request.contextInstructions?.join('\n')).toContain('Shell runtime:')
-    expect(request.contextInstructions?.join('\n')).toContain('shell commands appropriate for the host platform')
+    expect(request.contextInstructions?.join('\n')).toContain('<shell_environment>')
+    expect(request.contextInstructions?.join('\n')).toContain('<syntax>')
   })
 
   it('records elapsed seconds for active goals after a turn finishes', async () => {
@@ -170,7 +170,7 @@ describe('AgentLoop', () => {
 
   it('records provider endpoint diagnostics for model send stages', async () => {
     const model = {
-      provider: 'deepseek-compat',
+      provider: 'compat',
       model: 'MiniMax-M2',
       config: {
         baseUrl: 'https://user:secret@api.minimaxi.com/anthropic?token=hidden#debug',
@@ -200,7 +200,7 @@ describe('AgentLoop', () => {
       stage: 'pre_send',
       details: {
         model: 'mimo-v2.5-pro-ultraspeed',
-        provider: 'deepseek-compat',
+        provider: 'compat',
         providerBaseUrl: 'https://api.minimaxi.com/anthropic',
         endpointFormat: 'messages',
         configuredModel: 'MiniMax-M2'

@@ -113,6 +113,9 @@ export function kunSessionResumePath(sessionId: string): string {
 export const KUN_USAGE_PATH = '/v1/usage'
 export const KUN_USAGE_TEMPLATE = '/v1/usage'
 
+export const KUN_DEBUG_LLM_ROUNDS_PATH = '/v1/debug/llm-rounds'
+export const KUN_DEBUG_LLM_ROUNDS_TEMPLATE = '/v1/debug/llm-rounds'
+
 /** Thread mode shared with the Kun contract. */
 export type KunThreadMode = 'agent' | 'plan'
 

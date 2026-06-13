@@ -823,10 +823,10 @@ function mediaFetchFailure(
 }
 
 function apiUrl(baseUrl: string, v1Path: string): string {
-  const normalized = baseUrl.trim().replace(/\/+$/, '')
+  const normalized = trimTrailingSlashes(baseUrl.trim())
   const lower = normalized.toLowerCase()
   const path = v1Path.startsWith('/') ? v1Path : `/${v1Path}`
-  const pathWithoutV1 = path.replace(/^\/v1\//, '/')
+  const pathWithoutV1 = path.startsWith('/v1/') ? path.slice('/v1'.length) : path
   if (!normalized) return path
   if (lower.endsWith(path.toLowerCase()) || lower.endsWith(pathWithoutV1.toLowerCase())) return normalized
   if (lower.endsWith('/v1')) return `${normalized}${pathWithoutV1}`
@@ -834,15 +834,21 @@ function apiUrl(baseUrl: string, v1Path: string): string {
 }
 
 function minimaxRootUrl(baseUrl: string): string {
-  const normalized = baseUrl.trim().replace(/\/+$/, '')
+  const normalized = trimTrailingSlashes(baseUrl.trim())
   if (!normalized) return ''
   for (const suffix of ['/v1/video_generation', '/video_generation', '/v1/query/video_generation']) {
     if (normalized.toLowerCase().endsWith(suffix)) {
-      return normalized.slice(0, -suffix.length).replace(/\/+$/, '')
+      return trimTrailingSlashes(normalized.slice(0, -suffix.length))
     }
   }
-  if (normalized.toLowerCase().endsWith('/v1')) return normalized.slice(0, -3).replace(/\/+$/, '')
+  if (normalized.toLowerCase().endsWith('/v1')) return trimTrailingSlashes(normalized.slice(0, -3))
   return normalized
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1
+  return end === value.length ? value : value.slice(0, end)
 }
 
 function assertMiniMaxOk(baseResp: MiniMaxBaseResponse | undefined, label: string): void {

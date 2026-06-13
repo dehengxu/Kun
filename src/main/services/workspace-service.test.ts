@@ -46,7 +46,7 @@ describe('workspace-service boundary checks', () => {
     await mkdir(workspaceRoot, { recursive: true })
     await writeFile(join(workspaceRoot, 'inside.txt'), 'inside', 'utf8')
     await writeFile(outsideFile, 'outside', 'utf8')
-    await rm('/tmp/kun', { recursive: true, force: true })
+    await rm(join(tmpdir(), 'kun'), { recursive: true, force: true })
   })
 
   it('allows files inside the selected workspace', async () => {

@@ -344,6 +344,41 @@ describe('daily usage service', () => {
     })
   })
 
+  it('reports last_turn_cache_hit_rate from the most recent turn, not the cumulative rate', () => {
+    const response = buildThreadUsageResponse([
+      {
+        threadId: 'thr_x',
+        completedAt: '2026-05-01T10:00:00.000Z',
+        // Cold first turn: mostly miss.
+        usage: usage({ cachedTokens: 1024, cacheHitTokens: 1024, cacheMissTokens: 8049, cacheHitRate: 1024 / (1024 + 8049) })
+      },
+      {
+        threadId: 'thr_x',
+        completedAt: '2026-05-01T10:05:00.000Z',
+        // Warm second turn: mostly hit.
+        usage: usage({ cachedTokens: 8960, cacheHitTokens: 8960, cacheMissTokens: 128, cacheHitRate: 8960 / (8960 + 128) })
+      }
+    ])
+
+    const bucket = response.buckets.find((item) => item.thread_id === 'thr_x')
+    // Cumulative is dragged down by the cold turn (~55%)...
+    expect(bucket?.cache_hit_rate).toBeCloseTo((1024 + 8960) / (9073 + 9088), 4)
+    // ...but the chip-facing field reflects the latest (warm) turn (~98.6%).
+    expect(bucket?.last_turn_cache_hit_rate).toBeCloseTo(8960 / (8960 + 128), 6)
+    expect(ThreadUsageResponseSchema.parse(response)).toEqual(response)
+  })
+
+  it('leaves last_turn_cache_hit_rate null when the latest turn lacks cache telemetry', () => {
+    const response = buildThreadUsageResponse([
+      {
+        threadId: 'thr_y',
+        completedAt: '2026-05-01T10:00:00.000Z',
+        usage: usage({ cachedTokens: 0, cacheHitTokens: undefined, cacheMissTokens: undefined, cacheHitRate: null })
+      }
+    ])
+    expect(response.buckets[0]?.last_turn_cache_hit_rate).toBeNull()
+  })
+
   it('groups usage by model with daily bars and model totals', () => {
     const response = buildModelUsageResponse(
       [

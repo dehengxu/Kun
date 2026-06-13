@@ -5,6 +5,9 @@ const { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require
 const { tmpdir } = require('node:os')
 const { basename, join } = require('node:path')
 
+const sensitiveLogValues = new Set()
+const SENSITIVE_ARG_FLAGS = new Set(['-passin', '-P', '--key-id', '--issuer'])
+
 function parseArgs(argv) {
   const args = {}
 
@@ -57,16 +60,50 @@ Environment fallback:
 }
 
 function fail(message) {
-  console.error(`[fail] ${message}`)
+  console.error(`[fail] ${redactSensitiveText(message)}`)
   process.exitCode = 1
 }
 
 function pass(message) {
-  console.log(`[pass] ${message}`)
+  console.log(`[pass] ${redactSensitiveText(message)}`)
 }
 
 function info(message) {
-  console.log(`[info] ${message}`)
+  console.log(`[info] ${redactSensitiveText(message)}`)
+}
+
+function rememberSensitiveValue(value) {
+  if (typeof value === 'string' && value.length >= 4) {
+    sensitiveLogValues.add(value)
+  }
+}
+
+function redactSensitiveText(message) {
+  let redacted = String(message)
+  const values = [...sensitiveLogValues].sort((a, b) => b.length - a.length)
+  for (const value of values) {
+    redacted = redacted.split(value).join('[redacted]')
+  }
+  return redacted
+}
+
+function formatCommandForError(command, args) {
+  const parts = [command]
+  let maskNext = false
+  for (const arg of args) {
+    if (maskNext) {
+      parts.push('[redacted]')
+      maskNext = false
+      continue
+    }
+    if (SENSITIVE_ARG_FLAGS.has(arg)) {
+      parts.push(arg)
+      maskNext = true
+      continue
+    }
+    parts.push(arg.startsWith('pass:') ? 'pass:[redacted]' : arg)
+  }
+  return parts.join(' ')
 }
 
 function requireCommand(command) {
@@ -89,7 +126,7 @@ function run(command, args, options = {}) {
     const stderr = error.stderr ? String(error.stderr).trim() : ''
     const stdout = error.stdout ? String(error.stdout).trim() : ''
     const detail = stderr || stdout || error.message
-    throw new Error(`${command} ${args.join(' ')} failed: ${detail}`)
+    throw new Error(`${formatCommandForError(command, args)} failed: ${redactSensitiveText(detail)}`)
   }
 }
 
@@ -286,6 +323,7 @@ function main() {
   const issuer = args.issuer || process.env.APPLE_API_ISSUER
   const expectedCnPrefix = args['expected-cn'] || 'Developer ID Application:'
   const shouldCheckNotary = args['check-notary'] === 'true'
+  ;[p12Base64, p12Password, p8Base64, keyId, issuer].forEach(rememberSensitiveValue)
 
   const tempRoot = mkdtempSync(join(tmpdir(), 'deepseek-gui-verify-'))
   let p8Path = p8PathArg
@@ -360,4 +398,8 @@ function main() {
   }
 }
 
-main()
+try {
+  main()
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error))
+}

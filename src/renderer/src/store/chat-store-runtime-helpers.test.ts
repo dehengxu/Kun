@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatBlock } from '../agent/types'
+import type { NormalizedThread } from '../agent/types'
+import type { ChatState } from './chat-store-types'
 import {
+  findReusableEmptyThreadId,
   hasPendingRuntimeWork,
   settlePendingRuntimeWorkAfterInterrupt,
   threadHasPendingRuntimeWork,
@@ -136,5 +139,47 @@ describe('chat-store-runtime-helpers compaction state', () => {
       'success'
     ])
     expect(settled.some(hasPendingRuntimeWork)).toBe(false)
+  })
+})
+
+describe('findReusableEmptyThreadId', () => {
+  const workspace = '/work/project'
+  const makeThread = (overrides: Partial<NormalizedThread>): NormalizedThread => ({
+    id: 'thread',
+    title: '新会话',
+    updatedAt: '2026-06-14T00:00:00.000Z',
+    model: 'deepseek',
+    mode: 'agent',
+    workspace,
+    ...overrides
+  })
+  const stateWith = (threads: NormalizedThread[]): ChatState =>
+    ({ activeThreadId: null, threads, blocks: [] } as unknown as ChatState)
+  const emptyProvider = { getThreadDetail: async () => ({ blocks: [] }) }
+
+  it('reuses an empty thread that still carries the default placeholder title', async () => {
+    const state = stateWith([makeThread({ id: 'blank', title: '新会话' })])
+    const reused = await findReusableEmptyThreadId(state, emptyProvider, workspace)
+    expect(reused).toBe('blank')
+  })
+
+  it('does not reuse an empty thread that carries a meaningful title (e.g. a released requirement)', async () => {
+    // Regression: a freshly released SDD requirement thread is empty but keeps
+    // its requirement title. Reusing it would make the next "new conversation"
+    // inherit "旅游旅行社区网页" instead of starting fresh.
+    const state = stateWith([makeThread({ id: 'requirement', title: '旅游旅行社区网页' })])
+    const reused = await findReusableEmptyThreadId(state, emptyProvider, workspace)
+    expect(reused).toBeNull()
+  })
+
+  it('does not reuse the active thread when it carries a meaningful title', async () => {
+    const titled = makeThread({ id: 'requirement', title: '旅游旅行社区网页' })
+    const state = {
+      activeThreadId: 'requirement',
+      threads: [titled],
+      blocks: []
+    } as unknown as ChatState
+    const reused = await findReusableEmptyThreadId(state, emptyProvider, workspace)
+    expect(reused).toBeNull()
   })
 })

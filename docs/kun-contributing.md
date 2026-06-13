@@ -62,7 +62,7 @@ Kun 的目录本身就是六边形的物理布局:
             ▼                         ▼
    ┌──────────────────────────────────────────────────────────────────────────┐
    │ adapters/  ──  ports 的具体实现                                        │
-   │   model/deepseek-compat-model-client.ts                                │
+   │   model/compat-model-client.ts                                │
    │   tool/local-tool-host.ts                                              │
    │   in-memory-event-bus / in-memory-approval-gate / in-memory-thread-…  │
    │   file/file-thread-store / file-session-store                         │
@@ -134,7 +134,7 @@ export interface ModelClient {
 }
 ```
 
-实现 (`kun/src/adapters/model/deepseek-compat-model-client.ts`)
+实现 (`kun/src/adapters/model/compat-model-client.ts`)
 把 HTTP+SSE 解析为 `ModelStreamChunk` 序列。
 
 测试 (`kun/tests/ports.test.ts`) 直接 `makeFakeModel` 注入
@@ -489,7 +489,7 @@ cache 路由"。
 
 1. **ports**:`ModelClient` 已经是抽象接口,**不需要改**。
 2. **adapters**:`kun/src/adapters/model/openai-compat-model-client.ts`
-   新建(参考 `deepseek-compat-model-client.ts` 的 SSE 解析逻辑)。
+   新建(参考 `compat-model-client.ts` 的 SSE 解析逻辑)。
 3. **adapters barrel**:`kun/src/adapters/index.ts` 导出新类。
 4. **settings**:在 `kun/src/contracts/...` 或调用方
    `ServeOptionsSchema` 加 `modelProvider` 字段(若需要切换)。

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { DeepseekCompatModelClient } from '../src/adapters/model/deepseek-compat-model-client.js'
+import { describe, expect, it, vi } from 'vitest'
+import { CompatModelClient } from '../src/adapters/model/compat-model-client.js'
 import {
   makeAssistantReasoningItem,
   makeAssistantTextItem,
@@ -49,7 +49,7 @@ function sseStream(payloads: Array<Record<string, unknown> | '[DONE]'>): Readabl
   })
 }
 
-describe('DeepseekCompatModelClient', () => {
+describe('CompatModelClient', () => {
   it('uses request.model over client default model', async () => {
     const response = {
       id: 'r2',
@@ -78,7 +78,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -99,7 +99,6 @@ describe('DeepseekCompatModelClient', () => {
       ['https://zenmux.ai/api/v1', 'https://zenmux.ai/api/v1/chat/completions'],
       ['https://zenmux.ai/api/v1/', 'https://zenmux.ai/api/v1/chat/completions'],
       ['https://zenmux.ai/api/v2', 'https://zenmux.ai/api/v2/chat/completions'],
-      ['https://zenmux.ai/api/v1/chat/completions', 'https://zenmux.ai/api/v1/chat/completions'],
       ['https://api.deepseek.com/beta', 'https://api.deepseek.com/v1/chat/completions'],
       ['https://api.deepseek.com', 'https://api.deepseek.com/v1/chat/completions']
     ]
@@ -117,7 +116,7 @@ describe('DeepseekCompatModelClient', () => {
           headers: { 'content-type': 'application/json' }
         })
       }
-      const client = new DeepseekCompatModelClient({
+      const client = new CompatModelClient({
         baseUrl,
         apiKey: 'k',
         model: 'deepseek-chat',
@@ -149,8 +148,8 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
-      baseUrl: 'https://example.com/api/v1/chat/completions',
+    const client = new CompatModelClient({
+      baseUrl: 'https://example.com/api/v1',
       apiKey: 'k',
       model: 'gpt-5-mini',
       endpointFormat: 'responses',
@@ -208,7 +207,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://claude.example',
       apiKey: 'anthropic-key',
       model: 'claude-sonnet-4-5',
@@ -265,7 +264,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://api.minimaxi.com/anthropic',
       apiKey: 'k',
       model: 'MiniMax-M2.5',
@@ -320,7 +319,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://api.minimaxi.com/anthropic',
       apiKey: 'k',
       model: 'MiniMax-M3',
@@ -366,7 +365,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://api.minimaxi.com/anthropic',
       apiKey: 'k',
       model: 'MiniMax-M2.5',
@@ -397,6 +396,50 @@ describe('DeepseekCompatModelClient', () => {
     expect(sentBodies[0]).not.toHaveProperty('thinking')
   })
 
+  it('maps GLM reasoning profiles to GLM thinking request controls', async () => {
+    const sentBodies: Array<Record<string, unknown>> = []
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      sentBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return new Response(JSON.stringify({
+        id: 'glm_1',
+        model: 'glm-5.2',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }]
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    const client = new CompatModelClient({
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      apiKey: 'k',
+      model: 'glm-5.2',
+      fetchImpl,
+      nonStreaming: true,
+      modelCapabilities: (model) => ({
+        id: model,
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        contextWindowTokens: 1_000_000,
+        messageParts: ['text'],
+        reasoning: {
+          supportedEfforts: ['off', 'high', 'max'],
+          defaultEffort: 'max',
+          requestProtocol: 'glm-chat-completions'
+        }
+      })
+    })
+    const request = buildRequest(new AbortController().signal)
+    request.model = 'glm-5.2'
+    request.reasoningEffort = 'max'
+    for await (const _chunk of client.stream(request)) {
+      // drain
+    }
+
+    expect(sentBodies[0]?.thinking).toEqual({ type: 'enabled', clear_thinking: true })
+    expect(sentBodies[0]).not.toHaveProperty('reasoning_effort')
+  })
+
   it('maps Anthropic usage where input_tokens excludes cache reads and writes', async () => {
     const fetchImpl: typeof fetch = async () =>
       new Response(JSON.stringify({
@@ -415,7 +458,7 @@ describe('DeepseekCompatModelClient', () => {
         status: 200,
         headers: { 'content-type': 'application/json' }
       })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://api.minimaxi.com/anthropic',
       apiKey: 'k',
       model: 'MiniMax-M2.5',
@@ -467,7 +510,7 @@ describe('DeepseekCompatModelClient', () => {
       status: 200,
       headers: { 'content-type': 'text/event-stream' }
     })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com',
       apiKey: 'k',
       model: 'gpt-5-mini',
@@ -521,7 +564,7 @@ describe('DeepseekCompatModelClient', () => {
       status: 200,
       headers: { 'content-type': 'text/event-stream' }
     })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://claude.example',
       apiKey: 'k',
       model: 'claude-sonnet-4-5',
@@ -565,7 +608,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://openrouter.ai/api/v1',   // NOT api.deepseek.com
       apiKey: 'k',
       model: 'deepseek-v4-pro',
@@ -597,7 +640,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://api.deepseek.com',
       apiKey: 'k',
       model: 'deepseek-v4-pro',
@@ -639,7 +682,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -683,7 +726,7 @@ describe('DeepseekCompatModelClient', () => {
       sentHeaders.push(init?.headers as Record<string, string>)
       return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -721,7 +764,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -751,7 +794,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -784,7 +827,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.openai.azure.com/openai/deployments/demo',
       apiKey: 'k',
       model: 'gpt-4.1',
@@ -821,7 +864,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://api.xiaomimimo.com/v1',
       apiKey: 'k',
       model: 'mimo-v2.5-pro',
@@ -889,7 +932,7 @@ describe('DeepseekCompatModelClient', () => {
         status: 200,
         headers: { 'content-type': 'application/json' }
       })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://api.deepseek.com',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -954,7 +997,7 @@ describe('DeepseekCompatModelClient', () => {
         status: 200,
         headers: { 'content-type': 'application/json' }
       })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -995,7 +1038,7 @@ describe('DeepseekCompatModelClient', () => {
         status: 200,
         headers: { 'content-type': 'application/json' }
       })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://api.deepseek.com',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1035,7 +1078,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1077,7 +1120,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1158,7 +1201,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1246,7 +1289,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1335,7 +1378,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1404,7 +1447,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://api.deepseek.com',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1456,7 +1499,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1531,7 +1574,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1588,7 +1631,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1642,7 +1685,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1689,7 +1732,7 @@ describe('DeepseekCompatModelClient', () => {
         headers: { 'content-type': 'application/json' }
       })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1723,11 +1766,12 @@ describe('DeepseekCompatModelClient', () => {
   })
 
   it('reports an error when the HTTP response is not OK', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const providerMessage = `Not supported model ${'mimo-v2.5-pro-ultraspeed'.repeat(40)}`
     const body = JSON.stringify({ error: { code: '400', message: providerMessage } })
     const fetchImpl: typeof fetch = async () =>
       new Response(body, { status: 400 })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1737,6 +1781,7 @@ describe('DeepseekCompatModelClient', () => {
     for await (const chunk of client.stream(buildRequest(new AbortController().signal))) {
       chunks.push(chunk)
     }
+    warn.mockRestore()
     expect(chunks[0].kind).toBe('error')
     expect(chunks[0]).toMatchObject({
       kind: 'error',
@@ -1744,6 +1789,40 @@ describe('DeepseekCompatModelClient', () => {
       code: 'http_400'
     })
     expect(JSON.stringify(chunks[0])).toContain(providerMessage)
+  })
+
+  it('adds a provider configuration hint and logs request context for HTTP 404', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const fetchImpl: typeof fetch = async () => new Response('', { status: 404 })
+    const client = new CompatModelClient({
+      baseUrl: 'https://api.example.com/chat/completions?api_key=secret',
+      apiKey: 'k',
+      model: 'deepseek-chat',
+      endpointFormat: 'custom_endpoint',
+      fetchImpl
+    })
+    const chunks: ModelStreamChunk[] = []
+    for await (const chunk of client.stream(buildRequest(new AbortController().signal))) {
+      chunks.push(chunk)
+    }
+
+    expect(chunks[0]).toMatchObject({
+      kind: 'error',
+      message: 'model request failed with status 404: Check your model provider configuration, especially Base URL and Endpoint format.',
+      code: 'http_404'
+    })
+    expect(warn).toHaveBeenCalledWith('[kun:model] model HTTP request failed', expect.objectContaining({
+      provider: 'compat',
+      status: 404,
+      model: 'deepseek-chat',
+      configuredModel: 'deepseek-chat',
+      baseUrl: 'https://api.example.com/chat/completions?api_key=%5Bredacted%5D',
+      requestUrl: 'https://api.example.com/chat/completions?api_key=%5Bredacted%5D',
+      endpointFormat: 'chat_completions',
+      configuredEndpointFormat: 'custom_endpoint',
+      responseBody: ''
+    }))
+    warn.mockRestore()
   })
 
   it('reports provider JSON error payloads returned with HTTP 200', async () => {
@@ -1757,7 +1836,7 @@ describe('DeepseekCompatModelClient', () => {
         status: 200,
         headers: { 'content-type': 'application/json' }
       })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://api.xiaomimimo.com/v1',
       apiKey: 'k',
       model: 'mimo-v2.5-pro-ultraspeed',
@@ -1790,7 +1869,7 @@ describe('DeepseekCompatModelClient', () => {
     ])
     const fetchImpl: typeof fetch = async () =>
       new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://api.xiaomimimo.com/v1',
       apiKey: 'k',
       model: 'mimo-v2.5-pro-ultraspeed',
@@ -1830,7 +1909,7 @@ describe('DeepseekCompatModelClient', () => {
     })
     const fetchImpl: typeof fetch = async () =>
       new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1867,7 +1946,7 @@ describe('DeepseekCompatModelClient', () => {
     })
     const fetchImpl: typeof fetch = async () =>
       new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1906,7 +1985,7 @@ describe('DeepseekCompatModelClient', () => {
       }
       return new Response(retryBody, { status: 200, headers: { 'content-type': 'text/event-stream' } })
     }
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1945,7 +2024,7 @@ describe('DeepseekCompatModelClient', () => {
     })
     const fetchImpl: typeof fetch = async () =>
       new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',
@@ -1970,7 +2049,7 @@ describe('DeepseekCompatModelClient', () => {
     })
     const fetchImpl: typeof fetch = async () =>
       new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-    const client = new DeepseekCompatModelClient({
+    const client = new CompatModelClient({
       baseUrl: 'https://example.com/beta',
       apiKey: 'k',
       model: 'deepseek-chat',

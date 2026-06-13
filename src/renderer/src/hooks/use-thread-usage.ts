@@ -7,7 +7,10 @@ export type ThreadUsageSummary = {
   reasoningTokens: number
   cachedTokens: number
   cacheMissTokens: number
+  /** Thread-cumulative cache hit rate (dragged down by the cold first turn). */
   cacheHitRate: number | null
+  /** Cache hit rate of the most recent turn; preferred for the usage chip. */
+  lastTurnCacheHitRate: number | null
   totalTokens: number
   costUsd: number | null
   costCny: number | null
@@ -103,6 +106,7 @@ export async function loadThreadUsage(threadId: string): Promise<ThreadUsageSumm
       ? usageNumber(bucket.cache_miss_tokens)
       : 0
   const cacheHitRate = bucketCacheHitRate
+  const lastTurnCacheHitRate = usageRate(bucket.last_turn_cache_hit_rate)
   const totalTokens = inputTokens + outputTokens
   const rawCostUsd = hasFiniteNumber(bucket, 'cost_usd') ? usageNumber(bucket.cost_usd) : null
   const rawCostCny = hasFiniteNumber(bucket, 'cost_cny') ? usageNumber(bucket.cost_cny) : null
@@ -125,6 +129,7 @@ export async function loadThreadUsage(threadId: string): Promise<ThreadUsageSumm
     cachedTokens,
     cacheMissTokens,
     cacheHitRate,
+    lastTurnCacheHitRate,
     totalTokens,
     costUsd,
     costCny,

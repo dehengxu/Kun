@@ -73,6 +73,7 @@ import {
   useThreadUsageState
 } from '../../hooks/use-thread-usage'
 import { GitBranchPicker } from './GitBranchPicker'
+import { WorkspaceProjectPicker } from './WorkspaceProjectPicker'
 import {
   FloatingComposerModelPicker,
   type ComposerReasoningEffort
@@ -139,6 +140,7 @@ type Props = {
       promptPatterns?: string[]
     }
   }>
+  disabledSkillIds?: string[]
   onPickAttachments?: (files: File[]) => void
   onPasteClipboardImage?: (options?: { silentNoImage?: boolean }) => void | Promise<void>
   onRemoveAttachment?: (id: string) => void
@@ -285,6 +287,14 @@ function isProjectSkillRoot(skillRoot: string | undefined, workspaceRoot: string
 
 function isProjectSkill(skill: { root?: string; scope?: 'project' | 'global' }, workspaceRoot: string): boolean {
   return skill.scope === 'project' || (skill.scope !== 'global' && isProjectSkillRoot(skill.root, workspaceRoot))
+}
+
+function normalizeSkillCommandId(id: string): string {
+  return id.trim().replace(/^\/?skill:/i, '').trim()
+}
+
+function disabledSkillIdSet(ids: string[] | undefined): Set<string> {
+  return new Set((ids ?? []).map(normalizeSkillCommandId).filter(Boolean))
 }
 
 function normalizedImageFile(file: File, mimeTypeHint?: string): File | null {
@@ -583,6 +593,7 @@ export function FloatingComposer({
   changedFiles = EMPTY_CHANGED_FILES,
   changedFileStats = null,
   skillCommands = EMPTY_SKILL_COMMANDS,
+  disabledSkillIds,
   onPickAttachments,
   onPasteClipboardImage,
   onRemoveAttachment,
@@ -751,6 +762,7 @@ export function FloatingComposer({
   const slashCommands = useMemo<SlashCommand[]>(() => {
     const threadActionDisabled = !runtimeReady || busy || !activeThreadId
     const goalActionDisabled = !canOpenGoalPanel
+    const disabledSkills = disabledSkillIdSet(disabledSkillIds)
     const commands: SlashCommand[] = []
     if (route !== 'claw') {
       commands.push({
@@ -775,6 +787,7 @@ export function FloatingComposer({
     if (route !== 'claw') {
       const dynamicSkillCommands = skillCommands
         .filter((skill) => skill.id.trim() && skill.name.trim())
+        .filter((skill) => !disabledSkills.has(normalizeSkillCommandId(skill.id)))
         .sort((left, right) => {
           const leftProject = isProjectSkill(left, effectiveWorkspaceRoot)
           const rightProject = isProjectSkill(right, effectiveWorkspaceRoot)
@@ -896,6 +909,7 @@ export function FloatingComposer({
     route,
     runtimeReady,
     skillCommands,
+    disabledSkillIds,
     t
   ])
 
@@ -2115,6 +2129,9 @@ export function FloatingComposer({
       {compact ? null : (
         <div className="ds-composer-footer mt-1 flex min-h-7 flex-wrap items-center justify-between gap-x-2.5 gap-y-1.5 px-3">
           <div className="ds-composer-footer-left flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            {route === 'chat' ? (
+              <WorkspaceProjectPicker currentWorkspaceRoot={effectiveWorkspaceRoot} />
+            ) : null}
             <GitBranchPicker workspaceRoot={effectiveWorkspaceRoot} />
             {showThreadUsageFooter ? (
               <div
@@ -2165,7 +2182,7 @@ export function FloatingComposer({
                     <span className="ds-composer-usage-cache-separator text-ds-faint">·</span>
                     <span className="ds-composer-usage-cache shrink-0 truncate tabular-nums">
                       {t('sessionUsageCache', {
-                        cache: formatPercent(threadUsage.cacheHitRate)
+                        cache: formatPercent(threadUsage.lastTurnCacheHitRate ?? threadUsage.cacheHitRate)
                       })}
                     </span>
                     <span className="ds-composer-usage-turns-separator text-ds-faint">·</span>

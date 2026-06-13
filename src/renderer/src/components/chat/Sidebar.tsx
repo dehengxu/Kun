@@ -192,7 +192,7 @@ export function Sidebar({
         />
       </div>
 
-      <div className="ds-no-drag mx-1 my-3" />
+      <div className="ds-no-drag mx-1 my-1" />
 
       {connectPhoneSidebarOpen ? (
         <ConnectPhoneSidebarPanel

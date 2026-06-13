@@ -22,6 +22,14 @@ function textResponse(body: string, status = 200): Response {
   })
 }
 
+function requestHostname(input: RequestInfo | URL): string {
+  try {
+    return new URL(String(input)).hostname.toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
 describe('claw platform install', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -31,7 +39,7 @@ describe('claw platform install', () => {
 
   it('returns the official user code and polls the matching Feishu/Lark target', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const hostname = requestHostname(input)
       const body = new URLSearchParams(String(init?.body ?? ''))
       const action = body.get('action')
 
@@ -40,7 +48,7 @@ describe('claw platform install', () => {
       }
 
       if (action === 'begin') {
-        const isLark = url.includes('accounts.larksuite.com')
+        const isLark = hostname === 'accounts.larksuite.com'
         return jsonResponse({
           device_code: isLark ? 'lark-device' : 'feishu-device',
           user_code: isLark ? 'LARK-CODE' : 'FEI-CODE',
@@ -53,7 +61,7 @@ describe('claw platform install', () => {
       }
 
       if (action === 'poll') {
-        const isLark = url.includes('accounts.larksuite.com')
+        const isLark = hostname === 'accounts.larksuite.com'
         return jsonResponse({
           client_id: isLark ? 'cli_lark' : 'cli_feishu',
           client_secret: 'secret',

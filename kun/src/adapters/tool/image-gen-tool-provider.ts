@@ -373,18 +373,18 @@ export function openAiCompatImageUrl(
   endpoint: 'generations' | 'edits'
 ): string {
   const path = `images/${endpoint}`
-  let normalized = baseUrl.trim().replace(/\/+$/, '')
+  let normalized = trimTrailingSlashes(baseUrl.trim())
   if (!normalized) return `/v1/${path}`
   const lower = normalized.toLowerCase()
   if (lower.endsWith(`/${path}`)) return normalized
   for (const known of ['images/generations', 'images/edits']) {
     if (lower.endsWith(`/${known}`)) {
-      normalized = normalized.slice(0, -known.length).replace(/\/+$/, '')
+      normalized = trimTrailingSlashes(normalized.slice(0, -known.length))
       break
     }
   }
   const lastSegment = normalized.split('/').pop()?.toLowerCase() ?? ''
-  if (/^v\d+$/.test(lastSegment)) return `${normalized}/${path}`
+  if (isVersionSegment(lastSegment)) return `${normalized}/${path}`
   return `${normalized}/v1/${path}`
 }
 
@@ -396,7 +396,7 @@ export class OpenAiCompatImageClient implements ImageGenClient {
     baseUrl: string,
     private readonly apiKey: string
   ) {
-    this.baseUrl = baseUrl.replace(/\/+$/, '')
+    this.baseUrl = trimTrailingSlashes(baseUrl)
   }
 
   async generate(request: ImageGenRequest): Promise<GeneratedImage> {
@@ -577,12 +577,27 @@ export class MiniMaxImageClient implements ImageGenClient {
 }
 
 function minimaxImageGenerationUrl(baseUrl: string): string {
-  const normalized = baseUrl.trim().replace(/\/+$/, '')
+  const normalized = trimTrailingSlashes(baseUrl.trim())
   const lower = normalized.toLowerCase()
   if (!normalized) return '/v1/image_generation'
   if (lower.endsWith('/v1/image_generation') || lower.endsWith('/image_generation')) return normalized
   if (lower.endsWith('/v1')) return `${normalized}/image_generation`
   return `${normalized}/v1/image_generation`
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1
+  return end === value.length ? value : value.slice(0, end)
+}
+
+function isVersionSegment(value: string): boolean {
+  if (value.length < 2 || value[0] !== 'v') return false
+  for (let index = 1; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code < 48 || code > 57) return false
+  }
+  return true
 }
 
 // aspect_ratio values both MiniMax image models accept (21:9 is image-01

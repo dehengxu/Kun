@@ -43,12 +43,14 @@ const labels: Record<string, string> = {
   modelProviderName: 'Provider name',
   modelProviderId: 'Provider ID',
   modelProviderApiKey: 'Provider API key',
+  modelProviderApiKeyPlaceholder: 'Enter provider API key',
   modelProviderBaseUrl: 'Provider base URL',
   modelProviderEndpointFormat: 'Endpoint format',
   modelProviderFetchEmpty: 'No models found',
   modelEndpointChatCompletions: '/v1/chat/completions',
   modelEndpointResponses: '/v1/responses',
   modelEndpointMessages: '/v1/messages',
+  modelEndpointCustomEndpoint: 'Custom full endpoint',
   modelProviderModels: 'Provider models',
   modelProviderImageCapability: 'Image capability',
   modelProviderImageCapabilityDesc: 'Image capability description',
@@ -493,6 +495,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(providerIdInput).not.toContain('readonly')
     expect(html).toContain('Endpoint format')
     expect(html).toContain('<option value="messages" selected="">/v1/messages</option>')
+    expect(html).toContain('<option value="custom_endpoint">Custom full endpoint</option>')
+    expect(html).toContain('Enter provider API key')
+    expect(html).not.toContain('Inherit API key')
     expect(html).toContain('Add provider')
     expect(html).toContain('Test connection')
     expect(html).toContain('Fetch from API')
@@ -651,5 +656,25 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       baseUrl: 'http://localhost:4000',
       endpointFormat: 'chat_completions'
     })
+  })
+
+  it('defines coding provider presets for the Providers menu', () => {
+    const expected = [
+      ['zhipu-coding-plan', 'Zhipu Coding Plan', 'https://open.bigmodel.cn/api/coding/paas/v4'],
+      ['zai-coding-plan', 'Z.ai Coding Plan', 'https://api.z.ai/api/coding/paas/v4'],
+      ['kimi-code', 'Kimi Code', 'https://api.kimi.com/coding/v1'],
+      ['moonshot-cn', 'Moonshot CN', 'https://api.moonshot.cn/v1'],
+      ['moonshot-global', 'Moonshot Global', 'https://api.moonshot.ai/v1']
+    ] as const
+
+    for (const [id, name, baseUrl] of expected) {
+      const preset = getModelProviderPreset(id)
+      expect(preset && modelProviderPresetProfile(preset)).toMatchObject({
+        id,
+        name,
+        baseUrl,
+        endpointFormat: 'chat_completions'
+      })
+    }
   })
 })

@@ -162,7 +162,7 @@ describe('Memory store and recall', () => {
     await h2.loop.runTurn(h2.threadId, h2.turnId)
     const finalInstructions = seenRequests.at(-1)?.contextInstructions?.join('\n') ?? ''
     expect(finalInstructions).not.toContain(memory.id)
-    expect(finalInstructions).toContain('Shell runtime:')
+    expect(finalInstructions).toContain('<shell_environment>')
   })
 
   it('writes memory records atomically (no .tmp file left on success)', async () => {

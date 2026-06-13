@@ -4,12 +4,12 @@ import { join } from 'node:path'
 import {
   getModelProviderProfile,
   getModelProviderSettings,
+  isCustomModelEndpointFormat,
   isComposerChatModelId,
   listModelProviderModelIds,
   listNonTextModelIds,
   modelProfileSupportsTextChat,
   modelProviderModelProfile,
-  modelProviderModelProfilesForSettings,
   resolveKunRuntimeSettings,
   type AppSettingsV1
 } from '../shared/app-settings'
@@ -37,6 +37,14 @@ export async function fetchUpstreamModelIds(
   const runtime = resolveKunRuntimeSettings(settings)
   const runtimeModel = runtime.model.trim()
   const defaultModelId = isComposerChatModelId(runtimeModel, nonTextModelIds) ? runtimeModel : ''
+  if (isCustomModelEndpointFormat(runtime.endpointFormat)) {
+    return modelListOrError(
+      configuredModelIds,
+      configuredGroups,
+      defaultModelId,
+      'Custom full endpoint mode does not support querying upstream /models.'
+    )
+  }
   const key = apiKey.trim()
   if (!key) {
     return modelListOrError(
@@ -173,10 +181,7 @@ async function readConfiguredModelGroups(settings: AppSettingsV1): Promise<Model
       modelProfiles: provider.modelProfiles
     })
   }
-  return mergeModelGroups([
-    ...groups,
-    ...(await readConfiguredProfileAliasGroups(settings, groups))
-  ])
+  return mergeModelGroups(groups)
 }
 
 function mergeModelGroups(groups: readonly ModelProviderModelGroup[]): ModelProviderModelGroup[] {
@@ -220,62 +225,6 @@ function modelIdsFromProfiles(
     }
   }
   return ids
-}
-
-async function readConfiguredProfileAliasGroups(
-  settings: AppSettingsV1,
-  providerGroups: readonly ModelProviderModelGroup[]
-): Promise<ModelProviderModelGroup[]> {
-  const runtime = resolveKunRuntimeSettings(settings)
-  const configPath = join(expandHome(runtime.dataDir), 'config.json')
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(await readFile(configPath, 'utf8')) as unknown
-  } catch {
-    return []
-  }
-  const root = objectValue(parsed)
-  const models = objectValue(root.models)
-  const contextCompaction = objectValue(root.contextCompaction)
-  const aliasesByModel = new Map<string, string[]>()
-  collectModelProfileAliases(aliasesByModel, objectValue(contextCompaction.modelProfiles))
-  collectModelProfileAliases(aliasesByModel, objectValue(models.profiles))
-  const providerModelProfiles = modelProviderModelProfilesForSettings(settings)
-
-  const aliasGroups: ModelProviderModelGroup[] = []
-  for (const group of providerGroups) {
-    const aliases: string[] = []
-    for (const modelId of group.modelIds) {
-      aliases.push(...(aliasesByModel.get(modelId.trim()) ?? []))
-    }
-    if (aliases.length === 0) continue
-    aliasGroups.push({
-      providerId: group.providerId,
-      label: group.label,
-      modelIds: aliases,
-      modelProfiles: providerModelProfiles
-    })
-  }
-  return aliasGroups
-}
-
-function collectModelProfileAliases(
-  target: Map<string, string[]>,
-  profiles: Record<string, unknown>
-): void {
-  for (const [modelId, rawProfile] of Object.entries(profiles)) {
-    const trimmed = modelId.trim()
-    if (!trimmed) continue
-    const aliases = objectValue(rawProfile).aliases
-    if (!Array.isArray(aliases)) continue
-    const ids = target.get(trimmed) ?? []
-    for (const alias of aliases) {
-      if (typeof alias !== 'string') continue
-      const trimmedAlias = alias.trim()
-      if (trimmedAlias) ids.push(trimmedAlias)
-    }
-    target.set(trimmed, ids)
-  }
 }
 
 function mergeModelIds(ids: readonly string[]): string[] {

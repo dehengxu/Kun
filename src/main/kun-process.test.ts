@@ -48,7 +48,8 @@ function createSettings(binaryPath: string): AppSettingsV1 {
     claw: defaultClawSettings(),
     schedule: defaultScheduleSettings(),
     guiUpdate: { channel: 'stable' },
-    codePromptPrefix: ''
+    codePromptPrefix: '',
+    disabledSkillIds: []
   }
 }
 
@@ -67,6 +68,24 @@ async function readKunLog(): Promise<string> {
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
   throw new Error('Expected a kun log file to be created')
+}
+
+function canBindTestPort(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createServer()
+    let settled = false
+    const settle = (available: boolean): void => {
+      if (settled) return
+      settled = true
+      server.removeAllListeners('error')
+      resolve(available)
+    }
+    server.unref()
+    server.once('error', () => settle(false))
+    server.listen(port, '127.0.0.1', () => {
+      server.close(() => settle(true))
+    })
+  })
 }
 
 beforeEach(() => {
@@ -190,21 +209,36 @@ describe('reclaimKunPort', () => {
     await expect(module.reclaimKunPort(0)).resolves.toEqual({ ok: true })
   })
 
-  it('resolves an available fallback port when the preferred port is unavailable', async () => {
-    const server = createServer()
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(0, '127.0.0.1', () => resolve())
-    })
+  it('resolves the next available fallback port when the preferred port is unavailable', async () => {
+    let server: ReturnType<typeof createServer> | null = null
+    let preferredPort = 0
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const candidate = createServer()
+      await new Promise<void>((resolve, reject) => {
+        candidate.once('error', reject)
+        candidate.listen(0, '127.0.0.1', () => resolve())
+      })
+      const address = candidate.address() as AddressInfo
+      if (address.port < 65_535 && await canBindTestPort(address.port + 1)) {
+        server = candidate
+        preferredPort = address.port
+        break
+      }
+      await new Promise<void>((resolve) => candidate.close(() => resolve()))
+    }
+    if (!server || preferredPort <= 0) {
+      throw new Error('Could not find consecutive test ports')
+    }
     try {
-      const address = server.address() as AddressInfo
       const module = await import('./kun-process')
 
-      const resolved = await module.resolveAvailableKunPort(address.port)
+      const resolved = await module.resolveAvailableKunPort(preferredPort)
 
-      expect(resolved.changed).toBe(true)
-      expect(resolved.message).toBe(`port ${address.port} is in use`)
-      expect(resolved.port).not.toBe(address.port)
+      expect(resolved).toEqual({
+        port: preferredPort + 1,
+        changed: true,
+        message: `port ${preferredPort} is in use`
+      })
       await expect(module.reclaimKunPort(resolved.port)).resolves.toEqual({ ok: true })
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -556,6 +590,34 @@ describe('syncGuiManagedKunConfig', () => {
     expect(parsed.capabilities.skills.roots).toEqual(expect.arrayContaining([
       join(workspaceRoot, '.codex', 'skills'),
       extraRoot
+    ]))
+  })
+
+  it('re-enables skills when roots are discovered despite a persisted enabled:false', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    // Simulate a config whose skills capability was persisted with the schema
+    // default enabled:false (there is no user-facing disable toggle).
+    writeFileSync(configPath, JSON.stringify({
+      capabilities: { skills: { enabled: false, roots: [], legacySkillMd: true } }
+    }), 'utf8')
+    const module = await import('./kun-process')
+    const settings = createSettings('/tmp/fake-kun-child.js')
+    const workspaceRoot = join(tempRoot, 'workspace')
+    settings.workspaceRoot = workspaceRoot
+    mkdirSync(join(workspaceRoot, '.codex', 'skills'), { recursive: true })
+
+    await module.syncGuiManagedKunConfig(tempRoot, defaultKunRuntimeSettings(), {
+      scheduleMcp: {
+        settings,
+        launch: { appPath: '/tmp/deepseek-gui-test-app', execPath: '/tmp/electron', isPackaged: false }
+      }
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.capabilities.skills.enabled).toBe(true)
+    expect(parsed.capabilities.skills.roots).toEqual(expect.arrayContaining([
+      join(workspaceRoot, '.codex', 'skills')
     ]))
   })
 

@@ -64,6 +64,60 @@ MiniMax:
 - image base URL: `https://api.minimaxi.com`
 - image models: `image-01`
 
+Zhipu Coding Plan:
+
+- id: `zhipu-coding-plan`
+- base URL: `https://open.bigmodel.cn/api/coding/paas/v4`
+- endpoint format: OpenAI Chat Completions
+- initial models: `glm-5.2`, `glm-5.1`, `glm-5-turbo`, `glm-4.7`,
+  `glm-4.5-air`
+- role: coding subscription provider added from Settings > Providers only
+
+Z.ai Coding Plan:
+
+- id: `zai-coding-plan`
+- base URL: `https://api.z.ai/api/coding/paas/v4`
+- endpoint format: OpenAI Chat Completions
+- initial models: `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`,
+  `glm-4.5-air`
+- role: international coding subscription provider added from Settings >
+  Providers only
+
+Kimi Code:
+
+- id: `kimi-code`
+- base URL: `https://api.kimi.com/coding/v1`
+- endpoint format: OpenAI Chat Completions
+- initial model: `kimi-for-coding`
+- role: Kimi coding subscription provider added from Settings > Providers only
+
+Moonshot CN:
+
+- id: `moonshot-cn`
+- base URL: `https://api.moonshot.cn/v1`
+- endpoint format: OpenAI Chat Completions
+- initial models: `kimi-k2.7-code`, `kimi-k2.6`, `kimi-k2.5`,
+  `moonshot-v1-128k`, `moonshot-v1-32k`, `moonshot-v1-8k`
+- model profile note: Kimi K2 models are marked as text+image chat models;
+  video input is not represented in the current provider schema
+- role: Moonshot open-platform provider added from Settings > Providers only
+
+Moonshot Global:
+
+- id: `moonshot-global`
+- base URL: `https://api.moonshot.ai/v1`
+- endpoint format: OpenAI Chat Completions
+- initial models: `kimi-k2.7-code`, `kimi-k2.6`, `kimi-k2.5`,
+  `moonshot-v1-128k`, `moonshot-v1-32k`, `moonshot-v1-8k`
+- model profile note: Kimi K2 models are marked as text+image chat models;
+  video input is not represented in the current provider schema
+- role: international Moonshot open-platform provider added from Settings >
+  Providers only
+
 The defaults are not locked. Users can edit base URLs, protocols, and model IDs
 if provider endpoints change, and they can add custom compatible providers at
 any time.
+
+First-run setup intentionally remains focused on the default stack. It only
+shows DeepSeek plus the Xiaomi and MiniMax presets; LiteLLM, Zhipu, Z.ai, Kimi
+Code, and Moonshot presets are opt-in from Settings > Providers.

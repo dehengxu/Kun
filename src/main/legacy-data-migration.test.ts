@@ -200,7 +200,8 @@ describe('rewriteLegacyPathsInSettingsFile', () => {
           { workspaceRoot: join(home, '.deepseekgui', 'claw', 'feishu', 'app1') }
         ]
       },
-      codePromptPrefix: 'mentions /.deepseekgui/kun casually'
+      codePromptPrefix: 'mentions /.deepseekgui/kun casually',
+      disabledSkillIds: [],
     }
     await writeFile(join(userData, 'deepseek-gui-settings.json'), JSON.stringify(settings), 'utf8')
 

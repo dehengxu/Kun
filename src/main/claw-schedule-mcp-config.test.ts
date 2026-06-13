@@ -58,6 +58,7 @@ function createSettings(patch: Partial<AppSettingsV1['schedule']['internal']> = 
       channel: 'stable'
     },
     codePromptPrefix: '',
+    disabledSkillIds: [],
     claw: {
       ...claw,
       enabled: true,

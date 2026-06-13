@@ -71,7 +71,8 @@ function settings(): AppSettingsV1 {
     claw: defaultClawSettings(),
     schedule: defaultScheduleSettings(),
     guiUpdate: { channel: 'stable' },
-    codePromptPrefix: ''
+    codePromptPrefix: '',
+    disabledSkillIds: []
   }
 }
 
@@ -881,5 +882,148 @@ describe('provider presets', () => {
       endpointFormat: 'chat_completions',
       models: []
     })
+  })
+
+  it('includes Zhipu, Z.ai, Kimi Code, and Moonshot presets', () => {
+    const zhipu = getModelProviderPreset('zhipu-coding-plan')
+    const zai = getModelProviderPreset('zai-coding-plan')
+    const kimiCode = getModelProviderPreset('kimi-code')
+    const moonshotCn = getModelProviderPreset('moonshot-cn')
+    const moonshotGlobal = getModelProviderPreset('moonshot-global')
+
+    expect(zhipu && modelProviderPresetProfile(zhipu)).toMatchObject({
+      id: 'zhipu-coding-plan',
+      name: 'Zhipu Coding Plan',
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      endpointFormat: 'chat_completions',
+      models: ['glm-5.2', 'glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4.5-air'],
+      modelProfiles: {
+        'glm-5.2': expect.objectContaining({
+          contextWindowTokens: 1_000_000,
+          supportsToolCalling: true,
+          inputModalities: ['text']
+        }),
+        'glm-5.1': expect.objectContaining({
+          contextWindowTokens: 200_000,
+          supportsToolCalling: true
+        })
+      }
+    })
+    expect(zhipu && modelProviderPresetProfile(zhipu).modelProfiles['glm-5.2'].reasoning)
+      .toEqual({
+        supportedEfforts: ['off', 'high', 'max'],
+        defaultEffort: 'max',
+        requestProtocol: 'glm-chat-completions'
+      })
+
+    expect(zai && modelProviderPresetProfile(zai)).toMatchObject({
+      id: 'zai-coding-plan',
+      name: 'Z.ai Coding Plan',
+      baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+      endpointFormat: 'chat_completions',
+      models: ['glm-5.1', 'glm-5', 'glm-5-turbo', 'glm-4.7', 'glm-4.5-air'],
+      modelProfiles: {
+        'glm-5': expect.objectContaining({
+          contextWindowTokens: 200_000,
+          supportsToolCalling: true,
+          inputModalities: ['text']
+        })
+      }
+    })
+    expect(zai && modelProviderPresetProfile(zai).modelProfiles['glm-5'].reasoning)
+      .toEqual({
+        supportedEfforts: ['off', 'high', 'max'],
+        defaultEffort: 'max',
+        requestProtocol: 'glm-chat-completions'
+      })
+
+    expect(kimiCode && modelProviderPresetProfile(kimiCode)).toMatchObject({
+      id: 'kimi-code',
+      name: 'Kimi Code',
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      endpointFormat: 'chat_completions',
+      models: ['kimi-for-coding'],
+      modelProfiles: {
+        'kimi-for-coding': expect.objectContaining({
+          supportsToolCalling: true,
+          inputModalities: ['text']
+        })
+      }
+    })
+
+    for (const preset of [moonshotCn, moonshotGlobal]) {
+      const profile = preset && modelProviderPresetProfile(preset)
+      expect(profile).toMatchObject({
+        endpointFormat: 'chat_completions',
+        models: [
+          'kimi-k2.7-code',
+          'kimi-k2.6',
+          'kimi-k2.5',
+          'moonshot-v1-128k',
+          'moonshot-v1-32k',
+          'moonshot-v1-8k'
+        ],
+        modelProfiles: {
+          'kimi-k2.7-code': expect.objectContaining({
+            supportsToolCalling: true,
+            inputModalities: ['text', 'image'],
+            messageParts: ['text', 'image_url']
+          }),
+          'moonshot-v1-128k': expect.objectContaining({
+            contextWindowTokens: 128_000,
+            inputModalities: ['text']
+          })
+        }
+      })
+      expect(profile && modelSupportsImageInput(profile.modelProfiles['kimi-k2.7-code']))
+        .toBe(true)
+    }
+    expect(moonshotCn && modelProviderPresetProfile(moonshotCn).baseUrl)
+      .toBe('https://api.moonshot.cn/v1')
+    expect(moonshotGlobal && modelProviderPresetProfile(moonshotGlobal).baseUrl)
+      .toBe('https://api.moonshot.ai/v1')
+  })
+
+  it('resolves new OpenAI-compatible presets through the selected provider', () => {
+    const cases = [
+      ['zhipu-coding-plan', 'https://open.bigmodel.cn/api/coding/paas/v4', 'glm-5.2'],
+      ['zai-coding-plan', 'https://api.z.ai/api/coding/paas/v4', 'glm-5.1'],
+      ['kimi-code', 'https://api.kimi.com/coding/v1', 'kimi-for-coding'],
+      ['moonshot-cn', 'https://api.moonshot.cn/v1', 'kimi-k2.7-code'],
+      ['moonshot-global', 'https://api.moonshot.ai/v1', 'kimi-k2.7-code']
+    ] as const
+
+    for (const [presetId, baseUrl, model] of cases) {
+      const preset = getModelProviderPreset(presetId)
+      expect(preset).not.toBeNull()
+      const profile = modelProviderPresetProfile(preset!, `sk-${presetId}`)
+      const resolved = resolveKunRuntimeSettings({
+        ...settings(),
+        provider: {
+          ...defaultModelProviderSettings(),
+          providers: [
+            ...defaultModelProviderSettings().providers,
+            profile
+          ]
+        },
+        agents: {
+          kun: {
+            ...defaultKunRuntimeSettings(),
+            providerId: profile.id,
+            model
+          }
+        }
+      })
+
+      expect(resolved).toEqual(expect.objectContaining({
+        apiKey: `sk-${presetId}`,
+        baseUrl,
+        endpointFormat: 'chat_completions',
+        model
+      }))
+      expect(resolved.modelProfiles[model]).toEqual(expect.objectContaining({
+        supportsToolCalling: true
+      }))
+    }
   })
 })

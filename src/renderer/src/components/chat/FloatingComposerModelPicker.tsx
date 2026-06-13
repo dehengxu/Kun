@@ -356,7 +356,12 @@ export function FloatingComposerModelPicker({
               </div>
             ) : (
               providerMenuGroups.map((group) => {
-                const selectedModel = group.modelIds.some((id) => modelIdsMatch(id, currentModel))
+                const selectedModel = composerModelMenuItemSelected({
+                  groupProviderId: group.providerId,
+                  selectedProviderId,
+                  currentModel,
+                  modelId: currentModel
+                })
                   ? currentModel
                   : ''
                 return (
@@ -392,7 +397,12 @@ export function FloatingComposerModelPicker({
             {activeProviderGroup.modelIds.map((id) => (
               <PickerRow
                 key={`${activeProviderGroup.providerId}:${id}`}
-                selected={modelIdsMatch(currentModel, id)}
+                selected={composerModelMenuItemSelected({
+                  groupProviderId: activeProviderGroup.providerId,
+                  selectedProviderId,
+                  currentModel,
+                  modelId: id
+                })}
                 title={id}
                 rightSlot={
                   modelSupportsImageInput(modelProfileForModel(activeProviderGroup, id))
@@ -517,16 +527,18 @@ export function buildComposerModelMenuGroups({
   modelOptions: readonly string[]
   ungroupedLabel: string
 }): ComposerModelMenuGroup[] {
-  const seen = new Set<string>()
+  const configuredModelKeys = new Set<string>()
   const groups = composerModelGroups
     .map((group) => {
+      const seenInProvider = new Set<string>()
       const ids = group.modelIds
         .map((id) => id.trim())
         .filter((id) => {
           const key = normalizeModelCapabilityKey(id)
-          if (!key || seen.has(key)) return false
+          if (!key || seenInProvider.has(key)) return false
           if (!composerMenuSupportsModel(group, id)) return false
-          markModelSeen(seen, group, id)
+          markModelSeen(seenInProvider, group, id)
+          markModelSeen(configuredModelKeys, group, id)
           return true
         })
       return {
@@ -539,11 +551,12 @@ export function buildComposerModelMenuGroups({
     .filter((group) => group.modelIds.length > 0)
 
   const ungrouped: string[] = []
+  const seenUngrouped = new Set<string>()
   for (const rawId of modelOptions) {
     const id = rawId.trim()
     const key = normalizeModelCapabilityKey(id)
-    if (!key || seen.has(key) || !isComposerChatModelId(id)) continue
-    seen.add(key)
+    if (!key || configuredModelKeys.has(key) || seenUngrouped.has(key) || !isComposerChatModelId(id)) continue
+    seenUngrouped.add(key)
     ungrouped.push(id)
   }
 
@@ -740,6 +753,19 @@ function normalizeModelCapabilityKey(modelId: string): string {
 function modelIdsMatch(a: string, b: string): boolean {
   const left = normalizeModelCapabilityKey(a)
   return Boolean(left) && left === normalizeModelCapabilityKey(b)
+}
+
+export function composerModelMenuItemSelected(input: {
+  groupProviderId: string
+  selectedProviderId: string | null
+  currentModel: string
+  modelId: string
+}): boolean {
+  return (
+    Boolean(input.selectedProviderId) &&
+    input.groupProviderId === input.selectedProviderId &&
+    modelIdsMatch(input.currentModel, input.modelId)
+  )
 }
 
 function markModelSeen(

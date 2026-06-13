@@ -163,6 +163,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
       set({
         workspaceRoot,
         workspaceLabel: workspaceLabelFromPath(workspaceRoot),
+        disabledSkillIds: settings.disabledSkillIds,
         clawChannels: settings.claw.channels,
         activeClawChannelId: settings.claw.channels.some(
           (channel) => channel.id === get().activeClawChannelId && channel.enabled

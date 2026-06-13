@@ -1,7 +1,7 @@
 import type { Dispatch, ReactElement, SetStateAction } from 'react'
-import { AudioLines, Bot, ChevronLeft, Globe, ImageIcon, Keyboard, Mic, PencilLine, RefreshCw, ServerCog, Settings, ShieldCheck, Smartphone, Sparkles } from 'lucide-react'
+import { AudioLines, Bot, Bug, ChevronLeft, Globe, ImageIcon, Keyboard, Mic, PencilLine, RefreshCw, ServerCog, Settings, ShieldCheck, Smartphone, Sparkles } from 'lucide-react'
 
-type SettingsCategory = 'general' | 'providers' | 'write' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'agents' | 'permissions' | 'shortcuts' | 'easterEgg' | 'claw' | 'updates'
+type SettingsCategory = 'general' | 'providers' | 'write' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'agents' | 'permissions' | 'shortcuts' | 'easterEgg' | 'claw' | 'updates' | 'debug'
 
 export function SettingsSidebar({
   category,
@@ -94,6 +94,10 @@ export function SettingsSidebar({
         <button type="button" className={catCls('claw')} onClick={() => setCategory('claw')}>
           <Smartphone className="h-4 w-4 shrink-0 opacity-70" strokeWidth={1.75} />
           {t('claw')}
+        </button>
+        <button type="button" className={catCls('debug')} onClick={() => setCategory('debug')}>
+          <Bug className="h-4 w-4 shrink-0 opacity-70" strokeWidth={1.75} />
+          {t('debug')}
         </button>
       </nav>
       <div className="ds-no-drag mt-auto border-t border-ds-border p-3">

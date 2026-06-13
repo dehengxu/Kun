@@ -1,16 +1,19 @@
 import { randomUUID } from 'node:crypto'
 import {
   DEFAULT_WRITE_INLINE_COMPLETION_MAX_TOKENS,
+  isCustomModelEndpointFormat,
   modelEndpointPath,
   resolveWriteInlineCompletionEndpointFormat,
   resolveWriteInlineCompletionApiKey,
   resolveWriteInlineCompletionBaseUrl,
   resolveWriteInlineCompletionModel,
+  resolveModelEndpointFormat,
   type ModelEndpointFormat,
   type AppSettingsV1
 } from '../../shared/app-settings'
 import {
   upstreamDeepSeekFimCompletionsUrl,
+  upstreamOpenAiCustomEndpointUrl,
   upstreamOpenAiChatCompletionsUrl
 } from '../../shared/openai-compat-url'
 import type {
@@ -169,7 +172,7 @@ function markerBlock(marker: string, text = ''): string {
 }
 
 function sanitizePromptLine(text = ''): string {
-  return String(text || '').replace(/\r\n?/g, '\n').replace(/-->/g, '--\\>')
+  return String(text || '').replace(/\r\n?/g, '\n').split('-->').join('--\\>')
 }
 
 function compactText(text = ''): string {
@@ -402,9 +405,10 @@ function debugPromptFromMessages(messages: ChatCompletionMessage[]): string {
 }
 
 function compatibleModelEndpointUrl(baseUrl: string, endpointFormat: ModelEndpointFormat): string {
+  if (isCustomModelEndpointFormat(endpointFormat)) return upstreamOpenAiCustomEndpointUrl(baseUrl)
   if (endpointFormat === 'chat_completions') return upstreamOpenAiChatCompletionsUrl(baseUrl)
   const path = modelEndpointPath(endpointFormat)
-  const normalized = baseUrl.trim().replace(/\/+$/, '')
+  const normalized = trimTrailingSlashes(baseUrl.trim())
   if (!normalized) return `/v1/${path}`
   if (normalized.toLowerCase().endsWith(`/${path}`)) return normalized
   const withoutEndpoint = stripKnownModelEndpointPath(normalized)
@@ -412,7 +416,7 @@ function compatibleModelEndpointUrl(baseUrl: string, endpointFormat: ModelEndpoi
   if (lastSegment === 'beta') {
     return `${withoutEndpoint.slice(0, -'/beta'.length)}/v1/${path}`
   }
-  if (/^v\d+$/.test(lastSegment)) {
+  if (isVersionSegment(lastSegment)) {
     return `${withoutEndpoint}/${path}`
   }
   return `${withoutEndpoint}/v1/${path}`
@@ -422,19 +426,43 @@ function stripKnownModelEndpointPath(baseUrl: string): string {
   const lower = baseUrl.toLowerCase()
   for (const path of ['chat/completions', 'responses', 'messages']) {
     if (lower.endsWith(`/${path}`)) {
-      return baseUrl.slice(0, -path.length).replace(/\/+$/, '')
+      return trimTrailingSlashes(baseUrl.slice(0, -path.length))
     }
   }
   return baseUrl
 }
 
 function isDeepSeekInlineCompletionBaseUrl(baseUrl: string): boolean {
-  try {
-    const parsed = new URL(baseUrl)
-    return parsed.hostname.toLowerCase().endsWith('deepseek.com')
-  } catch {
-    return baseUrl.toLowerCase().includes('deepseek.com')
+  const hostname = baseUrlHostname(baseUrl)
+  return hostname === 'deepseek.com' || hostname.endsWith('.deepseek.com')
+}
+
+function baseUrlHostname(baseUrl: string): string {
+  const trimmed = baseUrl.trim()
+  if (!trimmed) return ''
+  for (const candidate of [trimmed, `https://${trimmed}`]) {
+    try {
+      return new URL(candidate).hostname.toLowerCase()
+    } catch {
+      // Try the next normalized form.
+    }
   }
+  return ''
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1
+  return end === value.length ? value : value.slice(0, end)
+}
+
+function isVersionSegment(value: string): boolean {
+  if (value.length < 2 || value[0] !== 'v') return false
+  for (let index = 1; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code < 48 || code > 57) return false
+  }
+  return true
 }
 
 function buildProviderHeaders(apiKey: string, responseFormat: WriteInlineProviderResponseFormat): Record<string, string> {
@@ -725,17 +753,24 @@ export async function requestWriteInlineCompletion(
   const actionMayEdit = Boolean(request.editCandidate && request.recentEdits?.length)
   const useChatCompletions = mode === 'edit' || actionMayEdit
   const baseUrl = resolveWriteInlineCompletionBaseUrl(settings)
-  const endpointFormat = resolveWriteInlineCompletionEndpointFormat(settings)
+  const configuredEndpointFormat = resolveWriteInlineCompletionEndpointFormat(settings)
+  const endpointFormat = resolveModelEndpointFormat(configuredEndpointFormat, baseUrl)
+  if (!endpointFormat) {
+    return {
+      ok: false,
+      message: 'Custom full endpoint URL must end with /chat/completions, /completions, /responses, or /messages.'
+    }
+  }
   const useFimCompletions =
     !useChatCompletions &&
-    endpointFormat === 'chat_completions' &&
+    configuredEndpointFormat === 'chat_completions' &&
     isDeepSeekInlineCompletionBaseUrl(baseUrl)
   const responseFormat: WriteInlineProviderResponseFormat = useFimCompletions
     ? 'fim_completions'
     : endpointFormat
   const url = useFimCompletions
     ? upstreamDeepSeekFimCompletionsUrl(baseUrl)
-    : compatibleModelEndpointUrl(baseUrl, endpointFormat)
+    : compatibleModelEndpointUrl(baseUrl, configuredEndpointFormat)
   const maxTokens = mode === 'long' || mode === 'edit' || actionMayEdit
     ? settings.write.inlineCompletion.longMaxTokens || settings.write.inlineCompletion.maxTokens || DEFAULT_WRITE_INLINE_COMPLETION_MAX_TOKENS
     : settings.write.inlineCompletion.maxTokens || DEFAULT_WRITE_INLINE_COMPLETION_MAX_TOKENS

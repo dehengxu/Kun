@@ -9,6 +9,7 @@ import type { UserInputGate } from '../../ports/user-input-gate.js'
 import type { WorkspaceInspector } from '../../ports/workspace-inspector.js'
 import type { ToolHost, ToolProviderPolicy } from '../../ports/tool-host.js'
 import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
+import type { LlmDebugRecorder } from '../../services/llm-debug-recorder.js'
 import type { RuntimeInfoResponse } from '../../contracts/runtime-info.js'
 import type { McpServerDiagnostic } from '../../adapters/tool/mcp-tool-provider.js'
 import type { McpSearchRuntimeDiagnostic } from '../../adapters/tool/mcp-tool-search.js'
@@ -53,6 +54,8 @@ export type ServerRuntime = {
   eventBus: EventBus
   sessionStore: SessionStore
   events: RuntimeEventRecorder
+  /** Optional troubleshooting buffer of the most recent LLM rounds (in-memory). */
+  llmDebug?: LlmDebugRecorder
   approvalGate: ApprovalGate
   userInputGate: UserInputGate
   workspaceInspector: WorkspaceInspector

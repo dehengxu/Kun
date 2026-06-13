@@ -107,6 +107,13 @@ describe('app-ipc-schemas', () => {
     }).path).toBe('/v1/threads/thr_1/review')
   })
 
+  it('accepts the LLM debug rounds endpoint', () => {
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/debug/llm-rounds',
+      method: 'GET'
+    }).path).toBe('/v1/debug/llm-rounds')
+  })
+
   it('rejects runtime request paths outside the modeled Kun API surface', () => {
     expect(() =>
       runtimeRequestPayloadSchema.parse({
@@ -163,7 +170,8 @@ describe('app-ipc-schemas', () => {
             { id: 'custom-1', label: '', prompt: '' }
           ]
         }
-      }
+      },
+      disabledSkillIds: ['test-skill-08']
     })
 
     expect(payload.agents?.kun?.port).toBe(9000)
@@ -173,6 +181,7 @@ describe('app-ipc-schemas', () => {
     expect(payload.write?.inlineCompletion?.model).toBe('deepseek-v4-pro')
     expect(payload.write?.selectionAssist?.infographicPrompt).toBe('手绘风格信息图。')
     expect(payload.write?.selectionAssist?.quickActions).toHaveLength(2)
+    expect(payload.disabledSkillIds).toEqual(['test-skill-08'])
   })
 
   it('accepts media generation settings and provider capability patches', () => {
@@ -304,11 +313,19 @@ describe('app-ipc-schemas', () => {
   it('strips legacy settings keys before validating settings patches', () => {
     const payload = settingsPatchSchema.parse({
       locale: 'zh',
+      disabledSkillIds: ['legacy-skill'],
       reasonix: { model: 'legacy-reasoner' },
       quickChat: { enabled: true },
+      provider: {
+        providers: [{
+          id: 'legacy-vision-provider',
+          imageRecognition: { enabled: true }
+        }]
+      },
       agents: {
         kun: {
-          port: 9001
+          port: 9001,
+          imageRecognition: { enabled: true }
         },
         reasonix: {
           model: 'legacy-reasoner'
@@ -320,7 +337,10 @@ describe('app-ipc-schemas', () => {
     })
 
     expect(payload.locale).toBe('zh')
+    expect(payload.provider?.providers?.[0]?.imageRecognition).toEqual({ enabled: true })
     expect(payload.agents?.kun?.port).toBe(9001)
+    expect(payload.agents?.kun?.imageRecognition).toEqual({ enabled: true })
+    expect('disabledSkillIds' in payload).toBe(false)
     expect('reasonix' in payload).toBe(false)
     expect('quickChat' in payload).toBe(false)
     expect('reasonix' in (payload.agents ?? {})).toBe(false)

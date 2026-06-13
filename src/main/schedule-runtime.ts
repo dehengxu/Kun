@@ -795,7 +795,7 @@ export class ScheduleRuntime {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.deps.logError('schedule-server', 'Schedule internal request failed', { message })
-      writeJson(res, 500, { ok: false, message })
+      writeJson(res, 500, { ok: false, message: 'Internal server error.' })
     }
   }
 

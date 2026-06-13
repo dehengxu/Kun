@@ -101,6 +101,8 @@ type DailyUsageAccumulator = DailyUsageBucket & {
 
 type ThreadUsageAccumulator = ThreadUsageBucket & {
   hasCacheTelemetry: boolean
+  /** completedAt of the latest record folded in, to pick last_turn_cache_hit_rate. */
+  lastCompletedAt: string
 }
 
 type ModelUsageAccumulator = ModelUsageBucket & {
@@ -350,7 +352,9 @@ function emptyThreadBucket(threadId: string): ThreadUsageAccumulator {
     token_economy_savings_cny: 0,
     turns: 0,
     cache_hit_rate: null,
-    hasCacheTelemetry: false
+    last_turn_cache_hit_rate: null,
+    hasCacheTelemetry: false,
+    lastCompletedAt: ''
   }
 }
 
@@ -404,7 +408,8 @@ function finalizeThreadBucket(bucket: ThreadUsageAccumulator): ThreadUsageBucket
     token_economy_savings_usd: finalized.token_economy_savings_usd,
     token_economy_savings_cny: finalized.token_economy_savings_cny,
     turns: finalized.turns,
-    cache_hit_rate: finalized.cache_hit_rate
+    cache_hit_rate: finalized.cache_hit_rate,
+    last_turn_cache_hit_rate: bucket.last_turn_cache_hit_rate
   }
 }
 
@@ -437,6 +442,12 @@ export function buildThreadUsageResponse(records: readonly ThreadUsageRecord[]):
     const bucket = buckets.get(record.threadId) ?? emptyThreadBucket(record.threadId)
     const added = addUsageCounters(bucket, record.usage)
     bucket.hasCacheTelemetry = bucket.hasCacheTelemetry || added.hasCacheTelemetry
+    // ISO timestamps compare lexicographically; `>=` keeps the latest turn (and
+    // the later array position on ties) as the source of last_turn_cache_hit_rate.
+    if (record.completedAt >= bucket.lastCompletedAt) {
+      bucket.lastCompletedAt = record.completedAt
+      bucket.last_turn_cache_hit_rate = record.usage.cacheHitRate ?? null
+    }
     buckets.set(record.threadId, bucket)
   }
   const finalized = [...buckets.values()]

@@ -15,7 +15,15 @@ import type {
   VideoGenerationProtocol
 } from './app-settings-types'
 
-export type ModelProviderPresetId = 'litellm' | 'xiaomi' | 'minimax'
+export type ModelProviderPresetId =
+  | 'litellm'
+  | 'zhipu-coding-plan'
+  | 'zai-coding-plan'
+  | 'kimi-code'
+  | 'moonshot-cn'
+  | 'moonshot-global'
+  | 'xiaomi'
+  | 'minimax'
 
 export const TOKEN_PLAN_PROVIDER_ID_SUFFIX = '-token-plan'
 
@@ -126,6 +134,37 @@ const MINIMAX_BUILT_IN_REASONING: ModelProviderReasoningCapabilityV1 = {
   requestProtocol: 'none'
 }
 
+const GLM_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['off', 'high', 'max'],
+  defaultEffort: 'max',
+  requestProtocol: 'glm-chat-completions'
+}
+
+const ZHIPU_CODING_PLAN_MODELS = [
+  'glm-5.2',
+  'glm-5.1',
+  'glm-5-turbo',
+  'glm-4.7',
+  'glm-4.5-air'
+]
+
+const ZAI_CODING_PLAN_MODELS = [
+  'glm-5.1',
+  'glm-5',
+  'glm-5-turbo',
+  'glm-4.7',
+  'glm-4.5-air'
+]
+
+const MOONSHOT_CHAT_MODELS = [
+  'kimi-k2.7-code',
+  'kimi-k2.6',
+  'kimi-k2.5',
+  'moonshot-v1-128k',
+  'moonshot-v1-32k',
+  'moonshot-v1-8k'
+]
+
 export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
   {
     id: 'litellm',
@@ -135,6 +174,84 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     models: [],
     docsUrl: 'https://docs.litellm.ai/docs/',
     apiKeyUrl: 'https://docs.litellm.ai/docs/proxy/quick_start'
+  },
+  {
+    id: 'zhipu-coding-plan',
+    name: 'Zhipu Coding Plan',
+    baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    endpointFormat: 'chat_completions',
+    models: [...ZHIPU_CODING_PLAN_MODELS],
+    modelProfiles: {
+      'glm-5.2': textChatProfile(1_000_000, GLM_REASONING),
+      'glm-5.1': textChatProfile(200_000, GLM_REASONING),
+      'glm-5-turbo': textChatProfile(200_000, GLM_REASONING),
+      'glm-4.7': textChatProfile(200_000, GLM_REASONING),
+      'glm-4.5-air': textChatProfile(200_000, GLM_REASONING)
+    },
+    docsUrl: 'https://docs.bigmodel.cn/cn/coding-plan/overview',
+    apiKeyUrl: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys'
+  },
+  {
+    id: 'zai-coding-plan',
+    name: 'Z.ai Coding Plan',
+    baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+    endpointFormat: 'chat_completions',
+    models: [...ZAI_CODING_PLAN_MODELS],
+    modelProfiles: {
+      'glm-5.1': textChatProfile(200_000, GLM_REASONING),
+      'glm-5': textChatProfile(200_000, GLM_REASONING),
+      'glm-5-turbo': textChatProfile(200_000, GLM_REASONING),
+      'glm-4.7': textChatProfile(200_000, GLM_REASONING),
+      'glm-4.5-air': textChatProfile(200_000, GLM_REASONING)
+    },
+    docsUrl: 'https://docs.z.ai/devpack/tool/others',
+    apiKeyUrl: 'https://z.ai/subscribe'
+  },
+  {
+    id: 'kimi-code',
+    name: 'Kimi Code',
+    baseUrl: 'https://api.kimi.com/coding/v1',
+    endpointFormat: 'chat_completions',
+    models: ['kimi-for-coding'],
+    modelProfiles: {
+      'kimi-for-coding': textChatProfile()
+    },
+    docsUrl: 'https://www.kimi.com/code/docs/en/',
+    apiKeyUrl: 'https://www.kimi.com/code'
+  },
+  {
+    id: 'moonshot-cn',
+    name: 'Moonshot CN',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    endpointFormat: 'chat_completions',
+    models: [...MOONSHOT_CHAT_MODELS],
+    modelProfiles: {
+      'kimi-k2.7-code': visionChatProfile(),
+      'kimi-k2.6': visionChatProfile(),
+      'kimi-k2.5': visionChatProfile(),
+      'moonshot-v1-128k': textChatProfile(128_000),
+      'moonshot-v1-32k': textChatProfile(32_000),
+      'moonshot-v1-8k': textChatProfile(8_000)
+    },
+    docsUrl: 'https://platform.moonshot.cn/docs',
+    apiKeyUrl: 'https://platform.moonshot.cn/console/api-keys'
+  },
+  {
+    id: 'moonshot-global',
+    name: 'Moonshot Global',
+    baseUrl: 'https://api.moonshot.ai/v1',
+    endpointFormat: 'chat_completions',
+    models: [...MOONSHOT_CHAT_MODELS],
+    modelProfiles: {
+      'kimi-k2.7-code': visionChatProfile(),
+      'kimi-k2.6': visionChatProfile(),
+      'kimi-k2.5': visionChatProfile(),
+      'moonshot-v1-128k': textChatProfile(128_000),
+      'moonshot-v1-32k': textChatProfile(32_000),
+      'moonshot-v1-8k': textChatProfile(8_000)
+    },
+    docsUrl: 'https://platform.moonshot.ai/docs',
+    apiKeyUrl: 'https://platform.moonshot.ai/console/api-keys'
   },
   {
     id: 'xiaomi',
@@ -452,11 +569,11 @@ function minimaxM2ChatProfile(): ModelProviderModelProfileV1 {
 }
 
 function textChatProfile(
-  contextWindowTokens: number,
+  contextWindowTokens?: number,
   reasoning?: ModelProviderReasoningCapabilityV1
 ): ModelProviderModelProfileV1 {
   return {
-    contextWindowTokens,
+    ...(contextWindowTokens ? { contextWindowTokens } : {}),
     inputModalities: ['text'],
     outputModalities: ['text'],
     supportsToolCalling: true,
@@ -466,11 +583,11 @@ function textChatProfile(
 }
 
 function visionChatProfile(
-  contextWindowTokens: number,
+  contextWindowTokens?: number,
   reasoning?: ModelProviderReasoningCapabilityV1
 ): ModelProviderModelProfileV1 {
   return {
-    contextWindowTokens,
+    ...(contextWindowTokens ? { contextWindowTokens } : {}),
     inputModalities: ['text', 'image'],
     outputModalities: ['text'],
     supportsToolCalling: true,

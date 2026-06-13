@@ -233,6 +233,7 @@ export type KunGuiApi = {
     payload: WorkspaceClipboardImageSavePayload
   ) => Promise<WorkspaceClipboardImageSaveResult>
   readClipboardImage: () => Promise<ClipboardImageReadResult>
+  getPathForFile: (file: File) => string
   renameWorkspaceEntry: (
     payload: WorkspaceEntryRenamePayload
   ) => Promise<WorkspaceEntryRenameResult>
@@ -309,5 +310,4 @@ export type KunGuiApi = {
   logError: (category: string, message: string, detail?: unknown) => Promise<void>
   getLogPath: () => Promise<string>
   openLogDir: () => Promise<{ ok: boolean; message?: string }>
-  getPathForFile: (file: File) => string
 }

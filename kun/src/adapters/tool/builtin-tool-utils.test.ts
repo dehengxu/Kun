@@ -111,8 +111,15 @@ describe('shell runtime metadata', () => {
       name: 'cmd.exe',
       syntax: 'cmd.exe batch'
     })
-    expect(shellRuntimeInstruction({ shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', args: ['-Command'] }))
-      .toContain('PowerShell syntax')
+    const instruction = shellRuntimeInstruction({
+      shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+      args: ['-Command']
+    })
+    expect(instruction).toContain('<shell_environment>')
+    expect(instruction).toContain('<shell>pwsh</shell>')
+    expect(instruction).toContain('<syntax>PowerShell</syntax>')
+    // Factual block only: no imperative directives the model would echo back.
+    expect(instruction).not.toMatch(/Do not assume|Write shell commands/)
   })
 
   it('runs PowerShell commands through a UTF-8 output preamble', () => {

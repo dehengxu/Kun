@@ -91,8 +91,17 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
         maybeSettings.guiUpdate?.channel ?? DEFAULT_GUI_UPDATE_CHANNEL
       )
     },
-    codePromptPrefix: typeof maybeSettings.codePromptPrefix === 'string' ? maybeSettings.codePromptPrefix : ''
+    codePromptPrefix: typeof maybeSettings.codePromptPrefix === 'string' ? maybeSettings.codePromptPrefix : '',
+    disabledSkillIds: normalizeDisabledSkillIds(maybeSettings.disabledSkillIds)
   }
+}
+
+function normalizeDisabledSkillIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value
+    .filter((id): id is string => typeof id === 'string')
+    .map((id) => id.trim().replace(/^\/?skill:/i, '').trim())
+    .filter(Boolean))]
 }
 
 export function normalizeAppBehaviorSettings(

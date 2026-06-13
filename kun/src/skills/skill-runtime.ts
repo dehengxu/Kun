@@ -5,6 +5,7 @@ import type { SkillsCapabilityConfig } from '../contracts/capabilities.js'
 
 const DEFAULT_ACTIVE_LIMIT = 3
 const DEFAULT_INSTRUCTION_BUDGET_BYTES = 24_000
+const DEFAULT_CATALOG_BUDGET_BYTES = 8_000
 
 const SkillTriggerManifest = z.object({
   commands: z.array(z.string().min(1)).default([]),
@@ -80,6 +81,8 @@ export type SkillRuntimeDiagnostics = {
 export type SkillRuntimeOptions = {
   activeLimit?: number
   instructionBudgetBytes?: number
+  /** Byte budget for the always-on available-skills catalog folded into the prefix. */
+  catalogBudgetBytes?: number
 }
 
 export class SkillRuntime {
@@ -104,7 +107,8 @@ export class SkillRuntime {
     const normalized = config ?? { enabled: false, roots: [], legacySkillMd: true }
     const resolvedOptions = {
       activeLimit: options.activeLimit ?? DEFAULT_ACTIVE_LIMIT,
-      instructionBudgetBytes: options.instructionBudgetBytes ?? DEFAULT_INSTRUCTION_BUDGET_BYTES
+      instructionBudgetBytes: options.instructionBudgetBytes ?? DEFAULT_INSTRUCTION_BUDGET_BYTES,
+      catalogBudgetBytes: options.catalogBudgetBytes ?? DEFAULT_CATALOG_BUDGET_BYTES
     }
     const loaded = normalized.enabled
       ? await discoverSkills(normalized)
@@ -147,6 +151,92 @@ export class SkillRuntime {
       instructions: injection.instructions,
       ...(injection.allowedToolNames ? { allowedToolNames: injection.allowedToolNames } : {}),
       injectedBytes: injection.injectedBytes
+    }
+  }
+
+  /**
+   * Renders the always-on catalog of available skills, folded once into the
+   * stable prefix at session start. Unlike {@link resolveTurn} (which only
+   * injects a skill once its triggers fire on the user prompt), the catalog
+   * lets the model learn that skills exist at all and read the linked
+   * `SKILL.md` on demand. Mirrors codex's `render_available_skills_body`.
+   * Returns `undefined` when skills are disabled or none are loaded so the
+   * prefix stays byte-identical to the no-skills case.
+   */
+  catalogInstruction(): string | undefined {
+    if (!this.config.enabled || this.skills.length === 0) return undefined
+    const budget = this.options.catalogBudgetBytes
+    const header = '## Skills\n' +
+      'A skill is a reusable set of instructions stored on disk. The skills below ' +
+      'are available in this workspace. When a user request matches one, read its ' +
+      '`SKILL.md` (the file path is listed) before acting, then follow it.'
+    const footer = '### How to use skills\n' +
+      '- A skill activates automatically when the user mentions it by id ' +
+      '(`$id`, `@id`, or `/skill:id`) or trips one of its triggers; its full ' +
+      'instructions are then injected for that turn.\n' +
+      '- Otherwise, if a request clearly matches a skill above, call the ' +
+      '`load_skill` tool with its id to pull the full instructions, then follow ' +
+      'them. (You can also read the listed file directly.)'
+    const lines: string[] = []
+    let used = Buffer.byteLength(`${header}\n\n### Available skills\n\n${footer}`, 'utf8')
+    let dropped = 0
+    for (const skill of this.skills) {
+      const desc = skill.description ? `: ${skill.description}` : ''
+      const line = `- ${skill.name} (${skill.id})${desc} (file: ${skill.entryPath})`
+      const cost = Buffer.byteLength(`${line}\n`, 'utf8')
+      if (used + cost > budget) {
+        dropped += 1
+        continue
+      }
+      lines.push(line)
+      used += cost
+    }
+    if (lines.length === 0) return undefined
+    if (dropped > 0) {
+      lines.push(`- …and ${dropped} more skill${dropped === 1 ? '' : 's'} omitted (catalog budget reached).`)
+    }
+    return `${header}\n\n### Available skills\n${lines.join('\n')}\n\n${footer}`
+  }
+
+  /**
+   * Loads a single skill's full instructions on demand, for the `load_skill`
+   * tool. Lets the model pull a skill it discovered in the catalog even when no
+   * trigger fired on the user prompt — mirroring codex's autonomous invocation.
+   * Returns an error payload (never throws) so the tool can surface it to the
+   * model as a normal tool result.
+   */
+  loadSkillById(skillId: string): {
+    skillId: string
+    name: string
+    instruction: string
+    allowedTools: string[]
+    truncated: boolean
+  } | { error: string } {
+    if (!this.config.enabled) return { error: 'skills are disabled' }
+    const normalized = slug(skillId.trim().replace(/^[$@]/, '').replace(/^skill:/i, ''))
+    const skill = this.skills.find((candidate) => candidate.id === normalized) ??
+      this.skills.find((candidate) => slug(candidate.name) === normalized)
+    if (!skill) {
+      const available = this.skills.map((candidate) => candidate.id).join(', ')
+      return { error: `unknown skill id "${skillId}". Available: ${available || '(none)'}` }
+    }
+    let instruction = formatSkillInstruction(skill, 'load_skill')
+    let truncated = false
+    const budget = this.options.instructionBudgetBytes
+    if (Buffer.byteLength(instruction, 'utf8') > budget) {
+      // Trim the entry body (the only unbounded part) to fit the per-turn budget.
+      const header = formatSkillInstruction({ ...skill, entry: '' }, 'load_skill')
+      const overhead = Buffer.byteLength(`${header}\n\n`, 'utf8')
+      const room = Math.max(0, budget - overhead)
+      instruction = `${header}\n\n${truncateToBytes(skill.entry, room)}`
+      truncated = true
+    }
+    return {
+      skillId: skill.id,
+      name: skill.name,
+      instruction,
+      allowedTools: [...skill.allowedTools],
+      truncated
     }
   }
 
@@ -297,6 +387,17 @@ async function loadSkillPackage(root: string, allowLegacy: boolean): Promise<Loa
   }
 }
 
+function formatSkillInstruction(skill: LoadedSkill, reason: string): string {
+  return [
+    `Active Skill: ${skill.name} (${skill.id})`,
+    `Activation: ${reason}`,
+    skill.description ? `Description: ${skill.description}` : '',
+    skill.allowedTools.length ? `Allowed tools: ${skill.allowedTools.join(', ')}` : '',
+    skill.assets.length ? `Assets:\n${skill.assets.map((asset) => `- ${asset}`).join('\n')}` : '',
+    skill.entry
+  ].filter(Boolean).join('\n\n')
+}
+
 function buildInjection(
   active: Array<SkillActivation & { skill: LoadedSkill }>,
   budgetBytes: number
@@ -312,14 +413,7 @@ function buildInjection(
   let injectedBytes = 0
   for (const match of active) {
     const skill = match.skill
-    const text = [
-      `Active Skill: ${skill.name} (${skill.id})`,
-      `Activation: ${match.reason}`,
-      skill.description ? `Description: ${skill.description}` : '',
-      skill.allowedTools.length ? `Allowed tools: ${skill.allowedTools.join(', ')}` : '',
-      skill.assets.length ? `Assets:\n${skill.assets.map((asset) => `- ${asset}`).join('\n')}` : '',
-      skill.entry
-    ].filter(Boolean).join('\n\n')
+    const text = formatSkillInstruction(skill, match.reason)
     const bytes = Buffer.byteLength(text, 'utf8')
     if (injectedBytes + bytes > budgetBytes) continue
     activeSkillIds.push(skill.id)
@@ -427,6 +521,17 @@ function stripQuotes(value: string): string {
     return trimmed.slice(1, -1)
   }
   return trimmed
+}
+
+function truncateToBytes(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return '…(truncated)'
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value
+  const marker = '\n…(truncated)'
+  const room = Math.max(0, maxBytes - Buffer.byteLength(marker, 'utf8'))
+  // Slice by chars then shrink until the UTF-8 byte length fits the budget.
+  let end = Math.min(value.length, room)
+  while (end > 0 && Buffer.byteLength(value.slice(0, end), 'utf8') > room) end -= 1
+  return value.slice(0, end) + marker
 }
 
 function slug(value: string): string {

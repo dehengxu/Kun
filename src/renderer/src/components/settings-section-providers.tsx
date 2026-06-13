@@ -69,7 +69,8 @@ import { ProviderModelsManager } from './settings-section-provider-models'
 const MODEL_ENDPOINT_FORMAT_LABEL_KEYS: Record<ModelEndpointFormat, string> = {
   chat_completions: 'modelEndpointChatCompletions',
   responses: 'modelEndpointResponses',
-  messages: 'modelEndpointMessages'
+  messages: 'modelEndpointMessages',
+  custom_endpoint: 'modelEndpointCustomEndpoint'
 }
 
 const IMAGE_GENERATION_PROTOCOL_LABEL_KEYS: Record<ImageGenerationProtocol, string> = {
@@ -277,7 +278,7 @@ function isAcceptableHttpUrl(value: string): boolean {
 }
 
 function providerConnectionFingerprint(provider: ModelProviderProfileV1): string {
-  return [provider.baseUrl, provider.apiKey, provider.endpointFormat].join(' ')
+  return [provider.baseUrl, provider.apiKey, provider.endpointFormat].join('\0')
 }
 
 type ProbeState = {
@@ -287,6 +288,11 @@ type ProbeState = {
   latencyMs?: number
   total?: number
   message?: string
+}
+
+function providerPresetRequiresApiKey(provider: ModelProviderProfileV1): boolean {
+  if (provider.id === 'litellm') return false
+  return Boolean(getModelProviderPreset(provider.id) || tokenPlanPresetForProfileId(provider.id))
 }
 
 const fieldLabelClass = 'grid gap-1.5 text-[12px] font-semibold text-ds-muted'
@@ -764,6 +770,18 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const runProbe = async (target: ModelProviderProfileV1, mode: 'test' | 'fetch'): Promise<void> => {
     if (typeof window.kunGui?.probeModelProvider !== 'function') return
     const fingerprint = providerConnectionFingerprint(target)
+    if (providerPresetRequiresApiKey(target) && !target.apiKey.trim()) {
+      setProbeStates((prev) => ({
+        ...prev,
+        [target.id]: {
+          fingerprint,
+          mode,
+          status: 'error',
+          message: t('modelProviderPresetMissingKeyForProbe')
+        }
+      }))
+      return
+    }
     setProbeStates((prev) => ({ ...prev, [target.id]: { fingerprint, mode, status: 'busy' } }))
     let result: ModelProviderProbeResult
     try {
@@ -1090,7 +1108,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
                       visible={showApiKey}
                       onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
-                      placeholder={t('kunApiKeyPlaceholder')}
+                      placeholder={t('modelProviderApiKeyPlaceholder')}
                       autoComplete="off"
                       showLabel={t('showSecret')}
                       hideLabel={t('hideSecret')}
@@ -1165,6 +1183,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       ))}
                     </select>
                   </label>
+                  {activeProvider.endpointFormat === 'custom_endpoint' ? (
+                    <p className="text-[12px] leading-5 text-ds-muted">
+                      {t('modelEndpointCustomEndpointDesc')}
+                    </p>
+                  ) : null}
                 </DetailSection>
                 <DetailSection
                   title={`${t('modelProviderModels')} · ${providerModelCount(activeProvider)}`}

@@ -216,6 +216,49 @@ describe('Web tool provider', () => {
     }
   })
 
+  it('extracts HTML text without turning escaped tags into markup', async () => {
+    vi.stubGlobal('fetch', async () => new Response([
+      '<!doctype html>',
+      '<title>Docs &amp; Safety</title>',
+      '<script>alert("secret")</script>',
+      '<style>body{display:none}</style>',
+      '<h1>Hello&nbsp;World</h1>',
+      '<p>A &lt;script&gt; stays text.</p>',
+      '<div>Next &#60;b&#62; line &amp; more.</div>'
+    ].join(''), {
+      headers: {
+        'content-type': 'text/html'
+      }
+    }))
+    const config = KunCapabilitiesConfig.parse({
+      web: {
+        enabled: true,
+        fetchEnabled: true,
+        allowDomains: ['docs.example.test']
+      }
+    })
+    const host = new LocalToolHost({
+      registry: new CapabilityRegistry(buildWebToolProviders(config.web).providers)
+    })
+
+    const result = await host.execute({
+      callId: 'call_1',
+      toolName: 'web_fetch',
+      arguments: { url: 'https://docs.example.test/html' }
+    }, buildContext())
+
+    expect(result.item).toMatchObject({ kind: 'tool_result', isError: false })
+    if (result.item.kind === 'tool_result') {
+      const output = result.item.output as { title?: string; text: string }
+      expect(output.title).toBe('Docs & Safety')
+      expect(output.text).toContain('Hello World')
+      expect(output.text).not.toContain('alert')
+      expect(output.text).not.toContain('<script>')
+      expect(output.text).toContain('&lt;script&gt; stays text.')
+      expect(output.text).toContain('Next &#60;b&#62; line & more.')
+    }
+  })
+
   it('rejects disallowed fetch URLs before contacting the provider', async () => {
     let contacted = false
     const config = KunCapabilitiesConfig.parse({

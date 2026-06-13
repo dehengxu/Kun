@@ -513,11 +513,38 @@ function catalogFingerprint(values: readonly string[]): string {
 }
 
 function slug(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'tool'
+  let out = ''
+  for (const char of value.trim().toLowerCase()) {
+    if (isSlugChar(char)) {
+      out += char
+    } else if (out && out[out.length - 1] !== '_') {
+      out += '_'
+    }
+  }
+  return trimBoundaryUnderscores(out) || 'tool'
 }
 
 function normalizePathForTrust(value: string): string {
-  return value.replace(/\\/g, '/').replace(/\/+$/g, '')
+  return trimTrailingSlashes(value.replaceAll('\\', '/'))
+}
+
+function isSlugChar(char: string): boolean {
+  const code = char.charCodeAt(0)
+  return char === '_' || (code >= 48 && code <= 57) || (code >= 97 && code <= 122)
+}
+
+function trimBoundaryUnderscores(value: string): string {
+  let start = 0
+  let end = value.length
+  while (start < end && value[start] === '_') start += 1
+  while (end > start && value[end - 1] === '_') end -= 1
+  return value.slice(start, end)
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1
+  return end === value.length ? value : value.slice(0, end)
 }
 
 function errorMessage(error: unknown): string {

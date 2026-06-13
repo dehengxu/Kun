@@ -59,7 +59,8 @@ function buildSettings(): AppSettingsV1 {
       ]
     },
     guiUpdate: { channel: 'stable' },
-    codePromptPrefix: ''
+    codePromptPrefix: '',
+    disabledSkillIds: []
   }
 }
 
@@ -977,6 +978,88 @@ describe('ClawRuntime', () => {
     )
   })
 
+  it('resolves the default IM auto model to the current Kun model before starting a turn', async () => {
+    const settings = buildSettings()
+    settings.claw.im.enabled = true
+    settings.claw.im.responseTimeoutMs = 2_000
+    settings.agents.kun.providerId = 'xiaomi'
+    settings.agents.kun.model = 'mimo-v2-flash'
+    settings.provider.providers = [
+      ...settings.provider.providers,
+      buildModelProvider({
+        id: 'xiaomi',
+        name: 'Xiaomi MiMo',
+        apiKey: 'sk-xiaomi',
+        baseUrl: 'https://api.mimo.example/v1',
+        endpointFormat: 'chat_completions',
+        models: ['mimo-v2-flash']
+      })
+    ]
+    const runtimeRequest = vi.fn(async (requestSettings: AppSettingsV1, path, init) => {
+      expect(requestSettings.agents.kun.providerId).toBe('xiaomi')
+      expect(requestSettings.agents.kun.model).toBe('mimo-v2-flash')
+      if (path === '/v1/threads/thr_xiaomi/turns' && init?.method === 'POST') {
+        const body = JSON.parse(init?.body ?? '{}') as { model?: string }
+        expect(body.model).toBe('mimo-v2-flash')
+        return { ok: true, status: 202, body: JSON.stringify({ threadId: 'thr_xiaomi', turnId: 'turn_xiaomi' }) }
+      }
+      if (path === '/v1/threads/thr_xiaomi' && init?.method === 'GET') {
+        return {
+          ok: true,
+          status: 200,
+          body: JSON.stringify({
+            id: 'thr_xiaomi',
+            status: 'idle',
+            turns: [
+              {
+                id: 'turn_xiaomi',
+                status: 'completed',
+                items: [{ kind: 'assistant_text', text: 'hello from mimo' }]
+              }
+            ]
+          })
+        }
+      }
+      throw new Error(`unexpected path ${path}`)
+    })
+    const runtime = createClawRuntime({
+      store: { load: vi.fn(async () => settings), patch: vi.fn(async () => settings) } as never,
+      runtimeRequest: runtimeRequest as never,
+      logError: () => undefined
+    })
+
+    const result = await (runtime as unknown as {
+      runPrompt: (
+        settingsArg: AppSettingsV1,
+        options: {
+          prompt: string
+          title: string
+          workspaceRoot: string
+          model: string
+          mode: 'agent' | 'plan'
+          waitForResult: boolean
+          responseTimeoutMs: number
+          source: 'task' | 'im'
+          providerId?: string
+          threadId?: string
+        }
+      ) => Promise<{ ok: boolean; text?: string }>
+    }).runPrompt(settings, {
+      prompt: 'hello',
+      title: 'demo',
+      workspaceRoot: '/tmp/workspace',
+      model: 'auto',
+      mode: 'agent',
+      waitForResult: true,
+      responseTimeoutMs: 2_000,
+      source: 'im',
+      providerId: '',
+      threadId: 'thr_xiaomi'
+    })
+
+    expect(result).toMatchObject({ ok: true, text: 'hello from mimo' })
+  })
+
   it('handles webhook /help as an IM command before starting a Kun turn', async () => {
     const settings = buildSettings()
     settings.claw.im.enabled = true
@@ -1797,7 +1880,7 @@ describe('ClawRuntime', () => {
     expect(status).toBe(500)
     expect(JSON.parse(responseBody)).toMatchObject({
       ok: false,
-      message: 'Timed out waiting for agent response.'
+      message: 'Internal server error.'
     })
   })
 
@@ -1888,7 +1971,7 @@ describe('ClawRuntime', () => {
     expect(status).toBe(500)
     expect(JSON.parse(responseBody)).toMatchObject({
       ok: false,
-      message: 'Agent turn failed.'
+      message: 'Internal server error.'
     })
   })
 

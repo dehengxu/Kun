@@ -81,7 +81,14 @@ export type DailyUsageResponse = z.infer<typeof DailyUsageResponseSchema>
 export const ThreadUsageBucketSchema = DailyUsageCountersSchema.omit({
   thread_count: true
 }).extend({
-  thread_id: z.string().min(1)
+  thread_id: z.string().min(1),
+  /**
+   * Cache hit rate of the most recent turn (by completedAt), distinct from the
+   * thread-cumulative `cache_hit_rate`. The cumulative rate is dragged down by
+   * the unavoidable cold first turn; this reflects steady-state caching for the
+   * usage chip. Null when the latest turn had no cache telemetry.
+   */
+  last_turn_cache_hit_rate: z.number().min(0).max(1).nullable().default(null)
 })
 export type ThreadUsageBucket = z.infer<typeof ThreadUsageBucketSchema>
 

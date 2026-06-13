@@ -124,4 +124,35 @@ describe('chat-store navigation workspace selection', () => {
     expect(harness.createThread).toHaveBeenCalledWith({ workspaceRoot: '/Users/zxy/new-project' })
     expect(harness.selectThread).not.toHaveBeenCalled()
   })
+
+  it('selectWorkspaceRoot persists the directory and lands on a clean new conversation', async () => {
+    const setSettings = vi.fn(async () => ({ workspaceRoot: '/Users/zxy/new-project' }))
+    vi.stubGlobal('window', { kunGui: { setSettings } })
+    const harness = buildHarness()
+
+    await expect(harness.actions.selectWorkspaceRoot('/Users/zxy/new-project'))
+      .resolves.toBe('/Users/zxy/new-project')
+
+    expect(setSettings).toHaveBeenCalledWith({ workspaceRoot: '/Users/zxy/new-project' })
+    expect(harness.state.workspaceRoot).toBe('/Users/zxy/new-project')
+    expect(harness.state.workspaceLabel).toBe('new-project')
+    // Clean empty-hero state so typing starts a fresh thread in the new directory.
+    expect(harness.state.activeThreadId).toBeNull()
+    expect(harness.state.blocks).toEqual([])
+    expect(harness.state.codeWorkspaceRoots).toContain('/Users/zxy/new-project')
+    expect(harness.refreshThreads).toHaveBeenCalled()
+    // The default thread is preserved in the listing, just not active.
+    expect(harness.selectThread).not.toHaveBeenCalled()
+    expect(harness.createThread).not.toHaveBeenCalled()
+  })
+
+  it('selectWorkspaceRoot ignores an empty path', async () => {
+    const setSettings = vi.fn(async () => ({ workspaceRoot: '' }))
+    vi.stubGlobal('window', { kunGui: { setSettings } })
+    const harness = buildHarness()
+
+    await expect(harness.actions.selectWorkspaceRoot('   ')).resolves.toBeNull()
+    expect(setSettings).not.toHaveBeenCalled()
+    expect(harness.state.activeThreadId).toBe('thr_default')
+  })
 })

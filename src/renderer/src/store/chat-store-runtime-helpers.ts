@@ -5,6 +5,7 @@ import type {
   UserMessageEventPayload
 } from '../agent/types'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
+import { shouldAutoTitleThread } from '../lib/thread-title'
 import type { ChatState } from './chat-store-types'
 
 type ThreadDetailProviderLike = {
@@ -227,6 +228,7 @@ export async function findReusableEmptyThreadId(
   if (
     activeThread &&
     isReusableThread(activeThread) &&
+    shouldAutoTitleThread(activeThread) &&
     normalizeWorkspaceRoot(activeThread.workspace) === normalizedWorkspace &&
     !threadHasUserMessage(state.blocks)
   ) {
@@ -238,6 +240,7 @@ export async function findReusableEmptyThreadId(
       (thread) =>
         thread.id !== activeThread?.id &&
         isReusableThread(thread) &&
+        shouldAutoTitleThread(thread) &&
         normalizeWorkspaceRoot(thread.workspace) === normalizedWorkspace
     )
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))

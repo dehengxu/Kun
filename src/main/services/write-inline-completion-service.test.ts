@@ -57,6 +57,7 @@ function createSettings(patch: Partial<AppSettingsV1['write']['inlineCompletion'
       channel: 'stable'
     },
     codePromptPrefix: '',
+    disabledSkillIds: [],
     claw: defaultClawSettings()
   }
 }
@@ -161,6 +162,37 @@ describe('requestWriteInlineCompletion', () => {
     })
   })
 
+  it('does not route lookalike DeepSeek hosts to FIM completions', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: '<<<SHORT\n from chat\n>>>'
+          }
+        }]
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await requestWriteInlineCompletion(
+      createSettings({ baseUrl: 'https://deepseek.com.evil.test/beta' }),
+      createRequest()
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      completion: ' from chat'
+    })
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('https://deepseek.com.evil.test/v1/chat/completions')
+    const body = JSON.parse(String(init.body)) as { messages?: unknown[]; prompt?: string }
+    expect(body.messages).toBeDefined()
+    expect(body.prompt).toBeUndefined()
+  })
+
   it('does not request the API when inline completion is disabled', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -257,6 +289,65 @@ describe('requestWriteInlineCompletion', () => {
     expect(JSON.parse(String(init.body))).toMatchObject({
       model: 'deepseek-chat'
     })
+  })
+
+  it('uses /completions as a Chat Completions-shaped custom endpoint', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: ' custom text' } }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const settings = createSettings()
+    settings.provider.apiKey = 'sk-custom'
+    settings.provider.baseUrl = 'https://gateway.example/custom-path/completions'
+    settings.provider.providers[0] = {
+      ...settings.provider.providers[0],
+      apiKey: 'sk-custom',
+      baseUrl: 'https://gateway.example/custom-path/completions',
+      endpointFormat: 'custom_endpoint'
+    }
+
+    const result = await requestWriteInlineCompletion(settings, {
+      ...createRequest(),
+      model: 'custom-model'
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      model: 'custom-model'
+    })
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('https://gateway.example/custom-path/completions')
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      model: 'custom-model',
+      messages: expect.any(Array)
+    })
+  })
+
+  it('rejects custom full endpoint URLs that do not end with a known endpoint path', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const settings = createSettings()
+    settings.provider.apiKey = 'sk-custom'
+    settings.provider.baseUrl = 'https://gateway.example/custom-path'
+    settings.provider.providers[0] = {
+      ...settings.provider.providers[0],
+      apiKey: 'sk-custom',
+      baseUrl: 'https://gateway.example/custom-path',
+      endpointFormat: 'custom_endpoint'
+    }
+
+    const result = await requestWriteInlineCompletion(settings, createRequest())
+
+    expect(result).toMatchObject({
+      ok: false,
+      message: 'Custom full endpoint URL must end with /chat/completions, /completions, /responses, or /messages.'
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('uses an explicit flash override when write disables model inheritance', async () => {

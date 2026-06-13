@@ -214,6 +214,7 @@ const defaultSettings = (): AppSettingsV1 => ({
     channel: DEFAULT_GUI_UPDATE_CHANNEL
   },
   codePromptPrefix: '',
+  disabledSkillIds: [],
   write: defaultWriteSettings(),
   claw: defaultClawSettings(),
   schedule: defaultScheduleSettings()
@@ -240,8 +241,17 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
     claw: mergeClawSettings(defaults.claw, migrated.claw),
     schedule: mergeScheduleSettings(defaults.schedule, migrated.schedule),
     guiUpdate: { ...defaults.guiUpdate, ...migrated.guiUpdate },
-    codePromptPrefix: typeof migrated.codePromptPrefix === 'string' ? migrated.codePromptPrefix : ''
+    codePromptPrefix: typeof migrated.codePromptPrefix === 'string' ? migrated.codePromptPrefix : '',
+    disabledSkillIds: normalizeDisabledSkillIds(migrated.disabledSkillIds)
   }
+}
+
+function normalizeDisabledSkillIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value
+    .filter((id): id is string => typeof id === 'string')
+    .map((id) => id.trim().replace(/^\/?skill:/i, '').trim())
+    .filter(Boolean))]
 }
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {

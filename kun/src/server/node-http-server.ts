@@ -47,10 +47,10 @@ async function handleNodeRequest(
     const request = toFetchRequest(incoming)
     const response = await dispatchRequest(router, request)
     await writeFetchResponse(outgoing, response)
-  } catch (error) {
+  } catch {
     const body = JSON.stringify({
       code: 'internal_error',
-      message: error instanceof Error ? error.message : String(error)
+      message: 'Internal server error.'
     })
     outgoing.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
     outgoing.end(body)

@@ -5,10 +5,15 @@ import type {
   ThreadTodoStatus
 } from '../contracts/threads.js'
 
-const TASK_LINE_RE = /^(\s*[-*+]\s+\[)([ xX])(\]\s+)(.+?)\s*$/
-
 export type ExtractedPlanTodo = ThreadTodoItem & {
   source: ThreadTodoSource
+}
+
+type ParsedTaskLine = {
+  prefix: string
+  marker: string
+  suffix: string
+  content: string
 }
 
 export type MergePlanTodosOptions = {
@@ -54,9 +59,9 @@ export function extractPlanTodos(input: {
   const lines = input.markdown.split(/\r?\n/)
   let ordinal = 0
   for (const line of lines) {
-    const match = TASK_LINE_RE.exec(line)
-    if (!match) continue
-    const content = normalizeTodoContent(match[4] ?? '')
+    const task = parseTaskLine(line)
+    if (!task) continue
+    const content = normalizeTodoContent(task.content)
     if (!content) continue
     const contentHash = todoContentHash(content)
     const source: ThreadTodoSource = {
@@ -69,7 +74,7 @@ export function extractPlanTodos(input: {
     items.push({
       id: makePlanTodoId(source),
       content,
-      status: taskMarkerToStatus(match[2]),
+      status: taskMarkerToStatus(task.marker),
       source,
       createdAt: input.now,
       updatedAt: input.now
@@ -132,15 +137,15 @@ export function patchPlanTodoStatus(
   const lines = markdown.split(/\r?\n/)
   const lineEnding = markdown.includes('\r\n') ? '\r\n' : '\n'
   const tasks = lines
-    .map((line, lineIndex) => ({ line, lineIndex, match: TASK_LINE_RE.exec(line) }))
-    .filter((entry): entry is { line: string; lineIndex: number; match: RegExpExecArray } =>
-      Boolean(entry.match)
+    .map((line, lineIndex) => ({ line, lineIndex, task: parseTaskLine(line) }))
+    .filter((entry): entry is { line: string; lineIndex: number; task: ParsedTaskLine } =>
+      Boolean(entry.task)
     )
     .map((entry, ordinal) => ({
       ...entry,
       ordinal,
-      content: normalizeTodoContent(entry.match[4] ?? ''),
-      contentHash: todoContentHash(entry.match[4] ?? '')
+      content: normalizeTodoContent(entry.task.content),
+      contentHash: todoContentHash(entry.task.content)
     }))
 
   const target =
@@ -150,9 +155,9 @@ export function patchPlanTodoStatus(
   if (!target) return { markdown, changed: false }
 
   const marker = item.status === 'completed' ? 'x' : ' '
-  const currentMarker = target.match[2] ?? ' '
+  const currentMarker = target.task.marker
   if (currentMarker.toLowerCase() === marker) return { markdown, changed: false }
-  lines[target.lineIndex] = target.line.replace(TASK_LINE_RE, `$1${marker}$3$4`)
+  lines[target.lineIndex] = `${target.task.prefix}${marker}${target.task.suffix}${target.task.content}`
   return { markdown: lines.join(lineEnding), changed: true }
 }
 
@@ -166,6 +171,45 @@ export function normalizePlanRelativePath(relativePath: string): string {
 
 function taskMarkerToStatus(marker: string | undefined): ThreadTodoStatus {
   return marker?.toLowerCase() === 'x' ? 'completed' : 'pending'
+}
+
+function parseTaskLine(line: string): ParsedTaskLine | null {
+  let index = 0
+  while (index < line.length && isTaskWhitespace(line[index])) index += 1
+  const bullet = line[index]
+  if (bullet !== '-' && bullet !== '*' && bullet !== '+') return null
+  index += 1
+  if (!isTaskWhitespace(line[index])) return null
+  while (index < line.length && isTaskWhitespace(line[index])) index += 1
+  if (line[index] !== '[') return null
+
+  const markerIndex = index + 1
+  const marker = line[markerIndex]
+  if (marker !== ' ' && marker !== 'x' && marker !== 'X') return null
+  if (line[markerIndex + 1] !== ']') return null
+
+  let contentStart = markerIndex + 2
+  if (!isTaskWhitespace(line[contentStart])) return null
+  while (contentStart < line.length && isTaskWhitespace(line[contentStart])) contentStart += 1
+
+  const content = trimEndWhitespace(line.slice(contentStart))
+  if (!content) return null
+  return {
+    prefix: line.slice(0, markerIndex),
+    marker,
+    suffix: line.slice(markerIndex + 1, contentStart),
+    content
+  }
+}
+
+function isTaskWhitespace(char: string | undefined): boolean {
+  return char === ' ' || char === '\t'
+}
+
+function trimEndWhitespace(value: string): string {
+  let end = value.length
+  while (end > 0 && isTaskWhitespace(value[end - 1])) end -= 1
+  return end === value.length ? value : value.slice(0, end)
 }
 
 function findExistingPlanTodo(

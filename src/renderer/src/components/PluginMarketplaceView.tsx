@@ -12,6 +12,7 @@ import {
   Search,
   Settings
 } from 'lucide-react'
+import { rendererRuntimeClient } from '../agent/runtime-client'
 import {
   joinFsPath,
   loadPreferredSkillRootId,
@@ -84,6 +85,18 @@ function saveInstalledPlugins(ids: string[]): void {
 
 function storageKey(kind: PluginKind, id: string): string {
   return `${kind}:${id}`
+}
+
+function normalizeSkillId(id: string): string {
+  return id.trim().replace(/^\/?skill:/i, '').trim()
+}
+
+function normalizeDisabledSkillIds(ids: unknown): string[] {
+  if (!Array.isArray(ids)) return []
+  return [...new Set(ids
+    .filter((id): id is string => typeof id === 'string')
+    .map(normalizeSkillId)
+    .filter(Boolean))]
 }
 
 function normalizePluginId(raw: string): string {
@@ -473,6 +486,8 @@ export function PluginMarketplaceView(): ReactElement {
   const [discoveredSkills, setDiscoveredSkills] = useState<SkillListItem[]>([])
   const [skillListLoading, setSkillListLoading] = useState(false)
   const [skillListError, setSkillListError] = useState('')
+  const [disabledSkillIds, setDisabledSkillIds] = useState<string[]>([])
+  const [skillToggleBusyId, setSkillToggleBusyId] = useState<string | null>(null)
 
   const skillRootOptions = useMemo<SkillRootOption[]>(() => {
     const hasWorkspace = !!workspaceRoot
@@ -605,6 +620,21 @@ export function PluginMarketplaceView(): ReactElement {
     if (activeKind !== 'skill') return
     void refreshSkillList()
   }, [activeKind, refreshSkillList])
+
+  useEffect(() => {
+    if (activeKind !== 'skill') return
+    let cancelled = false
+    void rendererRuntimeClient.getSettings({ forceRefresh: true })
+      .then((settings) => {
+        if (!cancelled) setDisabledSkillIds(normalizeDisabledSkillIds(settings.disabledSkillIds))
+      })
+      .catch(() => {
+        if (!cancelled) setDisabledSkillIds([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeKind])
 
   useEffect(() => {
     setNotice(null)
@@ -799,6 +829,30 @@ export function PluginMarketplaceView(): ReactElement {
     }
   }
 
+  const toggleSkillEnabled = async (id: string, enabled: boolean): Promise<void> => {
+    const normalizedId = normalizeSkillId(id)
+    if (!normalizedId) return
+    setSkillToggleBusyId(normalizedId)
+    setNotice(null)
+    try {
+      const next = enabled
+        ? disabledSkillIds.filter((item) => item !== normalizedId)
+        : [...new Set([...disabledSkillIds, normalizedId])]
+      const settings = await rendererRuntimeClient.setSettings({ disabledSkillIds: next })
+      const normalized = normalizeDisabledSkillIds(settings.disabledSkillIds)
+      setDisabledSkillIds(normalized)
+      useChatStore.setState({ disabledSkillIds: normalized })
+      setNotice({
+        tone: 'success',
+        message: enabled ? t('pluginSkillEnabled') : t('pluginSkillDisabled')
+      })
+    } catch (error) {
+      setNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
+    } finally {
+      setSkillToggleBusyId(null)
+    }
+  }
+
   const openManageTarget = async (): Promise<void> => {
     try {
       if (activeKind === 'mcp') {
@@ -915,7 +969,10 @@ export function PluginMarketplaceView(): ReactElement {
               </span>
             ) : (
               <span className="text-[12px] text-ds-faint">
-                {t('pluginSkillDiscoveredCount', { count: discoveredSkills.length })}
+                {t('pluginSkillDiscoveredCountWithEnabled', {
+                  count: discoveredSkills.length,
+                  enabled: discoveredSkills.filter((skill) => !disabledSkillIds.includes(normalizeSkillId(skill.id))).length
+                })}
               </span>
             )}
           </div>
@@ -961,6 +1018,9 @@ export function PluginMarketplaceView(): ReactElement {
             busyId={busyId}
             isInstalled={isInstalled}
             onAdd={addItem}
+            disabledSkillIds={disabledSkillIds}
+            skillToggleBusyId={skillToggleBusyId}
+            onToggleSkillEnabled={toggleSkillEnabled}
             t={t}
           />
         ) : null}
@@ -972,6 +1032,9 @@ export function PluginMarketplaceView(): ReactElement {
           busyId={busyId}
           isInstalled={isInstalled}
           onAdd={addItem}
+          disabledSkillIds={disabledSkillIds}
+          skillToggleBusyId={skillToggleBusyId}
+          onToggleSkillEnabled={toggleSkillEnabled}
           t={t}
         />
 
@@ -982,6 +1045,9 @@ export function PluginMarketplaceView(): ReactElement {
           busyId={busyId}
           isInstalled={isInstalled}
           onAdd={addItem}
+          disabledSkillIds={disabledSkillIds}
+          skillToggleBusyId={skillToggleBusyId}
+          onToggleSkillEnabled={toggleSkillEnabled}
           t={t}
         />
 
@@ -1131,6 +1197,9 @@ function PluginSection({
   busyId,
   isInstalled,
   onAdd,
+  disabledSkillIds = [],
+  skillToggleBusyId = null,
+  onToggleSkillEnabled,
   t
 }: {
   title: string
@@ -1139,6 +1208,9 @@ function PluginSection({
   busyId: string | null
   isInstalled: (item: Pick<MarketplaceItem, 'kind' | 'id'>) => boolean
   onAdd: (item: MarketplaceItem) => Promise<void>
+  disabledSkillIds?: string[]
+  skillToggleBusyId?: string | null
+  onToggleSkillEnabled?: (id: string, enabled: boolean) => Promise<void>
   t: (key: string, values?: Record<string, unknown>) => string
 }): ReactElement {
   return (
@@ -1154,6 +1226,10 @@ function PluginSection({
             const itemKey = storageKey(item.kind, item.id)
             const installed = isInstalled(item)
             const busy = busyId === itemKey
+            const normalizedSkillId = normalizeSkillId(item.id)
+            const skillDisabled = item.kind === 'skill' && disabledSkillIds.includes(normalizedSkillId)
+            const canToggleSkill = item.kind === 'skill' && item.group === 'personal' && onToggleSkillEnabled
+            const toggleBusy = skillToggleBusyId === normalizedSkillId
             return (
               <div
                 key={itemKey}
@@ -1171,30 +1247,57 @@ function PluginSection({
                         {item.sourceLabel}
                       </span>
                     ) : null}
+                    {skillDisabled ? (
+                      <span className="shrink-0 rounded-md bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-700 dark:text-amber-200">
+                        {t('pluginSkillStatusDisabled')}
+                      </span>
+                    ) : null}
                   </div>
                   <p className="mt-1 line-clamp-2 text-[14px] leading-5 text-ds-muted">
                     {itemDescription(item, t)}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  disabled={installed || busy}
-                  onClick={() => void onAdd(item)}
-                  title={installed ? t('pluginAdded') : t('pluginAdd')}
-                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition ${
-                    installed
-                      ? 'text-ds-faint'
-                      : 'bg-ds-subtle text-ds-ink hover:bg-ds-hover disabled:opacity-60'
-                  }`}
-                >
-                  {busy ? (
-                    <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
-                  ) : installed ? (
-                    <Check className="h-4 w-4" strokeWidth={2} />
-                  ) : (
-                    <Plus className="h-4 w-4" strokeWidth={2} />
-                  )}
-                </button>
+                {canToggleSkill ? (
+                  <button
+                    type="button"
+                    disabled={toggleBusy}
+                    onClick={() => void onToggleSkillEnabled(item.id, skillDisabled)}
+                    title={skillDisabled ? t('pluginSkillEnable') : t('pluginSkillDisable')}
+                    className={`inline-flex h-9 shrink-0 items-center justify-center rounded-xl px-3 text-[12px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                      skillDisabled
+                        ? 'bg-ds-subtle text-ds-ink hover:bg-ds-hover'
+                        : 'bg-ds-skill-soft text-ds-skill hover:opacity-85'
+                    }`}
+                  >
+                    {toggleBusy ? (
+                      <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
+                    ) : skillDisabled ? (
+                      t('pluginSkillEnable')
+                    ) : (
+                      t('pluginSkillDisable')
+                    )}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={installed || busy}
+                    onClick={() => void onAdd(item)}
+                    title={installed ? t('pluginAdded') : t('pluginAdd')}
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition ${
+                      installed
+                        ? 'text-ds-faint'
+                        : 'bg-ds-subtle text-ds-ink hover:bg-ds-hover disabled:opacity-60'
+                    }`}
+                  >
+                    {busy ? (
+                      <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
+                    ) : installed ? (
+                      <Check className="h-4 w-4" strokeWidth={2} />
+                    ) : (
+                      <Plus className="h-4 w-4" strokeWidth={2} />
+                    )}
+                  </button>
+                )}
               </div>
             )
           })}

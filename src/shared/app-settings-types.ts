@@ -4,9 +4,13 @@ import type { ApprovalPolicy, SandboxMode } from '../../kun/src/contracts/policy
 import type { ModelEndpointFormat } from '../../kun/src/contracts/model-endpoint-format.js'
 export {
   DEFAULT_MODEL_ENDPOINT_FORMAT,
+  inferModelEndpointFormatFromUrl,
+  isCustomModelEndpointFormat,
   MODEL_ENDPOINT_FORMATS,
   modelEndpointPath,
-  normalizeModelEndpointFormat
+  normalizeModelEndpointFormat,
+  resolveModelEndpointFormat,
+  usesChatCompletionsShape
 } from '../../kun/src/contracts/model-endpoint-format.js'
 export { DEFAULT_GUI_UPDATE_CHANNEL, normalizeGuiUpdateChannel, type GuiUpdateChannel } from './gui-update'
 export {
@@ -82,6 +86,7 @@ export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number]
 export const MODEL_REASONING_REQUEST_PROTOCOLS = [
   'none',
   'deepseek-chat-completions',
+  'glm-chat-completions',
   'mimo-chat-completions',
   'openai-responses',
   'anthropic-thinking'
@@ -705,6 +710,8 @@ export type AppSettingsV1 = {
   schedule: ScheduleSettingsV1
   guiUpdate: GuiUpdateConfigV1
   codePromptPrefix: string
+  /** User-disabled skill IDs. Disabled skills are hidden from command surfaces. */
+  disabledSkillIds: string[]
 }
 
 export type AppSettingsPatch = Partial<

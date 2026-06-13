@@ -29,8 +29,10 @@ export type InitialSetupSelection = {
   mode: InitialSetupAccessMode
 }
 
+const INITIAL_SETUP_PROVIDER_PRESET_IDS = new Set(['xiaomi', 'minimax'])
+
 export const INITIAL_SETUP_PROVIDER_PRESETS = MODEL_PROVIDER_PRESETS.filter(
-  (preset) => preset.id !== 'litellm'
+  (preset) => INITIAL_SETUP_PROVIDER_PRESET_IDS.has(preset.id)
 )
 
 export function initialSetupProfileId(selection: InitialSetupSelection): string {

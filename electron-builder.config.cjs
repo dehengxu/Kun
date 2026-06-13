@@ -156,7 +156,9 @@ module.exports = {
     sign: hasExplicitMacSigningIdentity
   },
   win: {
-    icon: './src/asset/img/kun.png',
+    // Windows does not mask app icons for us; use the rounded asset so
+    // desktop/start-menu/taskbar shortcuts do not show a hard square edge.
+    icon: './src/asset/img/kun_mac.png',
     target: [{ target: 'nsis', arch: ['x64'] }]
   },
   nsis: {

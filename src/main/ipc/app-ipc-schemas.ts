@@ -24,7 +24,8 @@ import {
   KUN_THREAD_TURNS_TEMPLATE,
   KUN_THREAD_TEMPLATE,
   KUN_USER_INPUT_TEMPLATE,
-  KUN_USAGE_TEMPLATE
+  KUN_USAGE_TEMPLATE,
+  KUN_DEBUG_LLM_ROUNDS_TEMPLATE
 } from '../../shared/kun-endpoints'
 import {
   IMAGE_GENERATION_PROTOCOLS,
@@ -148,7 +149,8 @@ const ENDPOINTS: readonly EndpointTemplate[] = [
   compileEndpoint(KUN_APPROVAL_TEMPLATE, ['POST']),
   compileEndpoint(KUN_USER_INPUT_TEMPLATE, ['POST']),
   compileEndpoint(KUN_SESSION_RESUME_TEMPLATE, ['POST']),
-  compileEndpoint(KUN_USAGE_TEMPLATE, ['GET'])
+  compileEndpoint(KUN_USAGE_TEMPLATE, ['GET']),
+  compileEndpoint(KUN_DEBUG_LLM_ROUNDS_TEMPLATE, ['GET'])
 ]
 
 function isAllowedRuntimeRequest(value: { path: string; method?: string }): boolean {
@@ -241,6 +243,8 @@ const modelProviderPatchSchema = z.object({
     baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
     endpointFormat: modelEndpointFormatSchema.optional(),
     models: z.array(z.string().trim().min(1).max(128)).max(200).optional(),
+    // 兼容旧版保存的视觉识别能力字段。当前能力已经迁移到 modelProfiles 的 inputModalities/messageParts。
+    imageRecognition: z.unknown().optional(),
     modelProfiles: z.record(
       z.string().trim().min(1).max(128),
       modelProfilePatchSchema.nullable()
@@ -385,6 +389,8 @@ const kunRuntimePatchSchema = z.object({
     timeoutMs: z.number().int().positive().max(3_600_000).optional(),
     pollIntervalMs: z.number().int().positive().max(120_000).optional()
   }).strict().optional(),
+  // 兼容旧版保存的独立视觉识别设置。当前能力已经迁移到 provider modelProfiles。
+  imageRecognition: z.unknown().optional(),
   modelProfiles: z.record(
     z.string().trim().min(1).max(128),
     modelProfilePatchSchema.nullable()
@@ -638,6 +644,7 @@ function stripLegacySettingsPatchKeys(payload: unknown): unknown {
 
   delete next.agentProvider
   delete next.deepseek
+  delete next.disabledSkillIds
   delete next.reasonix
   delete next.quickChat
 
@@ -672,7 +679,8 @@ const settingsPatchObjectSchema = z.object({
   guiUpdate: z.object({
     channel: z.enum(GUI_UPDATE_CHANNELS).optional()
   }).strict().optional(),
-  codePromptPrefix: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional()
+  codePromptPrefix: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional(),
+  disabledSkillIds: z.array(trimmedString(128)).max(512).optional()
 }).strict()
 
 export const settingsPatchSchema = z.preprocess(stripLegacySettingsPatchKeys, settingsPatchObjectSchema)
