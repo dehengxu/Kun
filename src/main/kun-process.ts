@@ -363,6 +363,7 @@ export async function syncGuiManagedKunConfig(
     | 'musicGeneration'
     | 'videoGeneration'
     | 'modelProfiles'
+    | 'memoryEnabled'
   >,
   options?: {
     scheduleMcp?: {
@@ -396,6 +397,7 @@ export async function syncGuiManagedKunConfig(
   const speechGen = objectValue(capabilities.speechGen)
   const musicGen = objectValue(capabilities.musicGen)
   const videoGen = objectValue(capabilities.videoGen)
+  const memory = objectValue(capabilities.memory)
   const storage = storageConfigForRuntime(runtime.storage)
   const mcpSearch = runtime.mcpSearch
   const skillCapability = await skillCapabilityConfigForRuntime(skills, options?.scheduleMcp?.settings)
@@ -424,6 +426,10 @@ export async function syncGuiManagedKunConfig(
       speechGen: speechGenConfigForRuntime(runtime.textToSpeech, speechGen),
       musicGen: musicGenConfigForRuntime(runtime.musicGeneration, musicGen),
       videoGen: videoGenConfigForRuntime(runtime.videoGeneration, videoGen),
+      memory: {
+        ...memory,
+        enabled: runtime.memoryEnabled
+      },
       mcp: {
         ...mcp,
         ...(options?.scheduleMcp || mcpSearch.enabled || hasImportedEnabledMcpServer

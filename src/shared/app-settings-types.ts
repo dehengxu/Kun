@@ -214,6 +214,8 @@ export type KunRuntimeSettingsV1 = {
   videoGeneration: KunVideoGenerationSettingsV1
   /** GUI-owned model capability profiles written into Kun `models.profiles`. */
   modelProfiles: Record<string, ModelProviderModelProfileV1>
+  /** Whether long-term memory is enabled in the Kun runtime. */
+  memoryEnabled: boolean
 }
 
 export type KunImageGenerationSettingsV1 = {

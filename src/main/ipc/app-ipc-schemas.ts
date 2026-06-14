@@ -394,7 +394,8 @@ const kunRuntimePatchSchema = z.object({
   modelProfiles: z.record(
     z.string().trim().min(1).max(128),
     modelProfilePatchSchema.nullable()
-  ).optional()
+  ).optional(),
+  memoryEnabled: z.boolean().optional()
 }).strict()
 
 const logPatchSchema = z.object({
