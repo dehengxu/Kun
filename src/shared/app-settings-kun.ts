@@ -15,6 +15,7 @@ import {
   MODEL_REASONING_REQUEST_PROTOCOLS,
   normalizeModelEndpointFormat,
   type AppSettingsV1,
+  type KunComputerUseSettingsV1,
   type KunContextCompactionSettingsV1,
   type KunHistoryHygieneSettingsV1,
   type KunImageGenerationSettingsV1,
@@ -138,7 +139,17 @@ export function defaultKunRuntimeSettings(
     musicGeneration: defaultKunMusicGenerationSettings(),
     videoGeneration: defaultKunVideoGenerationSettings(),
     modelProfiles: {},
-    memoryEnabled: false
+    memoryEnabled: false,
+    computerUse: defaultKunComputerUseSettings()
+  }
+}
+
+export function defaultKunComputerUseSettings(): KunComputerUseSettingsV1 {
+  return {
+    enabled: false,
+    mode: 'auto',
+    maxImageDimension: 1280,
+    maxActionsPerTurn: 40
   }
 }
 
@@ -358,6 +369,11 @@ export function mergeKunRuntimeSettings(
     ...currentVideoGeneration,
     ...(patch?.videoGeneration ?? {})
   })
+  const currentComputerUse = normalizeKunComputerUseSettings(current.computerUse)
+  const nextComputerUse = normalizeKunComputerUseSettings({
+    ...currentComputerUse,
+    ...(patch?.computerUse ?? {})
+  })
   const currentRuntimeTuning = normalizeKunRuntimeTuningSettings(current.runtimeTuning)
   const nextRuntimeTuning = normalizeKunRuntimeTuningSettings({
     ...currentRuntimeTuning,
@@ -393,7 +409,8 @@ export function mergeKunRuntimeSettings(
     musicGeneration: nextMusicGeneration,
     videoGeneration: nextVideoGeneration,
     modelProfiles: nextModelProfiles,
-    memoryEnabled: patch?.memoryEnabled ?? current.memoryEnabled ?? false
+    memoryEnabled: patch?.memoryEnabled ?? current.memoryEnabled ?? false,
+    computerUse: nextComputerUse
   }
 }
 
@@ -503,6 +520,21 @@ function normalizeKunVideoGenerationSettings(
 
 function normalizeKunVideoGenerationProtocol(value: unknown): VideoGenerationProtocol {
   return value === 'minimax-video' ? 'minimax-video' : DEFAULT_VIDEO_GENERATION_PROTOCOL
+}
+
+function normalizeKunComputerUseSettings(
+  input: Partial<KunComputerUseSettingsV1> | undefined
+): KunComputerUseSettingsV1 {
+  const defaults = defaultKunComputerUseSettings()
+  const mode = input?.mode === 'always' || input?.mode === 'off' || input?.mode === 'auto'
+    ? input.mode
+    : defaults.mode
+  return {
+    enabled: input?.enabled === true,
+    mode,
+    maxImageDimension: boundedPositiveInt(input?.maxImageDimension, defaults.maxImageDimension, 4096),
+    maxActionsPerTurn: boundedPositiveInt(input?.maxActionsPerTurn, defaults.maxActionsPerTurn, 1000)
+  }
 }
 
 function normalizeAudioFormat(value: unknown, fallback: string): string {

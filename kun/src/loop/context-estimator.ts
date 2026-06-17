@@ -1,4 +1,10 @@
 import type { TurnItem } from '../contracts/items.js'
+import {
+  IMAGE_TOOL_RESULT_TOKEN_ESTIMATE,
+  extractToolResultImages,
+  isModelVisibleImageOutput,
+  toolResultTextWithoutImages
+} from './tool-result-image.js'
 
 /**
  * Token estimator for compaction decisions.
@@ -21,7 +27,13 @@ export class ContextEstimator {
 
   estimateItem(item: TurnItem): number {
     const text = this.collectText(item)
-    return Math.max(1, this.estimateText(text))
+    let tokens = this.estimateText(text)
+    if (item.kind === 'tool_result') {
+      // Forwarded screenshots cost a bounded vision-token amount, not the
+      // length of their base64 (which `collectText` already drops).
+      tokens += extractToolResultImages(item.output).length * IMAGE_TOOL_RESULT_TOKEN_ESTIMATE
+    }
+    return Math.max(1, tokens)
   }
 
   estimateItems(items: TurnItem[]): number {
@@ -64,6 +76,7 @@ export class ContextEstimator {
       case 'tool_call':
         return `${item.toolName} ${JSON.stringify(item.arguments)}`
       case 'tool_result':
+        if (isModelVisibleImageOutput(item.output)) return toolResultTextWithoutImages(item.output)
         return typeof item.output === 'string' ? item.output : JSON.stringify(item.output)
       case 'approval':
         return `${item.toolName} ${item.summary}`

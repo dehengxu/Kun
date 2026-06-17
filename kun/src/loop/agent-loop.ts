@@ -63,6 +63,7 @@ import {
   type TokenEconomyConfig
 } from './token-economy.js'
 import { applyRequestHistoryHygiene } from './request-history-hygiene.js'
+import { capToolResultImages } from './tool-result-image.js'
 import { estimateModelRequestInputTokens, estimateRequestOverheadTokens } from './model-request-estimator.js'
 import {
   recentAutoRouterContext,
@@ -80,6 +81,10 @@ import { shellRuntimeInstruction } from '../adapters/tool/builtin-tool-utils.js'
 const PARALLEL_READ_ONLY_TOOL_NAMES = new Set(['read', 'grep', 'find', 'ls'])
 const DELEGATE_TASK_TOOL_NAME = 'delegate_task'
 const MAX_PARALLEL_TOOL_CALLS = 3
+// Number of most-recent tool-result screenshots/images kept inline in a
+// request. Older ones collapse to a text note (Anthropic-style "keep last
+// N images"), bounding context growth for long computer-use sessions.
+const MAX_FORWARDED_TOOL_IMAGES = 3
 const MAX_TURN_MODEL_STEPS = 64
 const MAX_TOOL_CATALOG_SNAPSHOTS = 256
 const DEFAULT_COMPACTION_SUMMARY_TIMEOUT_MS = 15_000
@@ -996,7 +1001,7 @@ export class AgentLoop {
       ...(planTurnActive ? { modeInstruction: PLAN_MODE_INSTRUCTION } : {}),
       ...(contextInstructions.length ? { contextInstructions } : {}),
       prefix: this.opts.prefix.fewShots,
-      history,
+      history: capToolResultImages(history, MAX_FORWARDED_TOOL_IMAGES),
       ...(attachments.imageAttachments.length ? { attachments: attachments.imageAttachments } : {}),
       ...(attachments.textFallbacks.length ? { attachmentTextFallbacks: attachments.textFallbacks } : {}),
       tools: effectiveToolSpecs,

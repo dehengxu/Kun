@@ -111,6 +111,12 @@
       "enabled": false,
       "scopes": ["user", "workspace", "project"],
       "maxInjectedRecords": 8
+    },
+    "computerUse": {
+      "enabled": false,
+      "mode": "auto",
+      "maxImageDimension": 1280,
+      "maxActionsPerTurn": 40
     }
   },
   "hooks": []

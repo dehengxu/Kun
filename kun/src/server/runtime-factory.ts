@@ -20,6 +20,7 @@ import { buildSkillToolProviders } from '../adapters/tool/skill-tool-provider.js
 import { buildDelegationToolProviders } from '../adapters/tool/delegation-tool-provider.js'
 import { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
 import { buildImageGenToolProviders } from '../adapters/tool/image-gen-tool-provider.js'
+import { buildComputerUseToolProviders } from '../adapters/tool/computer-use-tool-provider.js'
 import {
   buildMusicGenToolProviders,
   buildSpeechGenToolProviders,
@@ -214,6 +215,7 @@ export async function createKunServeRuntime(
   const speechGenProviders = buildSpeechGenToolProviders(options.capabilities?.speechGen, { nowIso })
   const musicGenProviders = buildMusicGenToolProviders(options.capabilities?.musicGen, { nowIso })
   const videoGenProviders = buildVideoGenToolProviders(options.capabilities?.videoGen, { nowIso })
+  const computerUseProviders = await buildComputerUseToolProviders(options.capabilities?.computerUse)
   const baseToolProviders = [
     {
       id: 'builtin',
@@ -230,6 +232,9 @@ export async function createKunServeRuntime(
     ...speechGenProviders.providers,
     ...musicGenProviders.providers,
     ...videoGenProviders.providers
+    // NOTE: computer_use is intentionally NOT in baseToolProviders — host
+    // control must not be delegable to subagents. It is added to the main
+    // registry only (below).
   ]
   const resolvedHooks = resolveConfiguredHooks(options.hooks)
   const childRegistry = new CapabilityRegistry(baseToolProviders)
@@ -314,10 +319,17 @@ export async function createKunServeRuntime(
     videoGen: {
       available: videoGenProviders.available,
       reason: videoGenProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
+    },
+    computerUse: {
+      available: computerUseProviders.available,
+      reason: computerUseProviders.diagnostics.find((diagnostic) => diagnostic.reason)?.reason
     }
   })
   const registry = new CapabilityRegistry([
     ...baseToolProviders,
+    // Host control is available to the top-level agent only, never to
+    // delegated subagents (which use childRegistry/baseToolProviders).
+    ...computerUseProviders.providers,
     {
       id: 'goal',
       kind: 'gui' as const,

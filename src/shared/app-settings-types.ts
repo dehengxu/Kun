@@ -1,6 +1,7 @@
 import type { GuiUpdateChannel } from './gui-update'
 import type { KeyboardShortcutsConfigV1 } from './keyboard-shortcuts'
 import type { ApprovalPolicy, SandboxMode } from '../../kun/src/contracts/policy.js'
+import type { ComputerUseMode } from '../../kun/src/contracts/capabilities.js'
 import type { ModelEndpointFormat } from '../../kun/src/contracts/model-endpoint-format.js'
 export {
   DEFAULT_MODEL_ENDPOINT_FORMAT,
@@ -218,6 +219,23 @@ export type KunRuntimeSettingsV1 = {
   modelProfiles: Record<string, ModelProviderModelProfileV1>
   /** Whether long-term memory is enabled in the Kun runtime. */
   memoryEnabled: boolean
+  /** Host computer-use (screenshot + mouse/keyboard control) settings. */
+  computerUse: KunComputerUseSettingsV1
+}
+
+export type KunComputerUseSettingsV1 = {
+  /** Master switch. Off means the computer_use tool is never registered. */
+  enabled: boolean
+  /**
+   * `auto`: advertise only to vision (image-capable) models — a vision
+   * model turns it on for itself. `always`: advertise to every model.
+   * `off`: never advertise even when enabled.
+   */
+  mode: ComputerUseMode
+  /** Longest screenshot edge (px); larger captures are downscaled for grounding. */
+  maxImageDimension: number
+  /** Hard cap on computer_use actions per turn. */
+  maxActionsPerTurn: number
 }
 
 export type KunImageGenerationSettingsV1 = {
@@ -393,7 +411,7 @@ export type KunTokenEconomySettingsPatchV1 = Partial<
 export type KunRuntimeSettingsPatchV1 = Partial<
   Omit<
     KunRuntimeSettingsV1,
-    'mcpSearch' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'tokenEconomy' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'musicGeneration' | 'videoGeneration' | 'modelProfiles'
+    'mcpSearch' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'tokenEconomy' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'musicGeneration' | 'videoGeneration' | 'computerUse' | 'modelProfiles'
   >
 > & {
   mcpSearch?: Partial<KunMcpSearchSettingsV1>
@@ -406,6 +424,7 @@ export type KunRuntimeSettingsPatchV1 = Partial<
   textToSpeech?: Partial<KunTextToSpeechSettingsV1>
   musicGeneration?: Partial<KunMusicGenerationSettingsV1>
   videoGeneration?: Partial<KunVideoGenerationSettingsV1>
+  computerUse?: Partial<KunComputerUseSettingsV1>
   modelProfiles?: Record<string, ModelProviderModelProfilePatchV1 | null>
 }
 

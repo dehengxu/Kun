@@ -313,6 +313,24 @@ export const VideoGenCapabilityConfig = CapabilityToggleConfig.extend({
 }).strict()
 export type VideoGenCapabilityConfig = z.infer<typeof VideoGenCapabilityConfig>
 
+/**
+ * Host computer-use mode. `auto` advertises the tool only when the active
+ * model accepts image input (a vision model decides for itself); `always`
+ * advertises whenever the host backend + permissions allow regardless of
+ * modality; `off` never advertises it.
+ */
+export const ComputerUseMode = z.enum(['auto', 'always', 'off'])
+export type ComputerUseMode = z.infer<typeof ComputerUseMode>
+
+export const ComputerUseCapabilityConfig = CapabilityToggleConfig.extend({
+  mode: ComputerUseMode.default('auto'),
+  /** Longest screenshot edge in pixels; larger captures are downscaled for grounding. */
+  maxImageDimension: z.number().int().positive().default(1280),
+  /** Hard cap on computer_use actions per turn, as a runaway backstop. */
+  maxActionsPerTurn: z.number().int().positive().default(40)
+}).strict()
+export type ComputerUseCapabilityConfig = z.infer<typeof ComputerUseCapabilityConfig>
+
 export const KunCapabilitiesConfig = z
   .object({
     mcp: McpCapabilityConfig.default(() => McpCapabilityConfig.parse({})),
@@ -324,7 +342,8 @@ export const KunCapabilitiesConfig = z
     imageGen: ImageGenCapabilityConfig.default(() => ImageGenCapabilityConfig.parse({})),
     speechGen: SpeechGenCapabilityConfig.default(() => SpeechGenCapabilityConfig.parse({})),
     musicGen: MusicGenCapabilityConfig.default(() => MusicGenCapabilityConfig.parse({})),
-    videoGen: VideoGenCapabilityConfig.default(() => VideoGenCapabilityConfig.parse({}))
+    videoGen: VideoGenCapabilityConfig.default(() => VideoGenCapabilityConfig.parse({})),
+    computerUse: ComputerUseCapabilityConfig.default(() => ComputerUseCapabilityConfig.parse({}))
   })
   .strict()
 export type KunCapabilitiesConfig = z.infer<typeof KunCapabilitiesConfig>
@@ -406,6 +425,9 @@ export const RuntimeCapabilityManifest = z
     }).strict(),
     videoGen: RuntimeCapabilityState.extend({
       model: z.string().optional()
+    }).strict(),
+    computerUse: RuntimeCapabilityState.extend({
+      mode: ComputerUseMode
     }).strict()
   })
   .strict()
@@ -461,6 +483,10 @@ export function buildRuntimeCapabilityManifest(input: {
     reason?: string
   }
   videoGen?: {
+    available?: boolean
+    reason?: string
+  }
+  computerUse?: {
     available?: boolean
     reason?: string
   }
@@ -595,6 +621,15 @@ export function buildRuntimeCapabilityManifest(input: {
         input.videoGen?.reason ?? 'video generation provider is not configured'
       ),
       ...(config.videoGen.model ? { model: config.videoGen.model } : {})
+    },
+    computerUse: {
+      ...providerCapabilityState(
+        config.computerUse.enabled && config.computerUse.mode !== 'off',
+        'computer use is disabled by config',
+        input.computerUse?.available === true,
+        input.computerUse?.reason ?? 'computer-use backend is unavailable on this platform'
+      ),
+      mode: config.computerUse.mode
     }
   })
 }

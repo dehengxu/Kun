@@ -407,6 +407,12 @@ const kunRuntimePatchSchema = z.object({
     timeoutMs: z.number().int().positive().max(3_600_000).optional(),
     pollIntervalMs: z.number().int().positive().max(120_000).optional()
   }).strict().optional(),
+  computerUse: z.object({
+    enabled: z.boolean().optional(),
+    mode: z.enum(['auto', 'always', 'off']).optional(),
+    maxImageDimension: z.number().int().positive().max(4096).optional(),
+    maxActionsPerTurn: z.number().int().positive().max(1000).optional()
+  }).strict().optional(),
   // 兼容旧版保存的独立视觉识别设置。当前能力已经迁移到 provider modelProfiles。
   imageRecognition: z.unknown().optional(),
   modelProfiles: z.record(
@@ -1048,6 +1054,8 @@ export const notificationPayloadSchema = z
 export const guiUpdateChannelSchema = z.enum(GUI_UPDATE_CHANNELS).optional()
 
 export const desktopCommandSchema = z.enum(DESKTOP_COMMANDS)
+
+export const computerUsePermissionKindSchema = z.enum(['accessibility', 'screenRecording'])
 
 
 export const logErrorPayloadSchema = z

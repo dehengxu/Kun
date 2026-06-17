@@ -1,4 +1,8 @@
 import type { TurnItem } from '../contracts/items.js'
+import {
+  IMAGE_TOOL_RESULT_TOKEN_ESTIMATE,
+  isModelVisibleImageOutput
+} from './tool-result-image.js'
 
 export type RequestHistoryHygieneOptions = {
   maxToolResultLines?: number
@@ -79,6 +83,10 @@ export function applyRequestHistoryHygiene(
   const next = items.map((item) => {
     if (!shouldCleanItem(item, scope)) return item
     if (item.kind === 'tool_result') {
+      // Forwarded screenshots/images must keep their base64 payload — the
+      // model client turns it into a real image part. The agent loop has
+      // already capped how many are kept inline.
+      if (isModelVisibleImageOutput(item.output)) return item
       const output = compactToolResultOutput(item.output, limits)
       if (!output.changed) return item
       changed = true
@@ -138,6 +146,13 @@ function applyCumulativeToolResultBudget(
     const index = toolResultIndexes[cursor]
     const item = items[index]
     if (item.kind !== 'tool_result') continue
+    // Forwarded images are never digested (that would drop the screenshot)
+    // and are charged a flat vision-token cost rather than their base64
+    // length, which would otherwise be hundreds of thousands of "tokens".
+    if (isModelVisibleImageOutput(item.output)) {
+      used += IMAGE_TOOL_RESULT_TOKEN_ESTIMATE
+      continue
+    }
     const cost = estimateTokens(stringifyOutput(item.output))
     if (alwaysKeep.has(index)) {
       used += cost

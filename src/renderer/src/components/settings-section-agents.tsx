@@ -17,7 +17,12 @@ import {
   isKunRuntimeInsecure
 } from '@shared/app-settings'
 import type { GuiUpdateChannel } from '@shared/gui-update'
-import type { SkillRootListItem } from '@shared/kun-gui-api'
+import type {
+  ComputerUsePermissionKind,
+  ComputerUsePermissions,
+  ComputerUsePermissionState,
+  SkillRootListItem
+} from '@shared/kun-gui-api'
 import { Ban, FolderOpen, Loader2, RefreshCw, Settings, Trash2 } from 'lucide-react'
 import { GuiUpdateControl } from './settings-gui-update'
 import {
@@ -363,6 +368,20 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
   }
   const provider = form.provider ?? defaultModelProviderSettings()
   const modelProviders = provider.providers as ModelProviderProfileV1[]
+  const computerUse = kun.computerUse ?? {
+    enabled: false,
+    mode: 'auto' as const,
+    maxImageDimension: 1280,
+    maxActionsPerTurn: 40
+  }
+  const updateComputerUse = (patch: Record<string, unknown>): void => {
+    updateKun({
+      computerUse: {
+        ...computerUse,
+        ...patch
+      }
+    })
+  }
   const activeProviderId = kun.providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
   const activeProvider = modelProviders.find((item) => item.id === activeProviderId) ?? modelProviders[0]
   const activeProviderModels = activeProvider?.models ?? []
@@ -605,6 +624,50 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
 
+
+              <div className="mt-6">
+                <SettingsCard title={t('computerUseTitle')}>
+                  <div className="px-3 py-4">
+                    <InlineNoticeView notice={{ tone: 'info', message: t('computerUseHint') }} />
+                  </div>
+                  <div className="px-3 pb-4">
+                    <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[12px] leading-5 text-amber-700 dark:text-amber-200">
+                      <div className="font-semibold">{t('computerUseModelQualityTitle')}</div>
+                      <div className="mt-1">{t('computerUseModelQualityBody')}</div>
+                    </div>
+                  </div>
+                  <SettingRow
+                    title={t('computerUseEnable')}
+                    description={t('computerUseEnableDesc')}
+                    control={
+                      <Toggle
+                        checked={computerUse.enabled}
+                        onChange={(enabled) => updateComputerUse({ enabled })}
+                      />
+                    }
+                  />
+                  {computerUse.enabled ? (
+                    <>
+                      <SettingRow
+                        title={t('computerUseMode')}
+                        description={t('computerUseModeDesc')}
+                        control={
+                          <select
+                            className={selectControlClass}
+                            value={computerUse.mode}
+                            onChange={(e) => updateComputerUse({ mode: e.target.value })}
+                          >
+                            <option value="auto">{t('computerUseModeAuto')}</option>
+                            <option value="always">{t('computerUseModeAlways')}</option>
+                            <option value="off">{t('computerUseModeOff')}</option>
+                          </select>
+                        }
+                      />
+                      <ComputerUsePermissionRow t={t} />
+                    </>
+                  ) : null}
+                </SettingsCard>
+              </div>
 
               <div ref={skillSectionRef} className="mt-6">
                 <SettingsCard title={t('skill')}>
@@ -1411,5 +1474,91 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
             </>
+  )
+}
+
+function permissionBadgeClass(state: ComputerUsePermissionState): string {
+  if (state === 'granted') {
+    return 'border-emerald-400/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
+  }
+  if (state === 'denied') {
+    return 'border-rose-400/25 bg-rose-500/10 text-rose-700 dark:text-rose-200'
+  }
+  return 'border-ds-border-muted bg-ds-card text-ds-faint'
+}
+
+function ComputerUsePermissionRow({ t }: { t: (key: string) => string }): ReactElement | null {
+  const [permissions, setPermissions] = useState<ComputerUsePermissions | null>(null)
+
+  const refresh = (): void => {
+    void window.kunGui?.getComputerUsePermissions?.().then(setPermissions).catch(() => undefined)
+  }
+  useEffect(() => {
+    refresh()
+  }, [])
+
+  // Non-macOS hosts have no OS permission gate; nothing useful to show.
+  if (permissions && !permissions.needsPermission) return null
+
+  const request = (kind: ComputerUsePermissionKind): void => {
+    void window.kunGui
+      ?.requestComputerUsePermission?.(kind)
+      .then(setPermissions)
+      .catch(() => undefined)
+  }
+
+  const badge = (label: string, state: ComputerUsePermissionState): ReactNode => (
+    <span className={`rounded-lg border px-2 py-0.5 text-[12px] font-medium ${permissionBadgeClass(state)}`}>
+      {label}: {t(`computerUsePermission_${state}`)}
+    </span>
+  )
+
+  return (
+    <SettingRow
+      title={t('computerUsePermissions')}
+      description={t('computerUsePermissionsDesc')}
+      control={
+        <div className="flex min-w-0 flex-col items-start gap-2 sm:items-end">
+          <div className="flex flex-wrap gap-2">
+            {permissions?.accessibilityNeedsRestart ? (
+              <span className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[12px] font-medium text-amber-700 dark:text-amber-200">
+                {t('computerUseAccessibility')}: {t('computerUsePermissionNeedsRestart')}
+              </span>
+            ) : (
+              badge(t('computerUseAccessibility'), permissions?.accessibility ?? 'unknown')
+            )}
+            {badge(t('computerUseScreenRecording'), permissions?.screenRecording ?? 'unknown')}
+          </div>
+          {permissions?.accessibilityNeedsRestart ? (
+            <p className="max-w-full text-[12px] leading-5 text-amber-700 dark:text-amber-200">
+              {t('computerUseRestartHint')}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="rounded-lg border border-ds-border-muted bg-ds-card px-2.5 py-1 text-[12px] font-medium text-ds-text hover:bg-ds-card-hover"
+              onClick={() => request('accessibility')}
+            >
+              {t('computerUseGrantAccessibility')}
+            </button>
+            <button
+              type="button"
+              className="rounded-lg border border-ds-border-muted bg-ds-card px-2.5 py-1 text-[12px] font-medium text-ds-text hover:bg-ds-card-hover"
+              onClick={() => request('screenRecording')}
+            >
+              {t('computerUseGrantScreenRecording')}
+            </button>
+            <button
+              type="button"
+              className="rounded-lg border border-ds-border-muted bg-ds-card px-2.5 py-1 text-[12px] font-medium text-ds-text hover:bg-ds-card-hover"
+              onClick={refresh}
+            >
+              {t('computerUseRecheck')}
+            </button>
+          </div>
+        </div>
+      }
+    />
   )
 }

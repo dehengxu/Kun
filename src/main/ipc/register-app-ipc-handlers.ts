@@ -32,6 +32,7 @@ import {
   clawImInstallPollPayloadSchema,
   confirmDialogPayloadSchema,
   clawTaskFromTextPayloadSchema,
+  computerUsePermissionKindSchema,
   deepseekConfigContentSchema,
   desktopCommandSchema,
   defaultPathSchema,
@@ -136,6 +137,10 @@ import { retrieveWriteContext } from '../services/write-retrieval-service'
 import { requestWriteInfographic } from '../services/write-infographic-service'
 import { authorizePrototypePath } from '../services/prototype-embed-registry'
 import { requestSpeechTranscription } from '../services/speech-to-text-service'
+import {
+  getComputerUsePermissions,
+  requestComputerUsePermission
+} from '../services/computer-use-permissions'
 import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkillRoots, listGuiSkills } from '../services/skill-service'
 
@@ -1100,6 +1105,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   ipcMain.handle('shell:open-external', async (_, url: unknown) => {
     const validatedUrl = parseIpcPayload('shell:open-external', shellOpenExternalUrlSchema, url)
     await shell.openExternal(validatedUrl)
+  })
+  ipcMain.handle('computer-use:permissions', async () => getComputerUsePermissions())
+  ipcMain.handle('computer-use:request-permission', async (_, kind: unknown) => {
+    const parsed = parseIpcPayload(
+      'computer-use:request-permission',
+      computerUsePermissionKindSchema,
+      kind
+    )
+    return requestComputerUsePermission(parsed)
   })
   ipcMain.handle('notification:turn-complete', async (_, payload: unknown) =>
     showTurnCompleteNotification(

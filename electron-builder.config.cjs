@@ -98,7 +98,11 @@ module.exports = {
     '**/node_modules/better-sqlite3/**/*',
     '**/node_modules/node-pty/**/*',
     '**/node_modules/bindings/**/*',
-    '**/node_modules/file-uri-to-path/**/*'
+    '**/node_modules/file-uri-to-path/**/*',
+    // Computer-use native automation (@computer-use/nut-js + its libnut
+    // binding + node-mac-permissions) ships prebuilt .node files that must
+    // live outside the asar archive to load.
+    '**/node_modules/@computer-use/**/*'
   ],
   npmRebuild: true,
   directories: {

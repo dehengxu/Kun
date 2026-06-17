@@ -6,6 +6,7 @@ import type { LlmDebugRound, LlmDebugSink } from '../../services/llm-debug-recor
 import { estimateDeepseekCost } from './deepseek-pricing.js'
 import { estimateMiniMaxCost } from './minimax-pricing.js'
 import { isToolResultBridgeItem, repairModelHistoryItems } from '../../domain/model-history-repair.js'
+import { extractToolResultImages, toolResultTextWithoutImages } from '../../loop/tool-result-image.js'
 import { repairToolArguments } from './tool-argument-repair.js'
 import { isDeepSeekHost, probeDeepSeekReachable } from './model-error-probe.js'
 import {
@@ -64,15 +65,15 @@ type ChatMessageContentPart =
 
 type AnthropicCacheControl = { type: 'ephemeral' }
 
+type AnthropicImageSource = { type: 'base64'; media_type: string; data: string } | { type: 'url'; url: string }
+
 type AnthropicContentBlock = (
   | { type: 'text'; text: string }
-  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } | { type: 'url'; url: string } }
+  | { type: 'image'; source: AnthropicImageSource }
   | { type: 'thinking'; thinking: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; tool_use_id: string; content: string }
 ) & { cache_control?: AnthropicCacheControl }
-
-type AnthropicImageSource = Extract<AnthropicContentBlock, { type: 'image' }>['source']
 
 type AnthropicMessage = {
   role: 'user' | 'assistant'
@@ -457,7 +458,7 @@ export class CompatModelClient implements ModelClient {
     const body: Record<string, unknown> = {
       model,
       stream,
-      messages
+      messages: splitToolImageMessagesForOpenAi(messages)
     }
     if (request.maxTokens !== undefined) {
       body.max_tokens = request.maxTokens
@@ -513,7 +514,7 @@ export class CompatModelClient implements ModelClient {
     const body: Record<string, unknown> = {
       model,
       stream,
-      input: messagesToResponsesInput(messages)
+      input: messagesToResponsesInput(splitToolImageMessagesForOpenAi(messages))
     }
     if (request.maxTokens !== undefined) {
       body.max_output_tokens = request.maxTokens
@@ -607,9 +608,11 @@ export class CompatModelClient implements ModelClient {
       this.config.baseUrl,
       this.modelReasoningFor(model)
     )
+    const supportsImages = this.modelSupportsImageInput(model)
     out.push(...this.itemsToMessages(
       repairModelHistoryItems([...request.prefix, ...history]),
-      thinkingMode
+      thinkingMode,
+      supportsImages
     ))
     // Per-turn context (goal budgets, todo state, memories, skill notes,
     // drift warnings) is volatile — the goal instruction alone embeds a
@@ -628,7 +631,7 @@ export class CompatModelClient implements ModelClient {
     return normalizeThinkingAssistantMessages(healToolMessagePairs(out), thinkingMode)
   }
 
-  private itemsToMessages(items: TurnItem[], thinkingMode: boolean): ChatMessage[] {
+  private itemsToMessages(items: TurnItem[], thinkingMode: boolean, supportsImages: boolean): ChatMessage[] {
     const out: ChatMessage[] = []
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index]
@@ -648,7 +651,7 @@ export class CompatModelClient implements ModelClient {
         continue
       }
       if (item?.kind === 'tool_call') {
-        const block = this.toolCallBlockToMessages(items, index, thinkingMode)
+        const block = this.toolCallBlockToMessages(items, index, thinkingMode, supportsImages)
         if (block) {
           out.push(...block.messages)
           index = block.nextIndex - 1
@@ -656,7 +659,7 @@ export class CompatModelClient implements ModelClient {
         continue
       }
       if (item?.kind === 'tool_result') continue
-      const message = this.itemToMessage(item, thinkingMode)
+      const message = this.itemToMessage(item, thinkingMode, supportsImages)
       if (message) out.push(message)
     }
     return out
@@ -665,7 +668,8 @@ export class CompatModelClient implements ModelClient {
   private toolCallBlockToMessages(
     items: TurnItem[],
     startIndex: number,
-    thinkingMode: boolean
+    thinkingMode: boolean,
+    supportsImages: boolean
   ): { messages: ChatMessage[]; nextIndex: number } | null {
     const calls: Extract<TurnItem, { kind: 'tool_call' }>[] = []
     let index = startIndex
@@ -700,7 +704,7 @@ export class CompatModelClient implements ModelClient {
         sawResult = true
         if (expectedCallIds.has(item.callId) && !seenResultIds.has(item.callId)) {
           seenResultIds.add(item.callId)
-          resultMessages.push(this.toolResultToMessage(item))
+          resultMessages.push(this.toolResultToMessage(item, supportsImages))
         }
         index += 1
         continue
@@ -744,7 +748,32 @@ export class CompatModelClient implements ModelClient {
     }
   }
 
-  private toolResultToMessage(item: Extract<TurnItem, { kind: 'tool_result' }>): ChatMessage {
+  private toolResultToMessage(
+    item: Extract<TurnItem, { kind: 'tool_result' }>,
+    supportsImages: boolean
+  ): ChatMessage {
+    const images = extractToolResultImages(item.output)
+    if (images.length > 0) {
+      const text = toolResultTextWithoutImages(item.output)
+      // A non-vision model/provider rejects image parts; send the metadata
+      // as text and drop the base64 (it is useless to a text-only model).
+      if (!supportsImages) {
+        return {
+          role: 'tool',
+          content: text || '(image omitted: the active model has no image input)',
+          tool_call_id: item.callId
+        }
+      }
+      const parts: ChatMessageContentPart[] = []
+      if (text) parts.push({ type: 'text', text })
+      for (const image of images) {
+        parts.push({
+          type: 'image_url',
+          image_url: { url: `data:${image.mimeType};base64,${image.dataBase64}` }
+        })
+      }
+      return { role: 'tool', content: parts, tool_call_id: item.callId }
+    }
     return {
       role: 'tool',
       content: toolResultContent(item.output),
@@ -752,7 +781,19 @@ export class CompatModelClient implements ModelClient {
     }
   }
 
-  private itemToMessage(item: TurnItem, thinkingMode: boolean): ChatMessage | null {
+  /**
+   * Whether the resolved model accepts image input. Tool-result images are
+   * only forwarded as real image parts to vision models; text-only models
+   * get a text summary instead. Defaults to true when no capability
+   * resolver is configured (the runtime always sets one).
+   */
+  private modelSupportsImageInput(model: string): boolean {
+    const capabilities = this.config.modelCapabilities?.(model)
+    if (!capabilities) return true
+    return capabilities.inputModalities.includes('image')
+  }
+
+  private itemToMessage(item: TurnItem, thinkingMode: boolean, supportsImages: boolean): ChatMessage | null {
     switch (item.kind) {
       case 'user_message':
         return { role: 'user', content: item.text }
@@ -772,7 +813,7 @@ export class CompatModelClient implements ModelClient {
           tool_calls: [this.toolCallToWire(item)]
         }
       case 'tool_result':
-        return this.toolResultToMessage(item)
+        return this.toolResultToMessage(item, supportsImages)
       case 'compaction':
         return item.replacedTokens > 0
           ? { role: 'system', content: `Conversation summary from earlier turns:\n${item.summary}` }
@@ -1534,14 +1575,26 @@ function messagesToAnthropic(
     }
     if (message.role === 'tool') {
       if (!message.tool_call_id) continue
-      out.push({
-        role: 'user',
-        content: [{
-          type: 'tool_result',
-          tool_use_id: message.tool_call_id,
-          content: chatContentToPlainText(message.content)
-        }]
-      })
+      // Keep `tool_result` content as plain text. Anthropic's own API also
+      // accepts an `image` block INSIDE tool_result (the computer-use beta
+      // shape), but third-party Anthropic-compat providers (MiniMax, etc.)
+      // often have not implemented that newer shape and return 502 / 4xx
+      // when they see it. The image rides instead as a sibling `image`
+      // block in the same user message — the older shape that every
+      // compat layer accepts.
+      const blocks: AnthropicContentBlock[] = [{
+        type: 'tool_result',
+        tool_use_id: message.tool_call_id,
+        content: chatContentToTextOnly(message.content)
+      }]
+      if (Array.isArray(message.content)) {
+        for (const part of message.content) {
+          if (part.type !== 'image_url') continue
+          const image = anthropicImageSource(part.image_url.url)
+          if (image) blocks.push({ type: 'image', source: image })
+        }
+      }
+      out.push({ role: 'user', content: blocks })
       continue
     }
     const content = chatContentToAnthropicContent(message.content)
@@ -1626,6 +1679,58 @@ function chatContentToResponsesContent(
   return parts
 }
 
+/**
+ * OpenAI chat-completions and Responses APIs do not accept image parts
+ * inside a `tool`/`function_call_output` message. When a tool result
+ * carries images, keep the tool message text-only and re-emit the
+ * image(s) in a following synthetic user message so vision models still
+ * see them. Anthropic Messages handles images inline and skips this.
+ */
+function splitToolImageMessagesForOpenAi(messages: ChatMessage[]): ChatMessage[] {
+  const hasToolImages = messages.some(
+    (message) =>
+      message.role === 'tool' &&
+      Array.isArray(message.content) &&
+      message.content.some((part) => part.type === 'image_url')
+  )
+  if (!hasToolImages) return messages
+  const out: ChatMessage[] = []
+  let pendingImages: ChatMessageContentPart[] = []
+  const flushImages = (): void => {
+    if (pendingImages.length === 0) return
+    out.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: '(Automated) The tool call(s) above returned the following image(s):' },
+        ...pendingImages
+      ]
+    })
+    pendingImages = []
+  }
+  for (const message of messages) {
+    if (message.role === 'tool' && Array.isArray(message.content)) {
+      const textParts: string[] = []
+      const imageParts: ChatMessageContentPart[] = []
+      for (const part of message.content) {
+        if (part.type === 'text') textParts.push(part.text)
+        else imageParts.push(part)
+      }
+      out.push({
+        ...message,
+        content: textParts.join('\n') || '(image returned; see the following message)'
+      })
+      pendingImages.push(...imageParts)
+      continue
+    }
+    // Flush queued images once the run of tool results ends, so they land
+    // after the whole tool batch but before the next assistant turn.
+    if (message.role !== 'tool') flushImages()
+    out.push(message)
+  }
+  flushImages()
+  return out
+}
+
 function chatContentToAnthropicContent(content: ChatMessage['content']): string | AnthropicContentBlock[] {
   if (content === null || content === undefined) return ''
   if (typeof content === 'string') return content
@@ -1669,6 +1774,21 @@ function chatContentToPlainText(content: ChatMessage['content']): string {
     if (part.type === 'text') return part.text
     return `[image: ${part.image_url.url}]`
   }).join('\n')
+}
+
+/**
+ * Extract ONLY text parts from a chat-message content array — image parts
+ * are dropped entirely (no `[image: data:...]` placeholder). Used when the
+ * image rides separately (as a sibling block in the user message) so the
+ * raw base64 does not leak back into the text channel.
+ */
+function chatContentToTextOnly(content: ChatMessage['content']): string {
+  if (content === null || content === undefined) return ''
+  if (typeof content === 'string') return content
+  return content
+    .filter((part): part is Extract<ChatMessageContentPart, { type: 'text' }> => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n')
 }
 
 type ModelReasoningCapability = NonNullable<ModelCapabilityMetadata['reasoning']>

@@ -1,6 +1,7 @@
 import type { TurnItem } from '../contracts/items.js'
 import type { ModelRequest, ModelToolSpec } from '../ports/model-client.js'
 import type { RequestHistoryHygieneOptions } from './request-history-hygiene.js'
+import { isModelVisibleImageOutput } from './tool-result-image.js'
 
 export type TokenEconomyConfig = {
   enabled?: boolean
@@ -383,6 +384,11 @@ function compactToolOutput(toolName: string, output: unknown): unknown {
     return compactGenericText(output)
   }
   if (!isRecord(output)) return output
+  // Model-visible images (read/computer_use screenshots) are forwarded to
+  // the model as real image parts and capped to the most recent few by the
+  // agent loop. Leave their base64 intact here; stripping it would blind a
+  // vision model to the screenshot it just requested.
+  if (isModelVisibleImageOutput(output)) return output
   switch (toolName) {
     case 'bash':
       return compactBashOutput(output)

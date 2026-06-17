@@ -27,6 +27,7 @@ import {
 } from '../../kun/src/config/kun-config.js'
 import {
   AttachmentsCapabilityConfig,
+  ComputerUseCapabilityConfig,
   ImageGenCapabilityConfig,
   McpCapabilityConfig,
   McpServerConfig,
@@ -294,13 +295,23 @@ async function startKunChildOnce(
     tokenEconomyMode: runtime.tokenEconomyMode,
     insecure: isKunRuntimeInsecure(runtime)
   })
+  // On macOS, libnut links AppKit and calls `[NSApplication sharedApplication]`
+  // on its first screen-grab/mouse/keyboard call. That promotes a pure-Node
+  // (ELECTRON_RUN_AS_NODE) child to a regular Cocoa app and a second Kun icon
+  // appears in the Dock. When computer-use is enabled we instead spawn kun as
+  // a real Electron instance so it can call `app.dock.hide()` itself (see
+  // kun/src/cli/serve-entry.ts). The extra Chromium overhead is only paid
+  // when the user actually opted into host control.
+  const runAsElectron = process.platform === 'darwin' && runtime.computerUse?.enabled === true
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    KUN_RUNTIME_TOKEN: runtime.runtimeToken,
+    DEEPSEEK_API_KEY: runtime.apiKey || process.env.DEEPSEEK_API_KEY || ''
+  }
+  if (!runAsElectron) childEnv.ELECTRON_RUN_AS_NODE = '1'
+  else delete childEnv.ELECTRON_RUN_AS_NODE
   child = spawn(resolution.command, args, {
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: '1',
-      KUN_RUNTIME_TOKEN: runtime.runtimeToken,
-      DEEPSEEK_API_KEY: runtime.apiKey || process.env.DEEPSEEK_API_KEY || ''
-    },
+    env: childEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false
   })
@@ -362,6 +373,7 @@ export async function syncGuiManagedKunConfig(
     | 'textToSpeech'
     | 'musicGeneration'
     | 'videoGeneration'
+    | 'computerUse'
     | 'modelProfiles'
     | 'memoryEnabled'
   >,
@@ -398,7 +410,7 @@ export async function syncGuiManagedKunConfig(
   const speechGen = objectValue(capabilities.speechGen)
   const musicGen = objectValue(capabilities.musicGen)
   const videoGen = objectValue(capabilities.videoGen)
-  const memory = objectValue(capabilities.memory)
+  const computerUse = objectValue(capabilities.computerUse)
   const storage = storageConfigForRuntime(runtime.storage)
   const mcpSearch = runtime.mcpSearch
   const skillCapability = await skillCapabilityConfigForRuntime(skills, options?.scheduleMcp?.settings)
@@ -431,6 +443,7 @@ export async function syncGuiManagedKunConfig(
       speechGen: speechGenConfigForRuntime(runtime.textToSpeech, speechGen),
       musicGen: musicGenConfigForRuntime(runtime.musicGeneration, musicGen),
       videoGen: videoGenConfigForRuntime(runtime.videoGeneration, videoGen),
+      computerUse: computerUseConfigForRuntime(runtime.computerUse, computerUse),
       memory: {
         ...memory,
         enabled: runtime.memoryEnabled
@@ -747,6 +760,22 @@ function contextCompactionConfigForRuntime(
   }
 }
 
+function computerUseConfigForRuntime(
+  computerUse: Pick<KunRuntimeSettingsV1, 'computerUse'>['computerUse'],
+  existing: Record<string, unknown>
+): Record<string, unknown> {
+  // GUI owns enabled/mode/limits. `existing` was already passed through the
+  // strict ComputerUseCapabilityConfig sanitizer, so unknown hand-edited keys
+  // were dropped before reaching here; the spread only carries known fields.
+  return {
+    ...existing,
+    enabled: computerUse.enabled,
+    mode: computerUse.mode,
+    maxImageDimension: computerUse.maxImageDimension,
+    maxActionsPerTurn: computerUse.maxActionsPerTurn
+  }
+}
+
 function imageGenConfigForRuntime(
   imageGeneration: Pick<KunRuntimeSettingsV1, 'imageGeneration'>['imageGeneration'],
   existing: Record<string, unknown>
@@ -914,6 +943,9 @@ function sanitizeKunCapabilitiesConfig(value: unknown): Record<string, unknown> 
   if ('speechGen' in raw) next.speechGen = parseKunConfigSection(SpeechGenCapabilityConfig, raw.speechGen)
   if ('musicGen' in raw) next.musicGen = parseKunConfigSection(MusicGenCapabilityConfig, raw.musicGen)
   if ('videoGen' in raw) next.videoGen = parseKunConfigSection(VideoGenCapabilityConfig, raw.videoGen)
+  if ('computerUse' in raw) {
+    next.computerUse = parseKunConfigSection(ComputerUseCapabilityConfig, raw.computerUse)
+  }
   return next
 }
 
