@@ -654,6 +654,42 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(liveTurnProgressClass(false)).not.toContain('mb-16 md:mb-20')
   })
 
+  it('renders the fork action before copy in completed assistant response actions', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user',
+        id: 'user_1',
+        turnId: 'turn_1',
+        text: 'say hi'
+      },
+      {
+        kind: 'assistant',
+        id: 'assistant_1',
+        turnId: 'turn_1',
+        text: 'hello'
+      }
+    ]
+
+    const html = renderToStaticMarkup(
+      createElement(MessageTimeline, {
+        blocks,
+        liveReasoning: '',
+        live: '',
+        activeThreadId: 'thr_1',
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined
+      })
+    )
+
+    expect(html).toMatch(/forkResponse|Fork response|分叉回答/)
+    expect(html).toMatch(/forkFromAssistantResponse|Fork a new thread from this response|从这条回答分叉新会话/)
+    const forkIndex = html.search(/forkFromAssistantResponse|Fork a new thread from this response|从这条回答分叉新会话/)
+    const copyIndex = html.slice(forkIndex).search(/copyMessage|Copy message|复制消息/)
+    expect(forkIndex).toBeGreaterThanOrEqual(0)
+    expect(copyIndex).toBeGreaterThan(0)
+  })
+
   it('renders the live assistant bubble while busy is true (streaming period)', () => {
     // Streaming period: the user has just sent a turn, the agent is
     // running, and the SSE has streamed some `live` text into the chat

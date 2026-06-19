@@ -257,6 +257,7 @@ export type ChatState = {
   archiveThread: (threadId: string, archived: boolean) => Promise<void>
   compactActiveThread: (reason?: string) => Promise<void>
   forkActiveThread: () => Promise<void>
+  forkThreadFromTurn: (turnId: string) => Promise<void>
   setActiveThreadGoal: (objective: string) => Promise<boolean>
   setActiveThreadGoalStatus: (status: ThreadGoalStatus) => Promise<boolean>
   clearActiveThreadGoal: () => Promise<boolean>

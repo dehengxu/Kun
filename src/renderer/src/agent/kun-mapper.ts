@@ -645,6 +645,7 @@ function userMessageBlockFromItem(item: CoreTurnItemJson): ChatBlock | null {
   return {
     kind: 'user',
     id: item.id,
+    turnId: item.turnId,
     createdAt: itemCreatedAt(item),
     text: item.text ?? '',
     ...(Object.keys(meta).length > 0 ? { meta } : {})
@@ -665,7 +666,7 @@ function userMessageEventFromItem(item: CoreTurnItemJson): UserMessageEventPaylo
 
 function assistantTextBlockFromItem(item: CoreTurnItemJson): ChatBlock | null {
   if (!item.text?.trim()) return null
-  return { kind: 'assistant', id: item.id, createdAt: itemCreatedAt(item), text: item.text }
+  return { kind: 'assistant', id: item.id, turnId: item.turnId, createdAt: itemCreatedAt(item), text: item.text }
 }
 
 function reasoningBlockFromItem(item: CoreTurnItemJson): ChatBlock | null {

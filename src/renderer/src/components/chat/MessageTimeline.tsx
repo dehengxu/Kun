@@ -441,6 +441,8 @@ function MessageTurn({
 }): ReactElement {
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const activeThreadGoal = useChatStore((s) => s.activeThreadGoal)
+  const forkThreadFromTurn = useChatStore((s) => s.forkThreadFromTurn)
+  const [forking, setForking] = useState(false)
   // Inline Review Plan card: surfaced under a turn that produced a
   // successful `create_plan` result so the user can open/build the plan
   // without leaving the conversation.
@@ -504,12 +506,29 @@ function MessageTurn({
   // not feishu-specific. Removing the !isProcessing gate is intentional
   // for all streaming paths, not just feishu.
   const showLiveAssistant = !!liveContent.trim()
+  const forkTurnId =
+    turn.user?.turnId?.trim() ||
+    [...assistantContentBlocks].reverse().find((block) => block.turnId?.trim())?.turnId?.trim() ||
+    ''
+  const forkActionBlockId =
+    !isProcessing && forkTurnId
+      ? assistantContentBlocks[assistantContentBlocks.length - 1]?.id
+      : undefined
 
   // Keep completed reasoning/tool work tucked away, but make the active turn's
   // work visible unless the user explicitly collapses it.
 
   const hasProcess = (isProcessing && !onlyCompactionProcess) || workProcessBlocks.length > 0
   const showLiveProgress = isProcessing && !onlyCompactionProcess
+  const forkFromTurn = async (): Promise<void> => {
+    if (!forkTurnId || forking) return
+    setForking(true)
+    try {
+      await forkThreadFromTurn(forkTurnId)
+    } finally {
+      setForking(false)
+    }
+  }
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
@@ -544,7 +563,20 @@ function MessageTurn({
       ) : null}
 
       {assistantContentBlocks.map((block) => (
-        <MessageBubble key={block.id} block={block} />
+        <MessageBubble
+          key={block.id}
+          block={block}
+          forkAction={
+            block.id === forkActionBlockId
+              ? {
+                  busy: forking,
+                  onFork: () => {
+                    void forkFromTurn()
+                  }
+                }
+              : undefined
+          }
+        />
       ))}
 
       {showLiveAssistant ? (

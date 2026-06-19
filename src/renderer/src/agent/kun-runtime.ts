@@ -727,11 +727,12 @@ export class KunRuntimeProvider implements AgentProvider {
 
   async forkThread(
     threadId: string,
-    options?: { relation?: 'primary' | 'fork' | 'side'; title?: string }
+    options?: { relation?: 'primary' | 'fork' | 'side'; title?: string; turnId?: string }
   ): Promise<NormalizedThread> {
     const body: Record<string, unknown> = {}
     if (options?.relation) body.relation = options.relation
     if (options?.title) body.title = options.title
+    if (options?.turnId) body.turnId = options.turnId
     const url = kunThreadForkPath(threadId)
     const response =
       Object.keys(body).length > 0
