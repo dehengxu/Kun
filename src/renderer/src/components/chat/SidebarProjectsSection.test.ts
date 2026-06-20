@@ -10,8 +10,17 @@ import {
   filterSddDraftHistoryItems,
   mergeSidebarWorkspaceGroupsWithDraftHistory,
   SddDraftHistoryRows,
+  ThreadRow,
   ThreadRenameDialog
 } from './SidebarProjectsSection'
+
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
+  useTranslation: () => ({
+    t: (key: string, opts?: Record<string, unknown>) =>
+      key === 'sidebarThreadWorktree' ? `Worktree ${String(opts?.branch)}` : key
+  })
+}))
 
 function thread(overrides: Partial<NormalizedThread> & Pick<NormalizedThread, 'id' | 'workspace'>): NormalizedThread {
   return {
@@ -134,6 +143,42 @@ describe('SidebarProjectsSection groups', () => {
     expect(groups[0]?.[1].map((item) => item.id)).toEqual(['default-short', 'default-absolute'])
   })
 
+  it('shows worktree threads under their source project instead of a separate worktree project', () => {
+    const projectPath = '/Users/zxy/code/Kook-VoiceShop-Bot'
+    const worktreePath = '/Users/zxy/.kun/worktrees/0ff7/Kook-VoiceShop-Bot'
+    const threadWorktrees = {
+      'thread-worktree': {
+        projectPath,
+        worktreePath
+      }
+    }
+    const groups = buildSidebarWorkspaceGroups({
+      threads: [
+        thread({ id: 'thread-main', workspace: projectPath }),
+        thread({ id: 'thread-worktree', workspace: worktreePath })
+      ],
+      searchQuery: '',
+      showArchived: false,
+      workspaceRoot: projectPath,
+      workspaceRoots: [
+        projectPath,
+        worktreePath
+      ],
+      threadWorktrees
+    })
+
+    expect(groups.map(([workspace]) => workspace)).toEqual([projectPath])
+    expect(groups[0]?.[1].map((item) => item.id)).toEqual(['thread-main', 'thread-worktree'])
+
+    const workspaces = buildSidebarDraftWorkspacePaths({
+      threads: [thread({ id: 'thread-worktree', workspace: worktreePath })],
+      workspaceRoot: projectPath,
+      workspaceRoots: [projectPath, worktreePath],
+      threadWorktrees
+    })
+    expect(workspaces).toEqual([projectPath])
+  })
+
   it('loads requirement histories from all known project workspaces while searching', () => {
     const workspaces = buildSidebarDraftWorkspacePaths({
       threads: [
@@ -249,6 +294,52 @@ describe('ThreadRenameDialog', () => {
     expect(html).toContain('sidebarThreadRename')
     expect(html).toContain('value="Build rename dialog"')
     expect(html).toContain('type="submit" disabled=""')
+  })
+})
+
+describe('ThreadRow', () => {
+  it('renders the worktree badge before the truncated title and outside the action buttons', () => {
+    const html = renderToStaticMarkup(
+      createElement(ThreadRow, {
+        thread: thread({
+          id: 'thr_worktree',
+          title: 'Very long archived worktree thread title',
+          workspace: '/Users/zxy/project-a',
+          archived: true
+        }),
+        worktreeRecord: {
+          projectPath: '/Users/zxy/project-a',
+          worktreePath: '/Users/zxy/.kun/worktrees/abcd/project-a',
+          branch: 'feature/layout-fix'
+        },
+        active: false,
+        deleting: false,
+        locale: 'zh-CN',
+        showRunning: false,
+        showUnread: false,
+        onSelect: vi.fn(),
+        onContextMenu: vi.fn(),
+        onRename: vi.fn(),
+        onArchive: vi.fn(),
+        onDelete: vi.fn(),
+        onRestore: vi.fn()
+      })
+    )
+
+    const rowButtonStart = html.indexOf('<button')
+    const rowButtonEnd = html.indexOf('</button>', rowButtonStart)
+    const rowButtonHtml = html.slice(rowButtonStart, rowButtonEnd)
+    const actionsHtml = html.slice(rowButtonEnd)
+
+    expect(rowButtonHtml.indexOf('aria-label="Worktree feature/layout-fix"')).toBeGreaterThan(-1)
+    expect(rowButtonHtml.lastIndexOf('Very long archived worktree thread title')).toBeGreaterThan(-1)
+    expect(rowButtonHtml.indexOf('aria-label="Worktree feature/layout-fix"')).toBeLessThan(
+      rowButtonHtml.lastIndexOf('Very long archived worktree thread title')
+    )
+    expect(rowButtonHtml).toContain('min-w-[3.75rem]')
+    expect(actionsHtml).toContain('sidebarThreadRestore')
+    expect(actionsHtml).toContain('sidebarThreadDelete')
+    expect(actionsHtml).not.toContain('Worktree feature/layout-fix')
   })
 })
 

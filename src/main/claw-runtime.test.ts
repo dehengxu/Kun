@@ -8,6 +8,7 @@ import {
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
   defaultScheduleSettings,
+  defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1,
   type ClawImChannelV1,
@@ -15,6 +16,7 @@ import {
   type ModelProviderProfileV1
 } from '../shared/app-settings'
 import { createClawRuntime } from './claw-runtime'
+import type { RuntimeRequestFn } from './claw-runtime-helpers'
 
 function buildSettings(): AppSettingsV1 {
   return {
@@ -33,6 +35,7 @@ function buildSettings(): AppSettingsV1 {
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
     schedule: defaultScheduleSettings(),
+    workflow: defaultWorkflowSettings(),
     claw: {
       ...defaultClawSettings(),
       enabled: true,
@@ -983,7 +986,7 @@ describe('ClawRuntime', () => {
     settings.claw.im.enabled = true
     settings.claw.im.responseTimeoutMs = 2_000
     settings.agents.kun.providerId = 'xiaomi'
-    settings.agents.kun.model = 'mimo-v2-flash'
+    settings.agents.kun.model = 'mimo-v2.5'
     settings.provider.providers = [
       ...settings.provider.providers,
       buildModelProvider({
@@ -992,15 +995,15 @@ describe('ClawRuntime', () => {
         apiKey: 'sk-xiaomi',
         baseUrl: 'https://api.mimo.example/v1',
         endpointFormat: 'chat_completions',
-        models: ['mimo-v2-flash']
+        models: ['mimo-v2.5']
       })
     ]
     const runtimeRequest = vi.fn(async (requestSettings: AppSettingsV1, path, init) => {
       expect(requestSettings.agents.kun.providerId).toBe('xiaomi')
-      expect(requestSettings.agents.kun.model).toBe('mimo-v2-flash')
+      expect(requestSettings.agents.kun.model).toBe('mimo-v2.5')
       if (path === '/v1/threads/thr_xiaomi/turns' && init?.method === 'POST') {
         const body = JSON.parse(init?.body ?? '{}') as { model?: string }
-        expect(body.model).toBe('mimo-v2-flash')
+        expect(body.model).toBe('mimo-v2.5')
         return { ok: true, status: 202, body: JSON.stringify({ threadId: 'thr_xiaomi', turnId: 'turn_xiaomi' }) }
       }
       if (path === '/v1/threads/thr_xiaomi' && init?.method === 'GET') {
@@ -3640,8 +3643,8 @@ describe('ClawRuntime handleFeishuMessage streaming', () => {
       .set(channelId, bridge)
   }
 
-  function makeTurnRequest(): ReturnType<typeof vi.fn> {
-    return vi.fn(async (_settings, path) => {
+  function makeTurnRequest(): RuntimeRequestFn {
+    const request: RuntimeRequestFn = async (_settings, path) => {
       if (path === '/v1/threads/thr_1/turns') {
         return {
           ok: true,
@@ -3650,7 +3653,8 @@ describe('ClawRuntime handleFeishuMessage streaming', () => {
         }
       }
       throw new Error(`unexpected path ${path}`)
-    })
+    }
+    return vi.fn(request) as unknown as RuntimeRequestFn
   }
 
   it('routes through runStreamingReply when channel.feishuStream=true', async () => {

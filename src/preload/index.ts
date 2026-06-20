@@ -1,8 +1,16 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { KunGuiApi } from '../shared/kun-gui-api'
 
+// The preload runs sandboxed (webPreferences.sandbox = true), so it cannot
+// require node built-ins like node:os. The home dir is passed in from the main
+// process via additionalArguments and read off process.argv instead.
+const HOME_DIR_ARG = '--kun-home-dir='
+const homeDirFromArgs =
+  process.argv.find((arg) => arg.startsWith(HOME_DIR_ARG))?.slice(HOME_DIR_ARG.length) ?? ''
+
 const api = {
   platform: process.platform,
+  homeDir: homeDirFromArgs,
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (partial) =>
     ipcRenderer.invoke('settings:set', partial),
@@ -19,10 +27,22 @@ const api = {
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
   runScheduleTask: (taskId) =>
     ipcRenderer.invoke('schedule:task:run', taskId),
+  getWorkflowStatus: () => ipcRenderer.invoke('workflow:status'),
+  runWorkflow: (workflowId, input) => ipcRenderer.invoke('workflow:run', workflowId, input),
+  stopWorkflow: (workflowId) => ipcRenderer.invoke('workflow:stop', workflowId),
+  runWorkflowNode: (workflowId, nodeId) =>
+    ipcRenderer.invoke('workflow:node:run', { workflowId, nodeId }),
+  testWorkflowNode: (workflowId, nodeId, mockJson) =>
+    ipcRenderer.invoke('workflow:node:test', { workflowId, nodeId, mockJson }),
+  resolveWorkflowApproval: (token, decision) =>
+    ipcRenderer.invoke('workflow:approval:resolve', { token, decision }),
+  checkWorkflowCode: (language, code) => ipcRenderer.invoke('workflow:code:check', { language, code }),
   startClawImInstallQr: (provider, options) =>
     ipcRenderer.invoke('claw:im-install:qrcode', { provider, isLark: options?.isLark }),
   pollClawImInstall: (provider, deviceCode) =>
     ipcRenderer.invoke('claw:im-install:poll', { provider, deviceCode }),
+  connectTelegramBot: (botToken, allowedChatIds) =>
+    ipcRenderer.invoke('claw:im-install:telegram-token', { botToken, allowedChatIds }),
   pickWorkspaceDirectory: (defaultPath) =>
     ipcRenderer.invoke('workspace:pick-directory', defaultPath),
   confirmDialog: (options) =>
@@ -61,6 +81,18 @@ const api = {
     ipcRenderer.invoke('git:switch-branch', { workspaceRoot, branch }),
   createAndSwitchGitBranch: (workspaceRoot, branch) =>
     ipcRenderer.invoke('git:create-and-switch-branch', { workspaceRoot, branch }),
+  createGitCheckpoint: (payload) =>
+    ipcRenderer.invoke('git:checkpoint:create', payload),
+  restoreGitCheckpoint: (payload) =>
+    ipcRenderer.invoke('git:checkpoint:restore', payload),
+  checkoutGitBranchWorktree: (workspaceRoot, branch) =>
+    ipcRenderer.invoke('git:checkout-branch-worktree', { workspaceRoot, branch }),
+  createGitBranchWorktree: (workspaceRoot, branch) =>
+    ipcRenderer.invoke('git:create-branch-worktree', { workspaceRoot, branch }),
+  listGitBranchWorktrees: (params) =>
+    ipcRenderer.invoke('git:branch-worktrees', params),
+  removeGitBranchWorktree: (params) =>
+    ipcRenderer.invoke('git:remove-branch-worktree', params),
   acquireWorktree: (params) =>
     ipcRenderer.invoke('worktree:acquire', params),
   releaseWorktree: (params) =>
@@ -184,6 +216,14 @@ const api = {
     ) => handler(payload)
     ipcRenderer.on('claw:channel-activity', wrapped)
     return () => ipcRenderer.removeListener('claw:channel-activity', wrapped)
+  },
+  onTrayAction: (handler) => {
+    const wrapped = (
+      _: Electron.IpcRendererEvent,
+      payload: Parameters<typeof handler>[0]
+    ) => handler(payload)
+    ipcRenderer.on('tray:action', wrapped)
+    return () => ipcRenderer.removeListener('tray:action', wrapped)
   },
   onRuntimeStatus: (handler) => {
     const wrapped = (

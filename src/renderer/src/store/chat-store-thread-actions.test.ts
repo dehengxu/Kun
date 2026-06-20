@@ -68,6 +68,11 @@ function buildHarness(): {
   return { actions, state }
 }
 
+function expectSink(sink: ThreadEventSink | null): ThreadEventSink {
+  expect(sink).not.toBeNull()
+  return sink as ThreadEventSink
+}
+
 describe('chat-store-thread-actions queued messages', () => {
   beforeEach(() => {
     rendererRuntimeClient.invalidateSettings()
@@ -160,7 +165,7 @@ describe('chat-store-thread-actions queued messages', () => {
     }
     registryMock.getProvider.mockReturnValue(provider)
     const saveSettingsSilent = vi.fn(async () => ({
-      agents: { kun: { providerId: 'xiaomi-token-plan', model: 'mimo-v2-flash' } },
+      agents: { kun: { providerId: 'xiaomi-token-plan', model: 'mimo-v2.5' } },
       codePromptPrefix: ''
     }))
     const restartRuntime = vi.fn(async () => undefined)
@@ -177,20 +182,20 @@ describe('chat-store-thread-actions queued messages', () => {
     })
     const { actions, state } = buildHarness()
     state.busy = false
-    state.composerModel = 'mimo-v2-flash'
+    state.composerModel = 'mimo-v2.5'
     state.composerProviderId = 'xiaomi-token-plan'
 
     await expect(actions.sendMessage('hello', 'agent')).resolves.toBe(true)
 
     expect(saveSettingsSilent).toHaveBeenCalledWith({
-      agents: { kun: { providerId: 'xiaomi-token-plan', model: 'mimo-v2-flash' } }
+      agents: { kun: { providerId: 'xiaomi-token-plan', model: 'mimo-v2.5' } }
     })
     expect(restartRuntime).toHaveBeenCalledTimes(1)
     expect(provider.connect).toHaveBeenCalledTimes(1)
     expect(provider.sendUserMessage).toHaveBeenCalledWith(
       'thr_existing',
       'hello',
-      expect.objectContaining({ model: 'mimo-v2-flash' })
+      expect.objectContaining({ model: 'mimo-v2.5' })
     )
   })
 
@@ -291,13 +296,11 @@ describe('chat-store-thread-actions subscribeThreadEventsLive', () => {
     // The chat view switches to the live thread.
     expect(state.activeThreadId).toBe('thr_live')
     // SSE-sourced deltas flow into the chat-store's live state.
-    expect(capturedSink).not.toBeNull()
-    if (capturedSink) {
-      capturedSink.onDeltas([{ kind: 'agent_message', text: 'hello', seq: 1 } as never])
-      expect(state.liveAssistant).toBe('hello')
-      capturedSink.onDeltas([{ kind: 'agent_message', text: ' world', seq: 2 } as never])
-      expect(state.liveAssistant).toBe('hello world')
-    }
+    const sink = expectSink(capturedSink)
+    sink.onDeltas([{ kind: 'agent_message', text: 'hello', seq: 1 }])
+    expect(state.liveAssistant).toBe('hello')
+    sink.onDeltas([{ kind: 'agent_message', text: ' world', seq: 2 }])
+    expect(state.liveAssistant).toBe('hello world')
   })
 
   it('merges fetched history without overwriting live buffers, and takes lastSeq = max(fetched, current)', async () => {
@@ -336,10 +339,9 @@ describe('chat-store-thread-actions subscribeThreadEventsLive', () => {
     expect(state.blocks.length).toBeGreaterThan(0)
     expect(state.blocks[0].id).toBe('b1')
     // SSE deltas that arrived during the fetch are preserved.
-    if (capturedSink) {
-      capturedSink.onDeltas([{ kind: 'agent_message', text: 'live text', seq: 8 } as never])
-      expect(state.liveAssistant).toBe('live text')
-    }
+    const sink = expectSink(capturedSink)
+    sink.onDeltas([{ kind: 'agent_message', text: 'live text', seq: 8 }])
+    expect(state.liveAssistant).toBe('live text')
     // lastSeq is bumped to the max of fetched and current (SSE advanced it).
     expect(state.lastSeq).toBeGreaterThanOrEqual(8)
   })
@@ -368,11 +370,9 @@ describe('chat-store-thread-actions subscribeThreadEventsLive', () => {
     await new Promise((r) => setTimeout(r, 0))
 
     // SSE is still open and deltas still flow.
-    expect(capturedSink).not.toBeNull()
-    if (capturedSink) {
-      capturedSink.onDeltas([{ kind: 'agent_message', text: 'still works', seq: 1 } as never])
-      expect(state.liveAssistant).toBe('still works')
-    }
+    const sink = expectSink(capturedSink)
+    sink.onDeltas([{ kind: 'agent_message', text: 'still works', seq: 1 }])
+    expect(state.liveAssistant).toBe('still works')
     // Error is surfaced.
     expect(state.error).toBeTruthy()
   })

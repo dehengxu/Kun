@@ -6,6 +6,7 @@ import {
   CLAW_MODEL_IDS,
   isComposerChatModelId,
   modelProfileSupportsTextChat,
+  modelSupportsImageInput,
   type ClawImAgentProfileV1,
   type ClawImChannelV1,
   type ClawImPlatformCredentialV1,
@@ -29,6 +30,7 @@ const CODE_WORKSPACE_ROOTS_STORAGE_KEY = 'kun.codeWorkspaceRoots.v1'
 export const MAX_CODE_WORKSPACE_ROOTS = 30
 export const MAX_THREAD_COMPOSER_SELECTIONS = 500
 export const MAX_TURN_MODEL_LABELS = 500
+export const DEFAULT_COMPOSER_CONTEXT_WINDOW_TOKENS = 128_000
 
 export type ThreadComposerSelection = {
   model: string
@@ -119,6 +121,54 @@ export function providerIdForComposerModel(
   return modelGroups.find((group) => modelGroupHasModel(group, model))?.providerId ?? ''
 }
 
+export function resolveComposerContextWindowTokens(
+  modelGroups: readonly ModelProviderModelGroup[],
+  modelId: string,
+  providerId: string
+): number | undefined {
+  if (!modelId.trim()) return undefined
+  const profile = modelProfileForComposerSelection(modelGroups, modelId, providerId)
+  if (typeof profile?.contextWindowTokens === 'number' && profile.contextWindowTokens > 0) {
+    return profile.contextWindowTokens
+  }
+  return DEFAULT_COMPOSER_CONTEXT_WINDOW_TOKENS
+}
+
+export function canSwitchComposerModel(
+  lockVisionToTextSwitch: boolean,
+  modelGroups: readonly ModelProviderModelGroup[],
+  currentModelId: string,
+  currentProviderId: string,
+  nextModelId: string,
+  nextProviderId: string
+): boolean {
+  if (!lockVisionToTextSwitch) return true
+  const currentProfile = modelProfileForComposerSelection(modelGroups, currentModelId, currentProviderId)
+  if (!modelSupportsImageInput(currentProfile)) return true
+  const nextProfile = modelProfileForComposerSelection(modelGroups, nextModelId, nextProviderId)
+  return modelSupportsImageInput(nextProfile)
+}
+
+function modelProfileForComposerSelection(
+  modelGroups: readonly ModelProviderModelGroup[],
+  modelId: string,
+  providerId: string
+): ReturnType<typeof modelProfileForComposerModel> {
+  const selectedProviderId = providerId.trim()
+  const selectedGroup = selectedProviderId
+    ? modelGroups.find((group) => group.providerId === selectedProviderId)
+    : undefined
+  if (selectedGroup && modelGroupHasModel(selectedGroup, modelId)) {
+    return modelProfileForComposerModel(selectedGroup, modelId)
+  }
+  for (const group of modelGroups) {
+    if (!modelGroupHasModel(group, modelId)) continue
+    const profile = modelProfileForComposerModel(group, modelId)
+    if (profile) return profile
+  }
+  return undefined
+}
+
 function modelGroupHasModel(group: ModelProviderModelGroup, modelId: string): boolean {
   const normalized = normalizeComposerModelId(modelId)
   if (!normalized) return false
@@ -165,7 +215,11 @@ function modelProfileForComposerModel(
   const key = normalizeComposerModelId(model)
   if (!key) return undefined
   const profiles = group.modelProfiles ?? {}
-  return profiles[key] ?? profiles[model]
+  const direct = profiles[key] ?? profiles[model]
+  if (direct) return direct
+  return Object.values(profiles).find((profile) =>
+    profile.aliases?.some((alias) => normalizeComposerModelId(alias) === key)
+  )
 }
 
 function normalizeComposerModelId(modelId: string): string {

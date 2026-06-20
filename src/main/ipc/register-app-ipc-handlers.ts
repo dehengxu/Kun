@@ -13,7 +13,11 @@ import {
   type ClawRuntimeStatus,
   type ScheduleRunResult,
   type ScheduleRuntimeStatus,
-  type ScheduleTaskFromTextResult
+  type ScheduleTaskFromTextResult,
+  type WorkflowCodeCheckResult,
+  type WorkflowNodeTestResult,
+  type WorkflowRunResult,
+  type WorkflowRuntimeStatus
 } from '../../shared/app-settings'
 import type {
   ClawImInstallPollResult,
@@ -30,6 +34,7 @@ import type { GuiUpdateDownloadResult, GuiUpdateInfo, GuiUpdateInstallResult, Gu
 import {
   clawMirrorPayloadSchema,
   clawImInstallPollPayloadSchema,
+  clawImTelegramTokenPayloadSchema,
   confirmDialogPayloadSchema,
   clawTaskFromTextPayloadSchema,
   computerUsePermissionKindSchema,
@@ -37,6 +42,9 @@ import {
   desktopCommandSchema,
   defaultPathSchema,
   gitBranchPayloadSchema,
+  gitCheckpointCreatePayloadSchema,
+  gitCheckpointRestorePayloadSchema,
+  gitWorktreeRemoveSchema,
   guiUpdateChannelSchema,
   logErrorPayloadSchema,
   notificationPayloadSchema,
@@ -58,6 +66,10 @@ import {
   skillSaveFilePayloadSchema,
   settingsPatchSchema,
   streamIdSchema,
+  workflowRunNodePayloadSchema,
+  workflowTestNodePayloadSchema,
+  workflowResolveApprovalPayloadSchema,
+  workflowCodeCheckPayloadSchema,
   uiPluginIdPayloadSchema,
   workspaceDirectoryCreatePayloadSchema,
   workspaceClipboardImageSavePayloadSchema,
@@ -85,7 +97,19 @@ import type { JsonSettingsStore } from '../settings-store'
 import { probeModelProvider } from '../provider-connection'
 import type { ClawRuntime } from '../claw-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
-import { createAndSwitchGitBranch, getGitBranches, switchGitBranch } from '../services/git-service'
+import { verifyTelegramBotToken } from '../telegram-runtime'
+import type { WorkflowRuntime } from '../workflow-runtime'
+import { checkWorkflowCode } from '../workflow-runtime'
+import {
+  checkoutGitBranchWorktree,
+  createAndSwitchGitBranch,
+  createGitBranchWorktree,
+  getGitBranches,
+  listGitBranchWorktrees,
+  removeGitBranchWorktree,
+  switchGitBranch
+} from '../services/git-service'
+import { createGitCheckpoint, restoreGitCheckpoint } from '../services/git-checkpoint-service'
 import {
   abortMerge,
   abortRebase,
@@ -168,6 +192,7 @@ type RegisterAppIpcHandlersOptions = {
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   getClawRuntime: () => ClawRuntime | null
   getScheduleRuntime: () => ScheduleRuntime | null
+  getWorkflowRuntime: () => WorkflowRuntime | null
   startFeishuInstallQrcode: (isLark: boolean) => Promise<ClawImInstallQrResult>
   pollFeishuInstall: (deviceCode: string) => Promise<ClawImInstallPollResult>
   startWeixinInstallQrcode: (weixinBridgeUrl?: string) => Promise<ClawImInstallQrResult>
@@ -344,6 +369,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     fetchUpstreamModels,
     getClawRuntime,
     getScheduleRuntime,
+    getWorkflowRuntime,
     startFeishuInstallQrcode,
     pollFeishuInstall,
     startWeixinInstallQrcode,
@@ -498,6 +524,57 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     return scheduleRuntime.runTask(normalizedTaskId)
   })
 
+  ipcMain.handle('workflow:status', async (): Promise<WorkflowRuntimeStatus> =>
+    getWorkflowRuntime()?.status() ?? {
+      runningWorkflowIds: [],
+      nodeStatus: {},
+      nodeResults: {},
+      powerSaveBlockerActive: false,
+      pendingApprovals: []
+    }
+  )
+
+  ipcMain.handle('workflow:run', async (_, workflowId: unknown, input?: unknown): Promise<WorkflowRunResult> => {
+    const normalizedId = parseIpcPayload('workflow:run', streamIdSchema, workflowId)
+    const workflowRuntime = getWorkflowRuntime()
+    if (!workflowRuntime) return { ok: false, message: 'Workflow runtime is not initialized.' }
+    // input is validated/coerced against the trigger's input schema inside runWorkflow.
+    return workflowRuntime.runWorkflow(normalizedId, input)
+  })
+
+  ipcMain.handle('workflow:stop', async (_, workflowId: unknown): Promise<WorkflowRunResult> => {
+    const normalizedId = parseIpcPayload('workflow:stop', streamIdSchema, workflowId)
+    const workflowRuntime = getWorkflowRuntime()
+    if (!workflowRuntime) return { ok: false, message: 'Workflow runtime is not initialized.' }
+    return workflowRuntime.stopWorkflow(normalizedId)
+  })
+
+  ipcMain.handle('workflow:node:run', async (_, payload: unknown): Promise<WorkflowRunResult> => {
+    const request = parseIpcPayload('workflow:node:run', workflowRunNodePayloadSchema, payload)
+    const workflowRuntime = getWorkflowRuntime()
+    if (!workflowRuntime) return { ok: false, message: 'Workflow runtime is not initialized.' }
+    return workflowRuntime.runSingleNode(request.workflowId, request.nodeId)
+  })
+
+  ipcMain.handle('workflow:node:test', async (_, payload: unknown): Promise<WorkflowNodeTestResult> => {
+    const request = parseIpcPayload('workflow:node:test', workflowTestNodePayloadSchema, payload)
+    const workflowRuntime = getWorkflowRuntime()
+    if (!workflowRuntime) return { ok: false, message: 'Workflow runtime is not initialized.' }
+    return workflowRuntime.testNode(request.workflowId, request.nodeId, request.mockJson)
+  })
+
+  ipcMain.handle('workflow:approval:resolve', async (_, payload: unknown): Promise<{ ok: boolean }> => {
+    const request = parseIpcPayload('workflow:approval:resolve', workflowResolveApprovalPayloadSchema, payload)
+    const workflowRuntime = getWorkflowRuntime()
+    if (!workflowRuntime) return { ok: false }
+    return { ok: workflowRuntime.resolveApproval(request.token, request.decision) }
+  })
+
+  ipcMain.handle('workflow:code:check', async (_, payload: unknown): Promise<WorkflowCodeCheckResult> => {
+    const request = parseIpcPayload('workflow:code:check', workflowCodeCheckPayloadSchema, payload)
+    return checkWorkflowCode(request.language, request.code)
+  })
+
   ipcMain.handle(
     'claw:channel:mirror',
     async (_, payload: unknown) => {
@@ -595,6 +672,18 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         return pollWeixinInstall(request.deviceCode)
       }
       return pollFeishuInstall(request.deviceCode)
+    }
+  )
+
+  ipcMain.handle(
+    'claw:im-install:telegram-token',
+    async (_, payload: unknown) => {
+      const request = parseIpcPayload(
+        'claw:im-install:telegram-token',
+        clawImTelegramTokenPayloadSchema,
+        payload
+      )
+      return verifyTelegramBotToken(request.botToken)
     }
   )
 
@@ -843,6 +932,43 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       return createAndSwitchGitBranch(request.workspaceRoot, request.branch)
     }
   )
+  ipcMain.handle('git:checkpoint:create', async (_, payload: unknown) => {
+    const request = parseIpcPayload('git:checkpoint:create', gitCheckpointCreatePayloadSchema, payload)
+    return createGitCheckpoint({
+      dataDir: await resolveKunThreadsDataDir(),
+      workspaceRoot: request.workspaceRoot,
+      threadId: request.threadId
+    })
+  })
+  ipcMain.handle('git:checkpoint:restore', async (_, payload: unknown) => {
+    const request = parseIpcPayload('git:checkpoint:restore', gitCheckpointRestorePayloadSchema, payload)
+    return restoreGitCheckpoint({
+      dataDir: await resolveKunThreadsDataDir(),
+      checkpointId: request.checkpointId
+    })
+  })
+  ipcMain.handle(
+    'git:checkout-branch-worktree',
+    async (_, payload: unknown) => {
+      const request = parseIpcPayload('git:checkout-branch-worktree', gitBranchPayloadSchema, payload)
+      return checkoutGitBranchWorktree(request.workspaceRoot, request.branch)
+    }
+  )
+  ipcMain.handle(
+    'git:create-branch-worktree',
+    async (_, payload: unknown) => {
+      const request = parseIpcPayload('git:create-branch-worktree', gitBranchPayloadSchema, payload)
+      return createGitBranchWorktree(request.workspaceRoot, request.branch)
+    }
+  )
+  ipcMain.handle('git:branch-worktrees', async (_, payload: unknown) => {
+    const request = parseIpcPayload('git:branch-worktrees', worktreePoolSchema, payload)
+    return listGitBranchWorktrees(request.projectPath, request.worktreeRoot)
+  })
+  ipcMain.handle('git:remove-branch-worktree', async (_, payload: unknown) => {
+    const request = parseIpcPayload('git:remove-branch-worktree', gitWorktreeRemoveSchema, payload)
+    return removeGitBranchWorktree(request)
+  })
 
   // Worktree pool management
   ipcMain.handle('worktree:acquire', async (_, payload: unknown) => {

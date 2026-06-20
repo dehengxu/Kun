@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { configureLogger } from './logger'
 import {
   defaultClawSettings,
+  DEFAULT_LOG_RETENTION_DAYS,
   defaultKeyboardShortcuts,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
   defaultScheduleSettings,
+  defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
 } from '../shared/app-settings'
@@ -47,6 +49,7 @@ function createSettings(binaryPath: string): AppSettingsV1 {
     write: defaultWriteSettings(),
     claw: defaultClawSettings(),
     schedule: defaultScheduleSettings(),
+    workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
     disabledSkillIds: []
@@ -96,7 +99,7 @@ beforeEach(() => {
 afterEach(async () => {
   const module = await import('./kun-process')
   await module.stopKunChildAndWait()
-  configureLogger({ dir: '', enabled: true, retentionDays: 2 })
+  configureLogger({ dir: '', enabled: true, retentionDays: DEFAULT_LOG_RETENTION_DAYS })
   if (tempRoot) {
     rmSync(tempRoot, { recursive: true, force: true })
     tempRoot = null
@@ -569,7 +572,9 @@ describe('syncGuiManagedKunConfig', () => {
         '--base-url',
         'http://127.0.0.1:9788',
         '--secret',
-        'top-secret'
+        'top-secret',
+        '--workflow-base-url',
+        'http://127.0.0.1:8799'
       ],
       env: {
         ELECTRON_RUN_AS_NODE: '1'
@@ -913,7 +918,9 @@ describe('syncGuiManagedKunConfig', () => {
         '/tmp/deepseek-gui-test-app/out/main/claw-schedule-mcp-node-entry.js',
         '--gui-schedule-mcp-server',
         '--base-url',
-        'http://127.0.0.1:8788'
+        'http://127.0.0.1:8788',
+        '--workflow-base-url',
+        'http://127.0.0.1:8799'
       ],
       env: {
         ELECTRON_RUN_AS_NODE: '1'

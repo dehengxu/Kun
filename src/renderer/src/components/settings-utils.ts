@@ -1,4 +1,5 @@
 import {
+  DEFAULT_LOG_RETENTION_DAYS,
   DEFAULT_GUI_UPDATE_CHANNEL,
   defaultKunRuntimeSettings,
   applyKunRuntimePatch,
@@ -9,6 +10,7 @@ import {
   mergeClawSettings,
   mergeModelProviderSettings,
   mergeScheduleSettings,
+  mergeWorkflowSettings,
   mergeWriteSettings,
   normalizeAppBehaviorSettings,
   normalizeClawSettings,
@@ -16,6 +18,7 @@ import {
   normalizeKeyboardShortcuts,
   normalizeModelProviderSettings,
   normalizeScheduleSettings,
+  normalizeWorkflowSettings,
   normalizeWriteSettings,
   type AppSettingsPatch,
   type AppSettingsV1
@@ -68,6 +71,7 @@ export function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): App
     write: mergeWriteSettings(safeCurrent.write, patch.write),
     claw: mergeClawSettings(safeCurrent.claw, patch.claw),
     schedule: mergeScheduleSettings(safeCurrent.schedule, patch.schedule),
+    workflow: mergeWorkflowSettings(safeCurrent.workflow, patch.workflow),
     guiUpdate: {
       ...safeCurrent.guiUpdate,
       ...(patch.guiUpdate ?? {})
@@ -96,7 +100,9 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
     workspaceRoot: typeof raw.workspaceRoot === 'string' ? raw.workspaceRoot : DEFAULT_WORKSPACE_ROOT,
     log: {
       enabled: raw.log?.enabled !== false,
-      retentionDays: typeof raw.log?.retentionDays === 'number' ? raw.log.retentionDays : 2
+      retentionDays: typeof raw.log?.retentionDays === 'number'
+        ? raw.log.retentionDays
+        : DEFAULT_LOG_RETENTION_DAYS
     },
     notifications: {
       turnComplete: raw.notifications?.turnComplete !== false
@@ -106,6 +112,7 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
     write: normalizeWriteSettings(raw.write),
     claw: normalizeClawSettings(raw.claw),
     schedule: normalizeScheduleSettings(raw.schedule),
+    workflow: normalizeWorkflowSettings(raw.workflow),
     guiUpdate: {
       channel: normalizeGuiUpdateChannel(raw.guiUpdate?.channel ?? DEFAULT_GUI_UPDATE_CHANNEL)
     },

@@ -617,6 +617,17 @@ html {
   background-repeat: no-repeat;
 }
 
+[data-cursor-spotlight='on'] .ds-windows-titlebar[data-cursor-spotlight-target]:hover {
+  background-image:
+    radial-gradient(
+      260px circle at var(--spotlight-x) var(--spotlight-y),
+      var(--ds-cursor-spotlight),
+      var(--ds-cursor-spotlight-edge) 38%,
+      transparent 72%
+    ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(246, 248, 251, 0.72));
+}
+
 [data-cursor-spotlight='off'] [data-cursor-spotlight-target] {
   background-image: none;
 }
@@ -625,6 +636,17 @@ html {
   background:
     linear-gradient(180deg, rgba(22, 29, 47, 0.92), rgba(14, 19, 32, 0.82)),
     var(--ds-bg-main);
+}
+
+[data-theme='dark'][data-cursor-spotlight='on'] .ds-windows-titlebar[data-cursor-spotlight-target]:hover {
+  background-image:
+    radial-gradient(
+      260px circle at var(--spotlight-x) var(--spotlight-y),
+      var(--ds-cursor-spotlight),
+      var(--ds-cursor-spotlight-edge) 38%,
+      transparent 72%
+    ),
+    linear-gradient(180deg, rgba(22, 29, 47, 0.92), rgba(14, 19, 32, 0.82));
 }
 
 [data-theme='dark'] .ds-window-control-btn--close:hover {
@@ -2947,6 +2969,11 @@ pre {
   min-width: 0;
 }
 
+.ds-composer-footer {
+  flex-wrap: nowrap;
+  overflow: visible;
+}
+
 .ds-composer-footer-left {
   flex: 1 1 auto;
   min-width: 0;
@@ -2967,7 +2994,8 @@ pre {
 
 .ds-composer-footer-hint {
   flex: 0 1 auto;
-  min-width: min(160px, 100%);
+  max-width: min(14rem, 34%);
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3005,13 +3033,12 @@ pre {
     padding-inline: 0.5rem;
   }
 
-  .ds-composer-footer-left,
-  .ds-composer-footer-hint {
+  .ds-composer-footer-left {
     flex-basis: 100%;
   }
 
   .ds-composer-footer-hint {
-    text-align: left;
+    display: none;
   }
 
   .ds-git-branch-picker {

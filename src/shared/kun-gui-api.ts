@@ -8,10 +8,17 @@ import type {
   ModelProviderModelProfileV1,
   ScheduleRunResult,
   ScheduleRuntimeStatus,
-  ScheduleTaskFromTextResult
+  ScheduleTaskFromTextResult,
+  WorkflowApprovalDecision,
+  WorkflowCodeCheckResult,
+  WorkflowCodeLanguage,
+  WorkflowNodeTestResult,
+  WorkflowRunResult,
+  WorkflowRuntimeStatus
 } from './app-settings'
 import type { EditorListResult, EditorOpenResult, OpenEditorPathOptions } from './editor'
-import type { GitBranchesResult } from './git-branches'
+import type { GitBranchesResult, GitBranchWorktreesResult, GitWorktreeCheckoutResult } from './git-branches'
+import type { GitCheckpointCreateResult, GitCheckpointRestoreResult } from './git-checkpoint'
 import type {
   MergeResult,
   SyncResult,
@@ -198,6 +205,10 @@ export type ClawImInstallPollResult =
   | { done: true; kind: 'feishu'; appId: string; appSecret: string; domain: string }
   | { done: true; kind: 'weixin'; accountId: string; sessionKey: string }
   | { done: false; error?: string }
+export type ClawImTelegramConnectErrorCode = 'invalid_format' | 'rejected' | 'network' | 'unknown'
+export type ClawImTelegramConnectResult =
+  | { ok: true; botId: number; botUsername: string; botFirstName: string }
+  | { ok: false; code: ClawImTelegramConnectErrorCode; message: string }
 export type ConfirmDialogOptions = {
   message: string
   detail?: string
@@ -244,6 +255,9 @@ export type LegacySessionImportResult =
 export type SseEventPayload = { streamId: string; events: unknown[] }
 export type SseEndPayload = { streamId: string }
 export type SseErrorPayload = { streamId: string; status?: number; message?: string }
+export type TrayActionPayload =
+  | { type: 'new-chat' }
+  | { type: 'open-thread'; threadId: string }
 
 export type ComputerUsePermissionKind = 'accessibility' | 'screenRecording'
 export type ComputerUsePermissionState = 'granted' | 'denied' | 'unknown'
@@ -259,6 +273,7 @@ export type ComputerUsePermissions = {
 
 export type KunGuiApi = {
   platform: string
+  homeDir: string
   getSettings: () => Promise<AppSettingsV1>
   setSettings: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   saveSettingsSilent: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
@@ -270,6 +285,13 @@ export type KunGuiApi = {
   runClawTask: (taskId: string) => Promise<ClawRunResult>
   getScheduleStatus: () => Promise<ScheduleRuntimeStatus>
   runScheduleTask: (taskId: string) => Promise<ScheduleRunResult>
+  getWorkflowStatus: () => Promise<WorkflowRuntimeStatus>
+  runWorkflow: (workflowId: string, input?: unknown) => Promise<WorkflowRunResult>
+  stopWorkflow: (workflowId: string) => Promise<WorkflowRunResult>
+  runWorkflowNode: (workflowId: string, nodeId: string) => Promise<WorkflowRunResult>
+  testWorkflowNode: (workflowId: string, nodeId: string, mockJson: string) => Promise<WorkflowNodeTestResult>
+  resolveWorkflowApproval: (token: string, decision: WorkflowApprovalDecision) => Promise<{ ok: boolean }>
+  checkWorkflowCode: (language: WorkflowCodeLanguage, code: string) => Promise<WorkflowCodeCheckResult>
   startClawImInstallQr: (
     provider: 'feishu' | 'weixin',
     options?: { isLark?: boolean }
@@ -278,6 +300,10 @@ export type KunGuiApi = {
     provider: 'feishu' | 'weixin',
     deviceCode: string
   ) => Promise<ClawImInstallPollResult>
+  connectTelegramBot: (
+    botToken: string,
+    allowedChatIds?: string
+  ) => Promise<ClawImTelegramConnectResult>
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
   confirmDialog: (options: ConfirmDialogOptions) => Promise<boolean>
   /** Detect importable conversations from a previous DeepSeek GUI install. */
@@ -300,6 +326,20 @@ export type KunGuiApi = {
   getGitBranches: (workspaceRoot: string) => Promise<GitBranchesResult>
   switchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
   createAndSwitchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
+  createGitCheckpoint: (params: {
+    workspaceRoot: string
+    threadId: string
+  }) => Promise<GitCheckpointCreateResult>
+  restoreGitCheckpoint: (params: {
+    checkpointId: string
+  }) => Promise<GitCheckpointRestoreResult>
+  checkoutGitBranchWorktree: (workspaceRoot: string, branch: string) => Promise<GitWorktreeCheckoutResult>
+  createGitBranchWorktree: (workspaceRoot: string, branch: string) => Promise<GitWorktreeCheckoutResult>
+  listGitBranchWorktrees: (params: {
+    projectPath: string
+    worktreeRoot?: string
+  }) => Promise<GitBranchWorktreesResult>
+  removeGitBranchWorktree: (params: { workspaceRoot: string; worktreePath: string }) => Promise<void>
   acquireWorktree: (params: {
     projectPath: string
     poolIndex: number
@@ -396,6 +436,7 @@ export type KunGuiApi = {
   onSseEnd: (handler: (payload: SseEndPayload) => void) => () => void
   onSseError: (handler: (payload: SseErrorPayload) => void) => () => void
   onClawChannelActivity: (handler: (payload: ClawChannelActivityPayload) => void) => () => void
+  onTrayAction: (handler: (payload: TrayActionPayload) => void) => () => void
   onRuntimeStatus: (handler: (payload: KunRuntimeStatusPayload) => void) => () => void
   mirrorClawChannelMessage: (
     threadId: string,

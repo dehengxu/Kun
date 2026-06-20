@@ -95,7 +95,7 @@ export type SettingsRouteSection =
   | 'easterEgg'
   | 'claw'
   | 'updates'
-export type AppRoute = 'chat' | 'write' | 'settings' | 'plugins' | 'claw' | 'schedule'
+export type AppRoute = 'chat' | 'write' | 'settings' | 'plugins' | 'claw' | 'schedule' | 'workflow'
 export type PluginHostRoute = 'chat' | 'claw'
 
 /**
@@ -201,6 +201,7 @@ export type ChatState = {
   openPlugins: (host?: PluginHostRoute) => void
   openClaw: () => void
   openSchedule: () => void
+  openWorkflow: () => void
   refreshClawChannels: () => Promise<void>
   addClawChannel: (
     provider: ClawImProvider,
@@ -234,8 +235,9 @@ export type ChatState = {
   createThread: (options?: {
     workspaceRoot?: string
     forceNew?: boolean
-    /** When true, acquire a worktree pool slot as the thread workspace. */
+    /** When true, checkout the selected branch into an isolated worktree. */
     useWorktreePool?: boolean
+    worktreeBranch?: string
   }) => Promise<void>
   selectThread: (id: string) => Promise<void>
   /**
@@ -257,6 +259,7 @@ export type ChatState = {
   archiveThread: (threadId: string, archived: boolean) => Promise<void>
   compactActiveThread: (reason?: string) => Promise<void>
   forkActiveThread: () => Promise<void>
+  forkThreadFromTurn: (turnId: string) => Promise<void>
   setActiveThreadGoal: (objective: string) => Promise<boolean>
   setActiveThreadGoalStatus: (status: ThreadGoalStatus) => Promise<boolean>
   clearActiveThreadGoal: () => Promise<boolean>

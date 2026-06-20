@@ -3,6 +3,7 @@ import type { AppSettingsV1 } from '@shared/app-settings'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import type { ChatState, ChatStoreGet, ChatStoreSet, InitialSetupMode, PluginHostRoute, SettingsRouteSection } from './chat-store-types'
 import {
+  canSwitchComposerModel,
   composerModelSelectable,
   persistComposerProviderId,
   providerIdForComposerModel,
@@ -42,6 +43,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   | 'openPlugins'
   | 'openClaw'
   | 'openSchedule'
+  | 'openWorkflow'
   | 'openInitialSetup'
   | 'closeInitialSetup'
   | 'selectInspectorItem'
@@ -72,7 +74,22 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
 
     setComposerModel: (modelId, providerId) => {
       const nextProviderId = providerId?.trim() || providerIdForComposerModel(get().composerModelGroups, modelId)
-      const activeThreadId = get().activeThreadId
+      const state = get()
+      const lockVisionToTextSwitch =
+        state.route === 'chat' &&
+        Array.isArray(state.blocks) &&
+        state.blocks.some((block) => block.kind === 'user')
+      if (!canSwitchComposerModel(
+        lockVisionToTextSwitch,
+        state.composerModelGroups,
+        state.composerModel,
+        state.composerProviderId,
+        modelId,
+        nextProviderId
+      )) {
+        return
+      }
+      const activeThreadId = state.activeThreadId
       if (activeThreadId) {
         rememberThreadComposerSelection(activeThreadId, modelId, nextProviderId)
       } else {
@@ -170,6 +187,10 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
 
     openSchedule: () => {
       set({ route: 'schedule' })
+    },
+
+    openWorkflow: () => {
+      set({ route: 'workflow' })
     },
 
     openInitialSetup: (mode: InitialSetupMode = 'required') =>

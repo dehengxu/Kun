@@ -5,6 +5,7 @@ import {
   kunSettingsPatch,
   DEFAULT_KUN_DATA_DIR,
   DEFAULT_KUN_MODEL,
+  DEFAULT_LOG_RETENTION_DAYS,
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_SANDBOX_MODE,
   DEFAULT_WEIXIN_BRIDGE_RPC_URL,
@@ -16,6 +17,7 @@ import {
   mergeScheduleSettings,
   defaultKunRuntimeSettings,
   defaultScheduleSettings,
+  defaultWorkflowSettings,
   defaultWriteSelectionAssistSettings,
   defaultWriteSettings,
   getModelProviderPreset,
@@ -58,6 +60,7 @@ function settings(): AppSettingsV1 {
     write: defaultWriteSettings(),
     claw: defaultClawSettings(),
     schedule: defaultScheduleSettings(),
+    workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
     disabledSkillIds: []
@@ -219,6 +222,17 @@ describe('kun defaults', () => {
         }
       }
     })
+  })
+})
+
+describe('log retention settings', () => {
+  it('defaults local error log retention to 3 days', () => {
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      log: undefined
+    } as unknown as AppSettingsV1)
+
+    expect(normalized.log.retentionDays).toBe(DEFAULT_LOG_RETENTION_DAYS)
   })
 })
 

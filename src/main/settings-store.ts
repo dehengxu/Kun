@@ -6,11 +6,13 @@ import {
   applyKunRuntimePatch,
   kunSettingsEnvelope,
   DEFAULT_GUI_UPDATE_CHANNEL,
+  DEFAULT_LOG_RETENTION_DAYS,
   DEFAULT_WRITE_WORKSPACE_ROOT,
   defaultClawSettings,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
   defaultScheduleSettings,
+  defaultWorkflowSettings,
   getKunRuntimeSettings,
   mergeKunRuntimeSettings,
   mergeModelProviderSettings,
@@ -18,6 +20,7 @@ import {
   mergeClawSettings,
   mergeAppBehaviorSettings,
   mergeScheduleSettings,
+  mergeWorkflowSettings,
   mergeWriteSettings,
   normalizeAppBehaviorSettings,
   normalizeKeyboardShortcuts,
@@ -204,7 +207,7 @@ const defaultSettings = (): AppSettingsV1 => ({
   workspaceRoot: DEFAULT_WORKSPACE_ROOT,
   log: {
     enabled: true,
-    retentionDays: 2
+    retentionDays: DEFAULT_LOG_RETENTION_DAYS
   },
   notifications: {
     turnComplete: true
@@ -218,7 +221,8 @@ const defaultSettings = (): AppSettingsV1 => ({
   disabledSkillIds: [],
   write: defaultWriteSettings(),
   claw: defaultClawSettings(),
-  schedule: defaultScheduleSettings()
+  schedule: defaultScheduleSettings(),
+  workflow: defaultWorkflowSettings()
 })
 
 function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
@@ -238,6 +242,7 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
     write: mergeWriteSettings(defaults.write, migrated.write),
     claw: mergeClawSettings(defaults.claw, migrated.claw),
     schedule: mergeScheduleSettings(defaults.schedule, migrated.schedule),
+    workflow: mergeWorkflowSettings(defaults.workflow, migrated.workflow),
     guiUpdate: { ...defaults.guiUpdate, ...migrated.guiUpdate },
     codePromptPrefix: typeof migrated.codePromptPrefix === 'string' ? migrated.codePromptPrefix : '',
     disabledSkillIds: normalizeDisabledSkillIds(migrated.disabledSkillIds)
@@ -426,6 +431,7 @@ export class JsonSettingsStore {
       write: mergeWriteSettings(cur.write, partial.write),
       claw: mergeClawSettings(cur.claw, partial.claw),
       schedule: mergeScheduleSettings(cur.schedule, partial.schedule),
+      workflow: mergeWorkflowSettings(cur.workflow, partial.workflow),
       guiUpdate: { ...cur.guiUpdate, ...(partial.guiUpdate ?? {}) }
     })
     await this.save(next)

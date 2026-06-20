@@ -1,3 +1,4 @@
+import { isAbsolute, relative, resolve } from 'node:path'
 import type { ModelClient, ModelRequest, ModelToolSpec } from '../ports/model-client.js'
 import type {
   ToolHost,
@@ -190,6 +191,7 @@ export const PLAN_MODE_INSTRUCTION = [
   'When you understand the task well enough, call the `create_plan` tool to save a complete implementation plan as Markdown.',
   'Use `operation: "draft"` for the first plan, and `operation: "refine"` when revising an existing plan; you may call `create_plan` multiple times as the plan evolves.',
   'Write concrete, actionable steps (summary, implementation steps, tests, risks) rather than vague intentions.',
+  'Favor the smallest plan that fully solves the task: question whether each proposed component, abstraction, dependency, config knob, or new file needs to exist at all (YAGNI), and prefer the standard library, a native platform feature, or an already-present dependency over new custom code. Do NOT trim correctness, input validation, error handling, security, or accessibility to make a plan smaller.',
   'After saving, give the user a short summary of the plan and what to review.'
 ].join('\n')
 
@@ -1182,6 +1184,12 @@ export class AgentLoop {
       ...((this.emptyPostToolRecoveryStepsByTurn.get(turnId) ?? 0) > 0
         ? [emptyPostToolRecoveryInstruction()]
         : []),
+      ...imageGenerationReferenceInstructions({
+        imageAttachments: attachments.imageAttachments,
+        textFallbacks: attachments.textFallbacks,
+        workspace: thread?.workspace ?? '',
+        tools: effectiveToolSpecs
+      }),
       ...memoryInstructions(memories),
       ...skillResolution.instructions,
       ...(userInputDisabled ? [userInputUnavailableInstruction()] : []),
@@ -1197,6 +1205,7 @@ export class AgentLoop {
       threadId,
       turnId,
       model,
+      ...(thread?.providerId?.trim() ? { providerId: thread.providerId.trim() } : {}),
       systemPrompt: this.opts.prefix.systemPrompt,
       ...(planTurnActive ? { modeInstruction: PLAN_MODE_INSTRUCTION } : {}),
       ...(contextInstructions.length ? { contextInstructions } : {}),
@@ -2544,7 +2553,8 @@ export class AgentLoop {
           mimeType: attachment.mimeType,
           dataBase64: attachment.data.toString('base64'),
           ...(attachment.width ? { width: attachment.width } : {}),
-          ...(attachment.height ? { height: attachment.height } : {})
+          ...(attachment.height ? { height: attachment.height } : {}),
+          ...(attachment.localFilePath ? { localFilePath: attachment.localFilePath } : {})
         })
         continue
       }
@@ -2651,6 +2661,45 @@ function attachmentRequestPipelineDetails(input: {
     ),
     textFallbackMimeTypes: [...new Set(input.textFallbacks.map((attachment) => attachment.mimeType))]
   }
+}
+
+function imageGenerationReferenceInstructions(input: {
+  imageAttachments: readonly ModelInputAttachment[]
+  textFallbacks: readonly ModelTextAttachmentFallback[]
+  workspace: string
+  tools: readonly Pick<ModelToolSpec, 'name'>[]
+}): string[] {
+  if (!input.tools.some((tool) => tool.name === 'generate_image')) return []
+
+  const references = [...input.imageAttachments, ...input.textFallbacks]
+    .filter((attachment) => attachment.mimeType.startsWith('image/'))
+    .map((attachment) => ({
+      name: attachment.name,
+      path: workspaceRelativeAttachmentPath(attachment.localFilePath, input.workspace)
+    }))
+    .filter((attachment): attachment is { name: string; path: string } => Boolean(attachment.path))
+
+  if (references.length === 0) return []
+  return [[
+    'Image-to-image reference images are available for this turn:',
+    ...references.map((reference) => `- ${reference.name}: ${reference.path}`),
+    'For image edits, restyles, redraws, or transformations, call `generate_image` with the matching workspace-relative path(s) in `reference_image_paths`.'
+  ].join('\n')]
+}
+
+function workspaceRelativeAttachmentPath(
+  localFilePath: string | undefined,
+  workspace: string
+): string | null {
+  const workspaceRoot = workspace.trim()
+  const rawPath = localFilePath?.trim()
+  if (!workspaceRoot || !rawPath) return null
+
+  const workspaceAbsolute = resolve(workspaceRoot)
+  const fileAbsolute = isAbsolute(rawPath) ? resolve(rawPath) : resolve(workspaceAbsolute, rawPath)
+  const relativePath = relative(workspaceAbsolute, fileAbsolute)
+  if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) return null
+  return relativePath.replace(/\\/g, '/')
 }
 
 function normalizeApprovalPolicy(
