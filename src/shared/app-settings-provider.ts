@@ -947,7 +947,30 @@ function withPresetModelProfiles(
       const aliases = normalizeProviderModels(presetProfile.aliases)
       if (!aliases.some((alias) => knownModelKeys.has(normalizeModelKey(alias)))) continue
     }
-    merged[modelId] = normalizeModelProviderModelProfile(presetProfile)
+    const presetNormalized = normalizeModelProviderModelProfile(presetProfile)
+    const storedProfile = stored[modelId]
+    if (!storedProfile) {
+      merged[modelId] = presetNormalized
+      continue
+    }
+    // User has an override: their fields win, preset fills any gaps.
+    // Reasoning is shallow-merged so a user-supplied requestProtocol doesn't
+    // wipe out the preset's supportedEfforts list (or vice versa).
+    const { reasoning: presetReasoning, ...presetRest } = presetNormalized
+    const { reasoning: storedReasoning, ...storedRest } = storedProfile
+    const reasoning: ModelProviderReasoningCapabilityV1 | undefined =
+      storedReasoning || presetReasoning
+        ? {
+            supportedEfforts: storedReasoning?.supportedEfforts ?? presetReasoning!.supportedEfforts,
+            defaultEffort: storedReasoning?.defaultEffort ?? presetReasoning!.defaultEffort,
+            requestProtocol: storedReasoning?.requestProtocol ?? presetReasoning!.requestProtocol
+          }
+        : undefined
+    merged[modelId] = {
+      ...presetRest,
+      ...storedRest,
+      ...(reasoning ? { reasoning } : {})
+    }
   }
   return merged
 }
