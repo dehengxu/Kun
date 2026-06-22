@@ -1,0 +1,75 @@
+/* Settings page search filter.
+ *
+ * Each SettingRow carries [data-setting-row] and a pre-rendered
+ * [data-search-keywords] string (lowercased). The settings page runs a
+ * useEffect on every query change that flips [data-search-match] to
+ * "true" or "false" on each row. This file just styles the two states.
+ *
+ * The dim-and-pointer-events-none combo keeps matched rows in their
+ * natural layout position so the user can see *where* the setting lives
+ * relative to its neighbors (helpful for orientation), without making
+ * the row look interactive.
+ */
+
+[data-setting-row][data-search-match='false'] {
+  opacity: 0.32;
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+
+[data-setting-row][data-search-match='true'] {
+  transition: opacity 120ms ease-out;
+}
+
+/* When a settings card has zero matching rows under an active search,
+ * collapse it so the page stays scannable. The `[data-search-match]`
+ * selector only fires after the effect has run, so on first paint
+ * (before the effect) every card stays expanded — which is what we
+ * want when there is no active query. */
+[data-settings-card]:not([data-search-has-match='true']) {
+  opacity: 0.45;
+  transition: opacity 120ms ease-out;
+}
+
+/* Cross-category search: when a search is active, every section is
+ * always in the DOM (the SettingsView renders all SETTINGS_SECTIONS
+ * unconditionally) and we use `[data-search-active]` plus
+ * `[data-section-active]` to control visibility. When not searching
+ * we only show the active section. */
+[data-search-active='false'] [data-category][data-section-active='false'] {
+  display: none;
+}
+
+[data-search-active='true'] [data-category] {
+  display: block;
+}
+
+/* Sidebar cross-category match indicator.
+ *
+ * While a search is active, the SettingsView effect writes
+ * [data-search-match-count] on every sidebar button. Non-zero count
+ * paints a small numeric pill in the top-right corner of the button.
+ * No background tint, no glow, no hover light effect — the menu
+ * stays visually quiet and the only match indicator is the small
+ * accent-colored count badge. The [data-search-active='true']
+ * ancestor gate is defense-in-depth so a stale count can never
+ * re-introduce the badge without an active search.
+ */
+[data-search-active='true'] [data-settings-sidebar-button][data-search-match-count]:not([data-search-match-count='0'])::after {
+  content: attr(data-search-match-count);
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: var(--ds-accent);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 18px;
+  border-radius: 9px;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}

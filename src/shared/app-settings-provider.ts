@@ -1137,6 +1137,7 @@ function normalizeModelProviderSpeechCapability(
 }
 
 export function normalizeSpeechToTextProtocol(value: unknown): SpeechToTextProtocol {
+  if (value === 'local-whisper') return 'local-whisper'
   return value === 'mimo-asr' ? 'mimo-asr' : DEFAULT_SPEECH_TO_TEXT_PROTOCOL
 }
 

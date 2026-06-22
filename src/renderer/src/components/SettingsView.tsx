@@ -24,7 +24,13 @@ import type {
   CoreRuntimeToolDiagnosticsJson
 } from '../agent/kun-contract'
 import type { WriteInlineCompletionDebugEntry } from '@shared/write-inline-completion'
-import { applyCursorSpotlight, applyTheme, applyUiFontScale, applyWriteTypography } from '../lib/apply-theme'
+import {
+  applyCursorSpotlight,
+  applyCursorSpotlightColor,
+  applyTheme,
+  applyUiFontScale,
+  applyWriteTypography
+} from '../lib/apply-theme'
 import { formatWorkspacePickerError } from '../lib/format-workspace-picker-error'
 import type { SkillRootListItem } from '@shared/kun-gui-api'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
@@ -63,10 +69,40 @@ import {
   ProvidersSettingsSection,
   SpeechToTextSettingsSection,
   UpdatesSettingsSection,
-  WriteSettingsSection
+  WriteSettingsSection,
+  TerminalSettingsSection
 } from './settings-sections'
 
-type SettingsCategory = 'general' | 'providers' | 'write' | 'mediaGeneration' | 'speechToText' | 'agents' | 'archives' | 'permissions' | 'worktree' | 'memory' | 'shortcuts' | 'easterEgg' | 'claw' | 'updates' | 'debug'
+type SettingsCategory = 'general' | 'providers' | 'write' | 'mediaGeneration' | 'speechToText' | 'agents' | 'archives' | 'permissions' | 'worktree' | 'memory' | 'shortcuts' | 'easterEgg' | 'claw' | 'updates' | 'debug' | 'terminal'
+
+/**
+ * Sections that actually render something. `permissions` is part of the
+ * SettingsCategory union (callers from chat-store-claw-actions etc. set
+ * `category='permissions'`) but no section file backs it today, so it
+ * lives outside this list and falls through to the active-route's
+ * "permissions" card inside AgentsSettingsSection instead.
+ */
+const SETTINGS_SECTIONS: ReadonlyArray<{
+  id: SettingsCategory
+  Component: (props: { ctx: Record<string, unknown> }) => ReactElement
+}> = [
+  { id: 'general', Component: GeneralSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'providers', Component: ProvidersSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'write', Component: WriteSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'mediaGeneration', Component: MediaGenerationSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'speechToText', Component: SpeechToTextSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'agents', Component: AgentsSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'archives', Component: ArchivedThreadsSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'worktree', Component: WorktreeSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'memory', Component: MemorySettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'shortcuts', Component: KeyboardShortcutsSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'easterEgg', Component: EasterEggSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'claw', Component: ClawSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'updates', Component: UpdatesSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'terminal', Component: TerminalSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'debug', Component: LlmDebugSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement }
+]
+
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 type SettingsPatch = AppSettingsPatch
 type InlineNotice = {
@@ -107,6 +143,12 @@ export function SettingsView(): ReactElement {
   const [showRuntimeToken, setShowRuntimeToken] = useState(false)
   const [logPath, setLogPath] = useState('')
   const [logDirOpenError, setLogDirOpenError] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchStats, setSearchStats] = useState<{ matched: number; total: number }>({
+    matched: 0,
+    total: 0
+  })
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
   const [skillRoots, setSkillRoots] = useState<SkillRootListItem[]>([])
   const [skillRootsLoading, setSkillRootsLoading] = useState(false)
   const [skillNotice, setSkillNotice] = useState<InlineNotice | null>(null)
@@ -136,6 +178,8 @@ export function SettingsView(): ReactElement {
   const skillSectionRef = useRef<HTMLDivElement | null>(null)
   const mcpSectionRef = useRef<HTMLDivElement | null>(null)
   const permissionsSectionRef = useRef<HTMLDivElement | null>(null)
+  const runtimeTuningSectionRef = useRef<HTMLDivElement | null>(null)
+  const settingsContentRef = useRef<HTMLDivElement | null>(null)
   const formTheme = form?.theme
   const formUiFontScale = form?.uiFontScale
   const writeTypography = form?.write?.typography
@@ -144,6 +188,7 @@ export function SettingsView(): ReactElement {
   const formPort = formKun?.port
   const formGuiUpdateChannel = form?.guiUpdate?.channel
   const formCursorSpotlight = form?.cursorSpotlight
+  const formCursorSpotlightColor = form?.cursorSpotlightColor
   const settingsPlatform = typeof window !== 'undefined' ? window.kunGui?.platform ?? '' : ''
   const settingsHomeDir = typeof window !== 'undefined' ? window.kunGui?.homeDir ?? '' : ''
   const compactHomePath = useCallback((value: string): string =>
@@ -202,7 +247,8 @@ export function SettingsView(): ReactElement {
     if (typeof formCursorSpotlight === 'boolean') {
       applyCursorSpotlight(formCursorSpotlight)
     }
-  }, [formCursorSpotlight])
+    applyCursorSpotlightColor(formCursorSpotlightColor)
+  }, [formCursorSpotlight, formCursorSpotlightColor])
 
   // Live-preview the Write editor typography as the form changes, mirroring the
   // theme/scale preview above. Keyed on the scalar fields so it only re-applies
@@ -229,6 +275,97 @@ export function SettingsView(): ReactElement {
     if (typeof window.kunGui?.getLogPath !== 'function') return
     void window.kunGui.getLogPath().then((p) => setLogPath(p)).catch(() => undefined)
   }, [category])
+
+  // Settings search: walk all [data-setting-row] elements inside the content
+  // container and set [data-search-match] to "true"/"false" based on whether
+  // the row's keywords (rendered as [data-search-keywords] by SettingRow)
+  // contain every whitespace-separated token of the query. Keeps the search
+  // logic local to one place so individual sections don't have to know about
+  // it. Runs on every query change; ~50 rows is well under the cost
+  // threshold for a synchronous DOM walk.
+  useEffect(() => {
+    const root = settingsContentRef.current
+    if (!root) return
+    const rows = root.querySelectorAll<HTMLElement>('[data-setting-row]')
+    const sidebar = document.querySelector<HTMLElement>('[data-settings-sidebar]')
+    const trimmed = searchQuery.trim().toLowerCase()
+    const tokens = trimmed.split(/\s+/).filter(Boolean)
+
+    // No active search: reset every row to "match" (so nothing dims),
+    // zero the per-category counts, and skip the rest of the walk.
+    if (tokens.length === 0) {
+      rows.forEach((row) => {
+        row.dataset.searchMatch = 'true'
+      })
+      if (sidebar) {
+        sidebar.querySelectorAll<HTMLElement>('[data-settings-sidebar-button]').forEach((btn) => {
+          btn.dataset.searchMatchCount = '0'
+        })
+      }
+      setSearchStats({ matched: rows.length, total: rows.length })
+      return
+    }
+
+    let matched = 0
+    // Per-category count so the sidebar can show a halo + badge on the
+    // matching categories even when their content is currently hidden
+    // (i.e. when not searching, only the active category is in the DOM,
+    // so the walk only finds rows in that category — counts for inactive
+    // categories are stale but irrelevant, since the halo only renders
+    // while a search is active).
+    const byCategory = new Map<string, number>()
+    rows.forEach((row) => {
+      const haystack = row.dataset.searchKeywords ?? ''
+      const isMatch = tokens.every((tok) => haystack.includes(tok))
+      row.dataset.searchMatch = isMatch ? 'true' : 'false'
+      if (isMatch) {
+        matched += 1
+        const cat = row.closest('[data-category]')?.getAttribute('data-category')
+        if (cat) byCategory.set(cat, (byCategory.get(cat) ?? 0) + 1)
+      }
+    })
+    setSearchStats({ matched, total: rows.length })
+    // Mark each SettingsCard with whether any of its rows matched so the
+    // search CSS can dim cards with zero hits (and keep full-opacity cards
+    // visually anchored to their position).
+    const cards = root.querySelectorAll<HTMLElement>('[data-settings-card]')
+    cards.forEach((card) => {
+      const hasMatch = card.querySelector('[data-setting-row][data-search-match="true"]') !== null
+      card.dataset.searchHasMatch = hasMatch ? 'true' : 'false'
+    })
+    // Mirror per-category counts to the sidebar buttons. Sidebar lives
+    // outside the content root, so we walk it independently. The sidebar
+    // buttons already carry `data-category` (added in this change), so
+    // we can match by category id without prop drilling.
+    if (sidebar) {
+      sidebar.querySelectorAll<HTMLElement>('[data-settings-sidebar-button]').forEach((btn) => {
+        const cat = btn.dataset.category
+        if (!cat) return
+        btn.dataset.searchMatchCount = String(byCategory.get(cat) ?? 0)
+      })
+    }
+  }, [searchQuery, category, form])
+
+  // `/` focuses the search input (mirrors GitHub-style keyboard hint). Skip
+  // when the user is already typing in an input/textarea/contenteditable so
+  // the shortcut never hijacks normal text entry.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return
+      }
+      const input = searchInputRef.current
+      if (!input) return
+      event.preventDefault()
+      input.focus()
+      input.select()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const loadWriteDebugEntries = useCallback(async (): Promise<void> => {
     setWriteDebugLoading(true)
@@ -289,7 +426,7 @@ export function SettingsView(): ReactElement {
       return
     }
     if (settingsSection === 'permissions') {
-      setCategory('permissions')
+      setCategory('agents')
       return
     }
     if (settingsSection === 'archives') {
@@ -312,6 +449,10 @@ export function SettingsView(): ReactElement {
       setCategory('updates')
       return
     }
+    if (settingsSection === 'terminal') {
+      setCategory('terminal')
+      return
+    }
     setCategory('agents')
   }, [settingsSection])
 
@@ -329,12 +470,13 @@ export function SettingsView(): ReactElement {
       settingsSection === 'shortcuts' ||
       settingsSection === 'easterEgg' ||
       settingsSection === 'updates' ||
-      (category !== 'agents' && category !== 'permissions')
+      settingsSection === 'terminal' ||
+      category !== 'agents'
     ) {
       return
     }
     const refs: Record<
-      Exclude<SettingsRouteSection, 'general' | 'providers' | 'write' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'archives' | 'claw' | 'shortcuts' | 'easterEgg' | 'updates'>,
+      Exclude<SettingsRouteSection, 'general' | 'providers' | 'write' | 'imageGeneration' | 'mediaGeneration' | 'speechToText' | 'archives' | 'claw' | 'shortcuts' | 'easterEgg' | 'updates' | 'terminal'>,
       HTMLDivElement | null
     > = {
       agents: agentsSectionRef.current,
@@ -348,15 +490,6 @@ export function SettingsView(): ReactElement {
       target.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }, [category, form, settingsSection])
-
-  useEffect(() => {
-    if (!form || category !== 'permissions') return
-    const target = permissionsSectionRef.current
-    if (!target) return
-    window.requestAnimationFrame(() => {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
-  }, [category, form])
 
   useEffect(() => {
     return () => {
@@ -411,7 +544,7 @@ export function SettingsView(): ReactElement {
   }
 
   useEffect(() => {
-    if ((category !== 'agents' && category !== 'permissions') || mcpLoaded || mcpLoading) return
+    if (category !== 'agents' || mcpLoaded || mcpLoading) return
     void loadMcpConfig()
   }, [category, mcpLoaded, mcpLoading])
 
@@ -502,7 +635,7 @@ export function SettingsView(): ReactElement {
   }, [expandHomePath, formWorkspaceRoot])
 
   useEffect(() => {
-    if (category !== 'agents' && category !== 'permissions' && category !== 'memory') return
+    if (category !== 'agents' && category !== 'memory') return
     void refreshKunDiagnostics()
   }, [category, refreshKunDiagnostics])
 
@@ -601,9 +734,10 @@ export function SettingsView(): ReactElement {
     }
   }
 
-  const scrollToAgentSection = (target: 'agents' | 'skill' | 'mcp' | 'permissions'): void => {
+  const scrollToAgentSection = (target: 'agents' | 'runtime' | 'skill' | 'mcp' | 'permissions'): void => {
     const refs = {
       agents: agentsSectionRef.current,
+      runtime: runtimeTuningSectionRef.current,
       skill: skillSectionRef.current,
       mcp: mcpSectionRef.current,
       permissions: permissionsSectionRef.current
@@ -928,6 +1062,7 @@ export function SettingsView(): ReactElement {
     skillSectionRef,
     mcpSectionRef,
     permissionsSectionRef,
+    runtimeTuningSectionRef,
     skillRoots,
     skillRootsLoading,
     toggleSkillRoot,
@@ -972,11 +1107,19 @@ export function SettingsView(): ReactElement {
   }
 
   return (
-    <div className="ds-drag flex h-full min-h-0 w-full min-w-0 bg-ds-main">
+    <div
+      className="ds-drag flex h-full min-h-0 w-full min-w-0 bg-ds-main"
+      data-search-active={searchQuery.trim() ? 'true' : 'false'}
+    >
       <SettingsSidebar category={category} setCategory={setCategory} goBack={goBack} t={t} />
 
       <div className="ds-no-drag min-h-0 min-w-0 flex-1 overflow-y-auto px-10 py-10">
-        <div className="mx-auto max-w-3xl">
+        <div
+          className="mx-auto max-w-3xl"
+          ref={settingsContentRef}
+          data-active-category={category}
+          data-search-active={searchQuery.trim() ? 'true' : 'false'}
+        >
           {!activeApiKey.trim() ? (
             <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
               <div className="text-[15px] font-semibold">{t('apiKeyRequiredTitle')}</div>
@@ -1015,6 +1158,56 @@ export function SettingsView(): ReactElement {
             </span>
           </div>
 
+          <div className="ds-no-drag mb-6" data-settings-search>
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <input
+                  ref={searchInputRef}
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape' && searchQuery) {
+                      e.preventDefault()
+                      setSearchQuery('')
+                    }
+                  }}
+                  placeholder={t('settingsSearchPlaceholder')}
+                  aria-label={t('settingsSearchPlaceholder')}
+                  className="w-full rounded-xl border border-ds-border bg-ds-card px-3 py-2 pr-9 text-[14px] text-ds-ink shadow-sm placeholder:text-ds-faint focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                />
+                {searchQuery ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('')
+                      searchInputRef.current?.focus()
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full px-2 py-0.5 text-[12px] text-ds-muted hover:bg-ds-hover hover:text-ds-ink"
+                    aria-label={t('settingsSearchClear')}
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </div>
+              <kbd className="hidden shrink-0 rounded-lg border border-ds-border bg-ds-card px-2 py-1 text-[11px] font-medium text-ds-muted shadow-sm sm:inline">
+                /
+              </kbd>
+            </div>
+            {searchQuery.trim() ? (
+              <div className="mt-2 text-[12px] text-ds-muted">
+                {searchStats.total === 0
+                  ? t('settingsSearchEmpty')
+                  : searchStats.matched === 0
+                    ? t('settingsSearchNoMatch', { query: searchQuery })
+                    : t('settingsSearchCount', {
+                        matched: searchStats.matched,
+                        total: searchStats.total
+                      })}
+              </div>
+            ) : null}
+          </div>
+
           {saveStatus === 'error' && saveError ? (
             <div
               role="alert"
@@ -1024,20 +1217,21 @@ export function SettingsView(): ReactElement {
             </div>
           ) : null}
 
-          {category === 'general' ? <GeneralSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'providers' ? <ProvidersSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'write' ? <WriteSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'mediaGeneration' ? <MediaGenerationSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'speechToText' ? <SpeechToTextSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'agents' || category === 'permissions' ? <AgentsSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'archives' ? <ArchivedThreadsSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'worktree' ? <WorktreeSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'memory' ? <MemorySettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'shortcuts' ? <KeyboardShortcutsSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'easterEgg' ? <EasterEggSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'claw' ? <ClawSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'updates' ? <UpdatesSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'debug' ? <LlmDebugSettingsSection ctx={settingsSectionContext} /> : null}
+          {SETTINGS_SECTIONS.map(({ id, Component }) => {
+            // `permissions` is a valid SettingsCategory value (callers from
+            // chat-store-claw-actions etc. set it), and AgentsSettingsSection
+            // is the section that actually renders the permissions card.
+            const isActive = id === category || (id === 'agents' && category === 'permissions')
+            return (
+              <div
+                key={id}
+                data-category={id}
+                data-section-active={isActive ? 'true' : 'false'}
+              >
+                <Component ctx={settingsSectionContext} />
+              </div>
+            )
+          })}
         </div>
       </div>
       {saveStatus === 'error' && saveError ? (

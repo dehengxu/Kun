@@ -1,7 +1,7 @@
 import type { Dispatch, ReactElement, SetStateAction } from 'react'
-import { Archive, AudioLines, Bot, BrainCircuit, GitBranch, Bug, ChevronLeft, Globe, Keyboard, Mic, PencilLine, RefreshCw, ServerCog, Settings, ShieldCheck, Smartphone, Sparkles } from 'lucide-react'
+import { Archive, AudioLines, Bot, BrainCircuit, GitBranch, Bug, ChevronLeft, Globe, Keyboard, Mic, PencilLine, RefreshCw, ServerCog, Settings, Smartphone, Sparkles, TerminalSquare } from 'lucide-react'
 
-type SettingsCategory = 'general' | 'providers' | 'write' | 'mediaGeneration' | 'speechToText' | 'agents' | 'archives' | 'permissions' | 'worktree' | 'memory' | 'shortcuts' | 'easterEgg' | 'claw' | 'updates' | 'debug'
+type SettingsCategory = 'general' | 'providers' | 'write' | 'mediaGeneration' | 'speechToText' | 'agents' | 'archives' | 'permissions' | 'worktree' | 'memory' | 'shortcuts' | 'easterEgg' | 'claw' | 'updates' | 'debug' | 'terminal'
 
 export function SettingsSidebar({
   category,
@@ -15,14 +15,17 @@ export function SettingsSidebar({
   t: (key: string) => string
 }): ReactElement {
   const catCls = (c: SettingsCategory): string =>
-    `flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[14px] font-medium transition ${
+    `relative flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[14px] font-medium transition ${
       category === c
         ? 'bg-ds-subtle text-ds-ink shadow-sm ring-1 ring-ds-border-muted'
-        : 'text-ds-muted hover:bg-ds-hover'
+        : 'text-ds-muted'
     }`
 
   return (
-    <aside className="ds-drag flex h-full min-h-0 w-[248px] shrink-0 flex-col border-r border-ds-border bg-ds-sidebar backdrop-blur-md">
+    <aside
+      className="ds-drag flex h-full min-h-0 w-[248px] shrink-0 flex-col border-r border-ds-border bg-ds-sidebar backdrop-blur-md"
+      data-settings-sidebar
+    >
       <div className="shrink-0 px-3 pb-3 pt-3">
         <div aria-hidden className="ds-titlebar-safe-block" />
         <button
@@ -39,6 +42,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="general"
+          data-search-match-count="0"
           className={catCls('general')}
           onClick={() => setCategory('general')}
         >
@@ -48,6 +54,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="providers"
+          data-search-match-count="0"
           className={catCls('providers')}
           onClick={() => setCategory('providers')}
         >
@@ -57,6 +66,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="write"
+          data-search-match-count="0"
           className={catCls('write')}
           onClick={() => setCategory('write')}
         >
@@ -66,6 +78,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="mediaGeneration"
+          data-search-match-count="0"
           className={catCls('mediaGeneration')}
           onClick={() => setCategory('mediaGeneration')}
         >
@@ -75,6 +90,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="speechToText"
+          data-search-match-count="0"
           className={catCls('speechToText')}
           onClick={() => setCategory('speechToText')}
         >
@@ -84,6 +102,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="agents"
+          data-search-match-count="0"
           className={catCls('agents')}
           onClick={() => setCategory('agents')}
         >
@@ -93,15 +114,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
-          className={catCls('permissions')}
-          onClick={() => setCategory('permissions')}
-        >
-          <ShieldCheck className="h-4 w-4 shrink-0 opacity-70" strokeWidth={1.75} />
-          {t('permissions')}
-        </button>
-        <button
-          type="button"
-          data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="archives"
+          data-search-match-count="0"
           className={catCls('archives')}
           onClick={() => setCategory('archives')}
         >
@@ -111,6 +126,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="worktree"
+          data-search-match-count="0"
           className={catCls('worktree')}
           onClick={() => setCategory('worktree')}
         >
@@ -120,6 +138,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="memory"
+          data-search-match-count="0"
           className={catCls('memory')}
           onClick={() => setCategory('memory')}
         >
@@ -129,6 +150,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="shortcuts"
+          data-search-match-count="0"
           className={catCls('shortcuts')}
           onClick={() => setCategory('shortcuts')}
         >
@@ -138,6 +162,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="easterEgg"
+          data-search-match-count="0"
           className={catCls('easterEgg')}
           onClick={() => setCategory('easterEgg')}
         >
@@ -147,6 +174,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="updates"
+          data-search-match-count="0"
           className={catCls('updates')}
           onClick={() => setCategory('updates')}
         >
@@ -156,6 +186,9 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="claw"
+          data-search-match-count="0"
           className={catCls('claw')}
           onClick={() => setCategory('claw')}
         >
@@ -165,6 +198,21 @@ export function SettingsSidebar({
         <button
           type="button"
           data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="terminal"
+          data-search-match-count="0"
+          className={catCls('terminal')}
+          onClick={() => setCategory('terminal')}
+        >
+          <TerminalSquare className="h-4 w-4 shrink-0 opacity-70" strokeWidth={1.75} />
+          {t('terminal')}
+        </button>
+        <button
+          type="button"
+          data-cursor-spotlight-target
+          data-settings-sidebar-button
+          data-category="debug"
+          data-search-match-count="0"
           className={catCls('debug')}
           onClick={() => setCategory('debug')}
         >

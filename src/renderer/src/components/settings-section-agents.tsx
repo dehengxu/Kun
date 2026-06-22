@@ -1,9 +1,8 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 import type {
-  ApprovalPolicy,
   AppSettingsV1,
-  ModelProviderProfileV1,
-  SandboxMode
+  KunToolPermissionMode,
+  ModelProviderProfileV1
 } from '@shared/app-settings'
 import {
   DEFAULT_MODEL_PROVIDER_ID,
@@ -12,9 +11,12 @@ import {
   DEFAULT_WRITE_INLINE_COMPLETION_MODEL,
   DEFAULT_WRITE_INLINE_LONG_COMPLETION_MAX_TOKENS,
   DEFAULT_KUN_DATA_DIR,
+  MIN_KUN_LOCAL_PORT,
   WRITE_INLINE_COMPLETION_MODEL_IDS,
   defaultModelProviderSettings,
-  isKunRuntimeInsecure
+  isKunRuntimeInsecure,
+  kunToolPermissionModeFromSettings,
+  kunToolPermissionModeSettings
 } from '@shared/app-settings'
 import type { GuiUpdateChannel } from '@shared/gui-update'
 import type {
@@ -23,7 +25,20 @@ import type {
   ComputerUsePermissionState,
   SkillRootListItem
 } from '@shared/kun-gui-api'
-import { Ban, FolderOpen, Loader2, RefreshCw, Settings, Trash2 } from 'lucide-react'
+import {
+  Ban,
+  Check,
+  Eye,
+  FolderOpen,
+  FolderPen,
+  Hand,
+  Loader2,
+  LockKeyholeOpen,
+  RefreshCw,
+  Settings,
+  ShieldQuestion,
+  Trash2
+} from 'lucide-react'
 import { GuiUpdateControl } from './settings-gui-update'
 import {
   AdvancedSettingsDisclosure,
@@ -39,6 +54,50 @@ import { formatCompactNumber } from '../hooks/use-thread-usage'
 import { parseUsageResponse } from '../hooks/usage-response'
 
 export { modelProvidersSettingsPatch } from './settings-section-providers'
+
+const TOOL_PERMISSION_OPTIONS: Array<{
+  value: KunToolPermissionMode
+  labelKey: string
+  descriptionKey: string
+  Icon: typeof Hand
+  iconClass: string
+}> = [
+  {
+    value: 'always-ask',
+    labelKey: 'toolPermissionAlwaysAsk',
+    descriptionKey: 'toolPermissionAlwaysAskDesc',
+    Icon: Hand,
+    iconClass: 'border-sky-400/30 bg-sky-500/10 text-sky-700 dark:text-sky-200'
+  },
+  {
+    value: 'read-only',
+    labelKey: 'toolPermissionReadOnly',
+    descriptionKey: 'toolPermissionReadOnlyDesc',
+    Icon: Eye,
+    iconClass: 'border-emerald-400/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
+  },
+  {
+    value: 'sensitive-ask',
+    labelKey: 'toolPermissionSensitiveAsk',
+    descriptionKey: 'toolPermissionSensitiveAskDesc',
+    Icon: ShieldQuestion,
+    iconClass: 'border-amber-400/35 bg-amber-500/10 text-amber-700 dark:text-amber-200'
+  },
+  {
+    value: 'workspace-write',
+    labelKey: 'toolPermissionWorkspaceWrite',
+    descriptionKey: 'toolPermissionWorkspaceWriteDesc',
+    Icon: FolderPen,
+    iconClass: 'border-indigo-400/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-200'
+  },
+  {
+    value: 'bypass',
+    labelKey: 'toolPermissionBypass',
+    descriptionKey: 'toolPermissionBypassDesc',
+    Icon: LockKeyholeOpen,
+    iconClass: 'border-orange-400/35 bg-orange-500/10 text-orange-700 dark:text-orange-200'
+  }
+]
 
 function statusPill(status: string | undefined): string {
   if (status === 'available') return 'border-emerald-400/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
@@ -193,6 +252,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     skillSectionRef,
     mcpSectionRef,
     permissionsSectionRef,
+    runtimeTuningSectionRef,
     skillRoots,
     skillRootsLoading,
     toggleSkillRoot,
@@ -411,11 +471,16 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
       : nextProvider?.models[0] ?? kun.model
     updateKun({ providerId, model: nextModel, apiKey: '', baseUrl: '' })
   }
+  const toolPermissionMode = kunToolPermissionModeFromSettings(kun)
 
   return (
             <>
               <div className="mb-6 flex flex-wrap gap-2">
                 <SectionJumpButton label={t('agentsQuickBase')} onClick={() => scrollToAgentSection('agents')} />
+                <SectionJumpButton
+                  label={t('agentsQuickRuntime')}
+                  onClick={() => scrollToAgentSection('runtime')}
+                />
                 <SectionJumpButton label={t('agentsQuickSkill')} onClick={() => scrollToAgentSection('skill')} />
                 <SectionJumpButton label={t('agentsQuickMcp')} onClick={() => scrollToAgentSection('mcp')} />
                 <SectionJumpButton
@@ -499,7 +564,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                       <div>
                         <input
                           type="number"
-                          min={1}
+                          min={MIN_KUN_LOCAL_PORT}
                           max={65535}
                           className={`w-28 rounded-xl border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:outline-none focus:ring-1 ${
                             portError
@@ -602,42 +667,141 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 </SettingsCard>
               </div>
 
+              <div className="mt-6" ref={runtimeTuningSectionRef}>
+                <SettingsCard title={t('kunRuntimeTuning')}>
+                  <div className="divide-y divide-ds-border-muted">
+                    <SettingRow
+                      title={t('kunStreamIdleTimeout')}
+                      description={t('kunStreamIdleTimeoutDesc')}
+                      searchKeywords={['timeout', 'stream', 'idle', '流式', '空闲', '超时', '卡死', '卡顿']}
+                      control={
+                        <input
+                          type="number"
+                          min={0}
+                          max={3600000}
+                          step={1000}
+                          className="w-40 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                          value={runtimeTuning.streamIdleTimeoutMs}
+                          onChange={(e) =>
+                            updateRuntimeTuning({ streamIdleTimeoutMs: Number(e.target.value) })
+                          }
+                        />
+                      }
+                    />
+                    <SettingRow
+                      title={t('kunToolStorm')}
+                      description={t('kunToolStormDesc')}
+                      searchKeywords={['tool storm', 'tool', 'storm', '重复工具', '工具保护', '循环']}
+                      control={
+                        <Toggle
+                          checked={runtimeTuning.toolStorm.enabled}
+                          onChange={(enabled) => updateToolStorm({ enabled })}
+                        />
+                      }
+                    />
+                    <SettingRow
+                      title={t('kunToolStormLimits')}
+                      description={t('kunToolStormLimitsDesc')}
+                      searchKeywords={['tool storm', 'window', 'threshold', '工具', '阈值', '窗口']}
+                      wideControl
+                      control={
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
+                            {t('kunToolStormWindowSize')}
+                            <input
+                              type="number"
+                              min={1}
+                              max={128}
+                              className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                              value={runtimeTuning.toolStorm.windowSize}
+                              disabled={!runtimeTuning.toolStorm.enabled}
+                              onChange={(e) => updateToolStorm({ windowSize: Number(e.target.value) })}
+                            />
+                          </label>
+                          <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
+                            {t('kunToolStormThreshold')}
+                            <input
+                              type="number"
+                              min={2}
+                              max={128}
+                              className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                              value={runtimeTuning.toolStorm.threshold}
+                              disabled={!runtimeTuning.toolStorm.enabled}
+                              onChange={(e) => updateToolStorm({ threshold: Number(e.target.value) })}
+                            />
+                          </label>
+                        </div>
+                      }
+                    />
+                    <SettingRow
+                      title={t('kunToolArgumentRepair')}
+                      description={t('kunToolArgumentRepairDesc')}
+                      searchKeywords={['argument', 'repair', '工具参数', '参数', '修复', '截断']}
+                      control={
+                        <input
+                          type="number"
+                          min={1024}
+                          max={16777216}
+                          step={1024}
+                          className="w-40 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                          value={runtimeTuning.toolArgumentRepair.maxStringBytes}
+                          onChange={(e) => updateToolArgumentRepair({ maxStringBytes: Number(e.target.value) })}
+                        />
+                      }
+                    />
+                  </div>
+                </SettingsCard>
+              </div>
+
               <div className="mt-6" ref={permissionsSectionRef}>
                 <SettingsCard title={t('permissions')}>
                   <div className="px-3 py-4">
                     <InlineNoticeView notice={{ tone: 'info', message: t('permissionsBehaviorHint') }} />
                   </div>
                   <SettingRow
-                    title={t('approvalPolicy')}
-                    description={t('approvalPolicyDesc')}
+                    title={t('toolPermissionMode')}
+                    description={t('toolPermissionModeDesc')}
+                    wideControl
                     control={
-                      <select
-                        className={selectControlClass}
-                        value={kun.approvalPolicy}
-                        onChange={(e) => updateKun({ approvalPolicy: e.target.value as ApprovalPolicy })}
+                      <div
+                        role="radiogroup"
+                        aria-label={t('toolPermissionMode')}
+                        className="grid gap-2 sm:grid-cols-2"
                       >
-                        <option value="auto">{t('approvalAuto')}</option>
-                        <option value="on-request">{t('approvalOnRequest')}</option>
-                        <option value="untrusted">{t('approvalUntrusted')}</option>
-                        <option value="suggest">{t('approvalSuggest')}</option>
-                        <option value="never">{t('approvalNever')}</option>
-                      </select>
-                    }
-                  />
-                  <SettingRow
-                    title={t('sandboxMode')}
-                    description={t('sandboxModeDesc')}
-                    control={
-                      <select
-                        className={selectControlClass}
-                        value={kun.sandboxMode}
-                        onChange={(e) => updateKun({ sandboxMode: e.target.value as SandboxMode })}
-                      >
-                        <option value="workspace-write">{t('sandboxWorkspaceWrite')}</option>
-                        <option value="read-only">{t('sandboxReadOnly')}</option>
-                        <option value="danger-full-access">{t('sandboxFullAccess')}</option>
-                        <option value="external-sandbox">{t('sandboxExternal')}</option>
-                      </select>
+                        {TOOL_PERMISSION_OPTIONS.map((option) => {
+                          const selected = toolPermissionMode === option.value
+                          const PermissionIcon = option.Icon
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              role="radio"
+                              aria-checked={selected}
+                              onClick={() => updateKun(kunToolPermissionModeSettings(option.value))}
+                              className={`min-h-[72px] rounded-lg border px-3 py-2.5 text-left transition ${
+                                selected
+                                  ? 'border-accent/55 bg-accent/10 text-ds-ink'
+                                  : 'border-ds-border-muted bg-ds-card/70 text-ds-ink hover:bg-ds-hover/70'
+                              }`}
+                            >
+                              <span className="flex items-start gap-2">
+                                <span
+                                  className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${option.iconClass}`}
+                                >
+                                  <PermissionIcon className="h-4 w-4" strokeWidth={1.9} />
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block text-[13px] font-semibold">{t(option.labelKey)}</span>
+                                  <span className="mt-1 block text-[12px] leading-snug text-ds-muted">
+                                    {t(option.descriptionKey)}
+                                  </span>
+                                </span>
+                                {selected ? <Check className="mt-0.5 h-4 w-4 shrink-0 text-accent" strokeWidth={2} /> : null}
+                              </span>
+                            </button>
+                          )
+                        })}
+                      </div>
                     }
                   />
                 </SettingsCard>
@@ -646,10 +810,8 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
 
               <div className="mt-6">
                 <SettingsCard title={t('computerUseTitle')}>
-                  <div className="px-3 py-4">
+                  <div className="space-y-4 px-3 py-4">
                     <InlineNoticeView notice={{ tone: 'info', message: t('computerUseHint') }} />
-                  </div>
-                  <div className="px-3 pb-4">
                     <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[12px] leading-5 text-amber-700 dark:text-amber-200">
                       <div className="font-semibold">{t('computerUseModelQualityTitle')}</div>
                       <div className="mt-1">{t('computerUseModelQualityBody')}</div>
@@ -1297,81 +1459,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                           />
                         </label>
                       </div>
-                    }
-                  />
-                  <SettingRow
-                    title={t('kunStreamIdleTimeout')}
-                    description={t('kunStreamIdleTimeoutDesc')}
-                    control={
-                      <input
-                        type="number"
-                        min={0}
-                        max={3600000}
-                        step={1000}
-                        className="w-40 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                        value={runtimeTuning.streamIdleTimeoutMs}
-                        onChange={(e) =>
-                          updateRuntimeTuning({ streamIdleTimeoutMs: Number(e.target.value) })
-                        }
-                      />
-                    }
-                  />
-                  <SettingRow
-                    title={t('kunToolStorm')}
-                    description={t('kunToolStormDesc')}
-                    control={
-                      <Toggle
-                        checked={runtimeTuning.toolStorm.enabled}
-                        onChange={(enabled) => updateToolStorm({ enabled })}
-                      />
-                    }
-                  />
-                  <SettingRow
-                    title={t('kunToolStormLimits')}
-                    description={t('kunToolStormLimitsDesc')}
-                    wideControl
-                    control={
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
-                          {t('kunToolStormWindowSize')}
-                          <input
-                            type="number"
-                            min={1}
-                            max={128}
-                            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                            value={runtimeTuning.toolStorm.windowSize}
-                            disabled={!runtimeTuning.toolStorm.enabled}
-                            onChange={(e) => updateToolStorm({ windowSize: Number(e.target.value) })}
-                          />
-                        </label>
-                        <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
-                          {t('kunToolStormThreshold')}
-                          <input
-                            type="number"
-                            min={2}
-                            max={128}
-                            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                            value={runtimeTuning.toolStorm.threshold}
-                            disabled={!runtimeTuning.toolStorm.enabled}
-                            onChange={(e) => updateToolStorm({ threshold: Number(e.target.value) })}
-                          />
-                        </label>
-                      </div>
-                    }
-                  />
-                  <SettingRow
-                    title={t('kunToolArgumentRepair')}
-                    description={t('kunToolArgumentRepairDesc')}
-                    control={
-                      <input
-                        type="number"
-                        min={1024}
-                        max={16777216}
-                        step={1024}
-                        className="w-40 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                        value={runtimeTuning.toolArgumentRepair.maxStringBytes}
-                        onChange={(e) => updateToolArgumentRepair({ maxStringBytes: Number(e.target.value) })}
-                      />
                     }
                   />
                       </div>
