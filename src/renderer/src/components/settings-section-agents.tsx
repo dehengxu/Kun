@@ -252,6 +252,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     skillSectionRef,
     mcpSectionRef,
     permissionsSectionRef,
+    runtimeTuningSectionRef,
     skillRoots,
     skillRootsLoading,
     toggleSkillRoot,
@@ -476,6 +477,10 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
             <>
               <div className="mb-6 flex flex-wrap gap-2">
                 <SectionJumpButton label={t('agentsQuickBase')} onClick={() => scrollToAgentSection('agents')} />
+                <SectionJumpButton
+                  label={t('agentsQuickRuntime')}
+                  onClick={() => scrollToAgentSection('runtime')}
+                />
                 <SectionJumpButton label={t('agentsQuickSkill')} onClick={() => scrollToAgentSection('skill')} />
                 <SectionJumpButton label={t('agentsQuickMcp')} onClick={() => scrollToAgentSection('mcp')} />
                 <SectionJumpButton
@@ -659,6 +664,92 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                       </div>
                     }
                   />
+                </SettingsCard>
+              </div>
+
+              <div className="mt-6" ref={runtimeTuningSectionRef}>
+                <SettingsCard title={t('kunRuntimeTuning')}>
+                  <div className="divide-y divide-ds-border-muted">
+                    <SettingRow
+                      title={t('kunStreamIdleTimeout')}
+                      description={t('kunStreamIdleTimeoutDesc')}
+                      searchKeywords={['timeout', 'stream', 'idle', '流式', '空闲', '超时', '卡死', '卡顿']}
+                      control={
+                        <input
+                          type="number"
+                          min={0}
+                          max={3600000}
+                          step={1000}
+                          className="w-40 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                          value={runtimeTuning.streamIdleTimeoutMs}
+                          onChange={(e) =>
+                            updateRuntimeTuning({ streamIdleTimeoutMs: Number(e.target.value) })
+                          }
+                        />
+                      }
+                    />
+                    <SettingRow
+                      title={t('kunToolStorm')}
+                      description={t('kunToolStormDesc')}
+                      searchKeywords={['tool storm', 'tool', 'storm', '重复工具', '工具保护', '循环']}
+                      control={
+                        <Toggle
+                          checked={runtimeTuning.toolStorm.enabled}
+                          onChange={(enabled) => updateToolStorm({ enabled })}
+                        />
+                      }
+                    />
+                    <SettingRow
+                      title={t('kunToolStormLimits')}
+                      description={t('kunToolStormLimitsDesc')}
+                      searchKeywords={['tool storm', 'window', 'threshold', '工具', '阈值', '窗口']}
+                      wideControl
+                      control={
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
+                            {t('kunToolStormWindowSize')}
+                            <input
+                              type="number"
+                              min={1}
+                              max={128}
+                              className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                              value={runtimeTuning.toolStorm.windowSize}
+                              disabled={!runtimeTuning.toolStorm.enabled}
+                              onChange={(e) => updateToolStorm({ windowSize: Number(e.target.value) })}
+                            />
+                          </label>
+                          <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
+                            {t('kunToolStormThreshold')}
+                            <input
+                              type="number"
+                              min={2}
+                              max={128}
+                              className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                              value={runtimeTuning.toolStorm.threshold}
+                              disabled={!runtimeTuning.toolStorm.enabled}
+                              onChange={(e) => updateToolStorm({ threshold: Number(e.target.value) })}
+                            />
+                          </label>
+                        </div>
+                      }
+                    />
+                    <SettingRow
+                      title={t('kunToolArgumentRepair')}
+                      description={t('kunToolArgumentRepairDesc')}
+                      searchKeywords={['argument', 'repair', '工具参数', '参数', '修复', '截断']}
+                      control={
+                        <input
+                          type="number"
+                          min={1024}
+                          max={16777216}
+                          step={1024}
+                          className="w-40 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                          value={runtimeTuning.toolArgumentRepair.maxStringBytes}
+                          onChange={(e) => updateToolArgumentRepair({ maxStringBytes: Number(e.target.value) })}
+                        />
+                      }
+                    />
+                  </div>
                 </SettingsCard>
               </div>
 
@@ -1368,81 +1459,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                           />
                         </label>
                       </div>
-                    }
-                  />
-                  <SettingRow
-                    title={t('kunStreamIdleTimeout')}
-                    description={t('kunStreamIdleTimeoutDesc')}
-                    control={
-                      <input
-                        type="number"
-                        min={0}
-                        max={3600000}
-                        step={1000}
-                        className="w-40 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                        value={runtimeTuning.streamIdleTimeoutMs}
-                        onChange={(e) =>
-                          updateRuntimeTuning({ streamIdleTimeoutMs: Number(e.target.value) })
-                        }
-                      />
-                    }
-                  />
-                  <SettingRow
-                    title={t('kunToolStorm')}
-                    description={t('kunToolStormDesc')}
-                    control={
-                      <Toggle
-                        checked={runtimeTuning.toolStorm.enabled}
-                        onChange={(enabled) => updateToolStorm({ enabled })}
-                      />
-                    }
-                  />
-                  <SettingRow
-                    title={t('kunToolStormLimits')}
-                    description={t('kunToolStormLimitsDesc')}
-                    wideControl
-                    control={
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
-                          {t('kunToolStormWindowSize')}
-                          <input
-                            type="number"
-                            min={1}
-                            max={128}
-                            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                            value={runtimeTuning.toolStorm.windowSize}
-                            disabled={!runtimeTuning.toolStorm.enabled}
-                            onChange={(e) => updateToolStorm({ windowSize: Number(e.target.value) })}
-                          />
-                        </label>
-                        <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
-                          {t('kunToolStormThreshold')}
-                          <input
-                            type="number"
-                            min={2}
-                            max={128}
-                            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                            value={runtimeTuning.toolStorm.threshold}
-                            disabled={!runtimeTuning.toolStorm.enabled}
-                            onChange={(e) => updateToolStorm({ threshold: Number(e.target.value) })}
-                          />
-                        </label>
-                      </div>
-                    }
-                  />
-                  <SettingRow
-                    title={t('kunToolArgumentRepair')}
-                    description={t('kunToolArgumentRepairDesc')}
-                    control={
-                      <input
-                        type="number"
-                        min={1024}
-                        max={16777216}
-                        step={1024}
-                        className="w-40 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                        value={runtimeTuning.toolArgumentRepair.maxStringBytes}
-                        onChange={(e) => updateToolArgumentRepair({ maxStringBytes: Number(e.target.value) })}
-                      />
                     }
                   />
                       </div>

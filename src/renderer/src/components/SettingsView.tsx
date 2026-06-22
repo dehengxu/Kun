@@ -114,6 +114,12 @@ export function SettingsView(): ReactElement {
   const [showRuntimeToken, setShowRuntimeToken] = useState(false)
   const [logPath, setLogPath] = useState('')
   const [logDirOpenError, setLogDirOpenError] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchStats, setSearchStats] = useState<{ matched: number; total: number }>({
+    matched: 0,
+    total: 0
+  })
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
   const [skillRoots, setSkillRoots] = useState<SkillRootListItem[]>([])
   const [skillRootsLoading, setSkillRootsLoading] = useState(false)
   const [skillNotice, setSkillNotice] = useState<InlineNotice | null>(null)
@@ -143,6 +149,8 @@ export function SettingsView(): ReactElement {
   const skillSectionRef = useRef<HTMLDivElement | null>(null)
   const mcpSectionRef = useRef<HTMLDivElement | null>(null)
   const permissionsSectionRef = useRef<HTMLDivElement | null>(null)
+  const runtimeTuningSectionRef = useRef<HTMLDivElement | null>(null)
+  const settingsContentRef = useRef<HTMLDivElement | null>(null)
   const formTheme = form?.theme
   const formUiFontScale = form?.uiFontScale
   const writeTypography = form?.write?.typography
@@ -238,6 +246,58 @@ export function SettingsView(): ReactElement {
     if (typeof window.kunGui?.getLogPath !== 'function') return
     void window.kunGui.getLogPath().then((p) => setLogPath(p)).catch(() => undefined)
   }, [category])
+
+  // Settings search: walk all [data-setting-row] elements inside the content
+  // container and set [data-search-match] to "true"/"false" based on whether
+  // the row's keywords (rendered as [data-search-keywords] by SettingRow)
+  // contain every whitespace-separated token of the query. Keeps the search
+  // logic local to one place so individual sections don't have to know about
+  // it. Runs on every query change; ~50 rows is well under the cost
+  // threshold for a synchronous DOM walk.
+  useEffect(() => {
+    const root = settingsContentRef.current
+    if (!root) return
+    const rows = root.querySelectorAll<HTMLElement>('[data-setting-row]')
+    const trimmed = searchQuery.trim().toLowerCase()
+    const tokens = trimmed.split(/\s+/).filter(Boolean)
+    let matched = 0
+    rows.forEach((row) => {
+      const haystack = row.dataset.searchKeywords ?? ''
+      const isMatch = tokens.length === 0 || tokens.every((tok) => haystack.includes(tok))
+      row.dataset.searchMatch = isMatch ? 'true' : 'false'
+      if (isMatch) matched += 1
+    })
+    setSearchStats({ matched, total: rows.length })
+    // Mark each SettingsCard with whether any of its rows matched so the
+    // search CSS can dim cards with zero hits (and keep full-opacity cards
+    // visually anchored to their position).
+    const cards = root.querySelectorAll<HTMLElement>('[data-settings-card]')
+    cards.forEach((card) => {
+      const hasMatch = card.querySelector('[data-setting-row][data-search-match="true"]') !== null
+      card.dataset.searchHasMatch = hasMatch ? 'true' : 'false'
+    })
+  }, [searchQuery, category, form])
+
+  // `/` focuses the search input (mirrors GitHub-style keyboard hint). Skip
+  // when the user is already typing in an input/textarea/contenteditable so
+  // the shortcut never hijacks normal text entry.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return
+      }
+      const input = searchInputRef.current
+      if (!input) return
+      event.preventDefault()
+      input.focus()
+      input.select()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const loadWriteDebugEntries = useCallback(async (): Promise<void> => {
     setWriteDebugLoading(true)
@@ -606,9 +666,10 @@ export function SettingsView(): ReactElement {
     }
   }
 
-  const scrollToAgentSection = (target: 'agents' | 'skill' | 'mcp' | 'permissions'): void => {
+  const scrollToAgentSection = (target: 'agents' | 'runtime' | 'skill' | 'mcp' | 'permissions'): void => {
     const refs = {
       agents: agentsSectionRef.current,
+      runtime: runtimeTuningSectionRef.current,
       skill: skillSectionRef.current,
       mcp: mcpSectionRef.current,
       permissions: permissionsSectionRef.current
@@ -933,6 +994,7 @@ export function SettingsView(): ReactElement {
     skillSectionRef,
     mcpSectionRef,
     permissionsSectionRef,
+    runtimeTuningSectionRef,
     skillRoots,
     skillRootsLoading,
     toggleSkillRoot,
@@ -981,7 +1043,7 @@ export function SettingsView(): ReactElement {
       <SettingsSidebar category={category} setCategory={setCategory} goBack={goBack} t={t} />
 
       <div className="ds-no-drag min-h-0 min-w-0 flex-1 overflow-y-auto px-10 py-10">
-        <div className="mx-auto max-w-3xl">
+        <div className="mx-auto max-w-3xl" ref={settingsContentRef}>
           {!activeApiKey.trim() ? (
             <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
               <div className="text-[15px] font-semibold">{t('apiKeyRequiredTitle')}</div>
@@ -1018,6 +1080,56 @@ export function SettingsView(): ReactElement {
                       ? t('applyFailed')
                       : t('autoApplyHint')}
             </span>
+          </div>
+
+          <div className="ds-no-drag mb-6" data-settings-search>
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <input
+                  ref={searchInputRef}
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape' && searchQuery) {
+                      e.preventDefault()
+                      setSearchQuery('')
+                    }
+                  }}
+                  placeholder={t('settingsSearchPlaceholder')}
+                  aria-label={t('settingsSearchPlaceholder')}
+                  className="w-full rounded-xl border border-ds-border bg-ds-card px-3 py-2 pr-9 text-[14px] text-ds-ink shadow-sm placeholder:text-ds-faint focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                />
+                {searchQuery ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('')
+                      searchInputRef.current?.focus()
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full px-2 py-0.5 text-[12px] text-ds-muted hover:bg-ds-hover hover:text-ds-ink"
+                    aria-label={t('settingsSearchClear')}
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </div>
+              <kbd className="hidden shrink-0 rounded-lg border border-ds-border bg-ds-card px-2 py-1 text-[11px] font-medium text-ds-muted shadow-sm sm:inline">
+                /
+              </kbd>
+            </div>
+            {searchQuery.trim() ? (
+              <div className="mt-2 text-[12px] text-ds-muted">
+                {searchStats.total === 0
+                  ? t('settingsSearchEmpty')
+                  : searchStats.matched === 0
+                    ? t('settingsSearchNoMatch', { query: searchQuery })
+                    : t('settingsSearchCount', {
+                        matched: searchStats.matched,
+                        total: searchStats.total
+                      })}
+              </div>
+            ) : null}
           </div>
 
           {saveStatus === 'error' && saveError ? (
