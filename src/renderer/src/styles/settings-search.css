@@ -1,0 +1,32 @@
+/* Settings page search filter.
+ *
+ * Each SettingRow carries [data-setting-row] and a pre-rendered
+ * [data-search-keywords] string (lowercased). The settings page runs a
+ * useEffect on every query change that flips [data-search-match] to
+ * "true" or "false" on each row. This file just styles the two states.
+ *
+ * The dim-and-pointer-events-none combo keeps matched rows in their
+ * natural layout position so the user can see *where* the setting lives
+ * relative to its neighbors (helpful for orientation), without making
+ * the row look interactive.
+ */
+
+[data-setting-row][data-search-match='false'] {
+  opacity: 0.32;
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+
+[data-setting-row][data-search-match='true'] {
+  transition: opacity 120ms ease-out;
+}
+
+/* When a settings card has zero matching rows under an active search,
+ * collapse it so the page stays scannable. The `[data-search-match]`
+ * selector only fires after the effect has run, so on first paint
+ * (before the effect) every card stays expanded — which is what we
+ * want when there is no active query. */
+[data-settings-card]:not([data-search-has-match='true']) {
+  opacity: 0.45;
+  transition: opacity 120ms ease-out;
+}

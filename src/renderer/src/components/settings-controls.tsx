@@ -113,6 +113,7 @@ export function SettingsCard({
   return (
     <section
       className={`rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25 ${className}`}
+      data-settings-card
     >
       <div className="border-b border-ds-border-muted px-5 py-3">
         <h2 className="text-[16px] font-semibold text-ds-ink">{title}</h2>
@@ -126,17 +127,32 @@ export function SettingRow({
   title,
   description,
   control,
-  wideControl = false
+  wideControl = false,
+  searchKeywords
 }: {
   title: string
   description?: string
   control: ReactNode
   wideControl?: boolean
+  /**
+   * Optional extra keywords used by the settings-page search box. The
+   * rendered `title` and `description` are always indexed; pass aliases
+   * (e.g. chinese synonyms, abbreviations) here so users can find a row
+   * without knowing the exact label.
+   */
+  searchKeywords?: string[]
 }): ReactElement {
   const compactControl =
     !wideControl
     && isValidElement(control)
     && (control.type === Toggle || control.type === 'button')
+
+  // Build the search corpus once per render; cheap and avoids per-keystroke
+  // work in the SettingsView effect that walks all [data-search-keywords]
+  // nodes.
+  const searchText = [title, description ?? '', ...(searchKeywords ?? [])]
+    .join(' ')
+    .toLowerCase()
 
   return (
     <div
@@ -145,6 +161,8 @@ export function SettingRow({
           ? 'flex-col sm:gap-3.5'
           : 'flex-col sm:flex-row sm:items-start sm:justify-between sm:gap-8'
       }`}
+      data-setting-row
+      data-search-keywords={searchText}
     >
       <div className={`min-w-0 ${wideControl ? 'w-full max-w-none shrink-0' : 'flex-1'}`}>
         <div className="text-[14px] font-semibold text-ds-ink">{title}</div>
@@ -275,14 +293,25 @@ export function ModelSelect({
 export function AdvancedSettingsDisclosure({
   title,
   description,
-  children
+  children,
+  defaultOpen = false
 }: {
   title: string
   description?: string
   children: ReactNode
+  /**
+   * Whether the disclosure starts expanded. Defaults to false so advanced
+   * sections stay collapsed unless the caller opts in. Used by the
+   * runtime-tuning section so the most common settings (stream idle timeout,
+   * tool storm, tool argument repair) are visible without a click.
+   */
+  defaultOpen?: boolean
 }): ReactElement {
   return (
-    <details className="group overflow-hidden rounded-xl border border-ds-border-muted bg-ds-main/35">
+    <details
+      className="group overflow-hidden rounded-xl border border-ds-border-muted bg-ds-main/35"
+      open={defaultOpen || undefined}
+    >
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-ds-hover/70 [&::-webkit-details-marker]:hidden">
         <span className="min-w-0">
           <span className="block text-[13px] font-semibold text-ds-ink">{title}</span>
