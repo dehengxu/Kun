@@ -315,8 +315,9 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     modelProfiles: {
       // GLM-5 / GLM-5.1 在 OpenCode Go 上是纯文本模型(参考 zhipu-coding-plan / zai-coding-plan 同源预设)
       // 不像 GLM-4.xV 系列支持视觉;不要标 visionChatProfile,否则前端会允许选图而上游拒收。
-      'glm-5.1': textChatProfile(131_072, GLM_REASONING),
-      'glm-5': textChatProfile(131_072, GLM_REASONING),
+      // 上下文窗口对齐 zhipu-coding-plan / zai-coding-plan: 200k。
+      'glm-5.1': textChatProfile(200_000, GLM_REASONING),
+      'glm-5': textChatProfile(200_000, GLM_REASONING),
       'kimi-k2.7': textChatProfile(131_072),
       'kimi-k2.7-code': textChatProfile(131_072),
       'kimi-k2.6': textChatProfile(131_072),
