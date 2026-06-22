@@ -138,9 +138,13 @@ function UserMessageBubble({
           </div>
         </div>
         <div className="mt-2 flex min-w-0 items-center justify-between gap-3">
-          <span className="min-w-0 flex-1 text-left text-[12px] font-medium leading-5 text-ds-faint">
-            {t('rewindFileRollbackNotice')}
-          </span>
+          {block.meta?.workspaceCheckpointId ? (
+            <span className="min-w-0 flex-1 text-left text-[12px] font-medium leading-5 text-ds-faint">
+              {t('rewindFileRollbackNotice')}
+            </span>
+          ) : (
+            <span className="min-w-0 flex-1" />
+          )}
           <ModelMetaTag label={block.modelLabel} />
         </div>
       </div>

@@ -757,6 +757,14 @@ export function createMaintenanceActions(
       i18n.t('common:rollbackWorkspaceConfirmDetail')
     )
     if (!confirmed) return
+    // Re-check busy: the user may have typed and sent a new turn while the
+    // confirm dialog was open. Running `git reset --hard` mid-turn would
+    // wipe files the running agent is actively editing.
+    if (get().busy) {
+      set({ error: i18n.t('common:rollbackWorkspaceBusyError') })
+      return
+    }
+    const { activeThreadId, workspaceRoot } = get()
     const restored = await window.kunGui.restoreGitCheckpoint({ checkpointId: targetCheckpointId }).catch((error) => ({
       ok: false as const,
       reason: 'error' as const,
@@ -766,7 +774,26 @@ export function createMaintenanceActions(
       set({ error: restored.message })
       return
     }
-    set({ error: null })
+    // Surface the rescue checkpoint id so the user can `git stash apply` it
+    // (or hand-copy from the data dir) if the rollback turns out to have
+    // been a mistake. The destructive ops above already happened.
+    const rescueId =
+      'rescueCheckpointId' in restored && typeof restored.rescueCheckpointId === 'string'
+        ? restored.rescueCheckpointId
+        : null
+    console.info(
+      '[rollback] rescue checkpoint:',
+      rescueId,
+      'workspace:',
+      workspaceRoot,
+      'thread:',
+      activeThreadId
+    )
+    if (rescueId) {
+      set({ error: i18n.t('common:rollbackWorkspaceSuccessWithRescue', { id: rescueId }) })
+    } else {
+      set({ error: null })
+    }
   },
 
   resolveApproval: async (blockId, decision) => {
