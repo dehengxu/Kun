@@ -729,6 +729,83 @@ describe('model provider settings', () => {
     expect(resolved.modelProfiles['mimo-v2.5-pro']).toBeDefined()
   })
 
+  it('preserves user edits to a preset model profile across reloads', () => {
+    // User opens settings, edits glm-5.1 to enable vision and bumps context to 256k,
+    // saves, then reloads. The user's overrides must survive — the preset should
+    // only fill gaps (e.g. reasoning), not overwrite the user's changes.
+    const base = settings()
+    const resolved = resolveKunRuntimeSettings({
+      ...base,
+      provider: {
+        ...base.provider,
+        providers: [
+          ...base.provider.providers,
+          {
+            id: 'opencode-go',
+            name: 'OpenCode Go',
+            apiKey: 'sk-test',
+            baseUrl: 'https://opencode.ai/zen/go/v1',
+            endpointFormat: 'chat_completions',
+            models: ['glm-5.1', 'glm-5'],
+            modelProfiles: {
+              'glm-5.1': {
+                inputModalities: ['text', 'image'],
+                outputModalities: ['text'],
+                supportsToolCalling: true,
+                messageParts: ['text', 'image_url'],
+                contextWindowTokens: 256_000
+              }
+            }
+          }
+        ]
+      }
+    })
+    const glm51 = resolved.modelProfiles['glm-5.1']
+    expect(glm51).toBeDefined()
+    expect(glm51?.contextWindowTokens).toBe(256_000)
+    expect(glm51?.inputModalities).toEqual(['text', 'image'])
+    expect(glm51?.messageParts).toEqual(['text', 'image_url'])
+    // Reasoning comes from the preset since the user didn't touch it.
+    expect(glm51?.reasoning).toBeDefined()
+  })
+
+  it('falls back to preset fields the user did not override', () => {
+    // User only changed contextWindowTokens. Everything else should reflect
+    // the preset (vision off, reasoning filled in by preset defaults).
+    const base = settings()
+    const resolved = resolveKunRuntimeSettings({
+      ...base,
+      provider: {
+        ...base.provider,
+        providers: [
+          ...base.provider.providers,
+          {
+            id: 'opencode-go',
+            name: 'OpenCode Go',
+            apiKey: 'sk-test',
+            baseUrl: 'https://opencode.ai/zen/go/v1',
+            endpointFormat: 'chat_completions',
+            models: ['glm-5.1'],
+            modelProfiles: {
+              'glm-5.1': {
+                inputModalities: ['text'],
+                outputModalities: ['text'],
+                supportsToolCalling: true,
+                messageParts: ['text'],
+                contextWindowTokens: 256_000
+              }
+            }
+          }
+        ]
+      }
+    })
+    const glm51 = resolved.modelProfiles['glm-5.1']
+    expect(glm51?.contextWindowTokens).toBe(256_000)
+    // No vision (user kept text), reasoning filled by preset.
+    expect(glm51?.inputModalities).toEqual(['text'])
+    expect(glm51?.reasoning).toBeDefined()
+  })
+
   it('resolves Xiaomi speech-to-text through provider speech capability', () => {
     const xiaomi = getModelProviderPreset('xiaomi')
     expect(xiaomi).not.toBeNull()
