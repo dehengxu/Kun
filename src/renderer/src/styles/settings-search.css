@@ -30,3 +30,90 @@
   opacity: 0.45;
   transition: opacity 120ms ease-out;
 }
+
+/* Cross-category search: when a search is active, every section is
+ * always in the DOM (the SettingsView renders all SETTINGS_SECTIONS
+ * unconditionally) and we use `[data-search-active]` plus
+ * `[data-section-active]` to control visibility. When not searching
+ * we only show the active section. */
+[data-search-active='false'] [data-category][data-section-active='false'] {
+  display: none;
+}
+
+[data-search-active='true'] [data-category] {
+  display: block;
+}
+
+/* Sidebar cross-category match indicator.
+ *
+ * While a search is active, the SettingsView effect writes
+ * [data-search-match-count] on every sidebar button. Non-zero count
+ * paints a soft elliptical halo behind the button (an `::before`
+ * radial-gradient inset, sized wider than tall to fit the pill shape)
+ * plus a small numeric pill in the top-right corner. The halo uses
+ * the existing --ds-accent / --ds-accent-soft palette so it tracks
+ * the rest of the app's theme and dark/light/ikun variants.
+ *
+ * The `[data-search-active='true']` ancestor gate is defense-in-depth:
+ * the JS effect also zeroes out the counts when the search box is
+ * empty, so the halo stays off without a search. The CSS rule mirrors
+ * that gate so a stale count (e.g. after a future regression) can't
+ * paint a halo on a category the user isn't searching for.
+ */
+@keyframes settingsSearchHaloIn {
+  from {
+    opacity: 0;
+    transform: scaleX(0.94) scaleY(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1) scaleY(1);
+  }
+}
+
+[data-search-active='true'] [data-settings-sidebar-button][data-search-match-count]:not([data-search-match-count='0']) {
+  isolation: isolate;
+  /* Subtle ring + a touch of background tint so the button reads
+   * "interactive attention" without overwhelming the active state. */
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--ds-accent) 38%, transparent),
+    0 0 18px 0 color-mix(in srgb, var(--ds-accent) 22%, transparent);
+  background-color: color-mix(in srgb, var(--ds-accent) 7%, var(--ds-card));
+}
+
+[data-search-active='true'] [data-settings-sidebar-button][data-search-match-count]:not([data-search-match-count='0'])::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 14px;
+  /* The "elliptical halo": wider than tall to match the pill button
+   * silhouette, fading out softly from the center. Uses the same
+   * --ds-accent-soft token that active states use elsewhere. */
+  background: radial-gradient(
+    ellipse 100% 70% at center,
+    var(--ds-accent-soft) 0%,
+    transparent 72%
+  );
+  pointer-events: none;
+  z-index: -1;
+  animation: settingsSearchHaloIn 220ms ease-out;
+}
+
+[data-search-active='true'] [data-settings-sidebar-button][data-search-match-count]:not([data-search-match-count='0'])::after {
+  content: attr(data-search-match-count);
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: var(--ds-accent);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 18px;
+  border-radius: 9px;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}

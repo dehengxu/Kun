@@ -74,6 +74,35 @@ import {
 } from './settings-sections'
 
 type SettingsCategory = 'general' | 'providers' | 'write' | 'mediaGeneration' | 'speechToText' | 'agents' | 'archives' | 'permissions' | 'worktree' | 'memory' | 'shortcuts' | 'easterEgg' | 'claw' | 'updates' | 'debug' | 'terminal'
+
+/**
+ * Sections that actually render something. `permissions` is part of the
+ * SettingsCategory union (callers from chat-store-claw-actions etc. set
+ * `category='permissions'`) but no section file backs it today, so it
+ * lives outside this list and falls through to the active-route's
+ * "permissions" card inside AgentsSettingsSection instead.
+ */
+const SETTINGS_SECTIONS: ReadonlyArray<{
+  id: SettingsCategory
+  Component: (props: { ctx: Record<string, unknown> }) => ReactElement
+}> = [
+  { id: 'general', Component: GeneralSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'providers', Component: ProvidersSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'write', Component: WriteSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'mediaGeneration', Component: MediaGenerationSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'speechToText', Component: SpeechToTextSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'agents', Component: AgentsSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'archives', Component: ArchivedThreadsSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'worktree', Component: WorktreeSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'memory', Component: MemorySettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'shortcuts', Component: KeyboardShortcutsSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'easterEgg', Component: EasterEggSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'claw', Component: ClawSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'updates', Component: UpdatesSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'terminal', Component: TerminalSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement },
+  { id: 'debug', Component: LlmDebugSettingsSection as (props: { ctx: Record<string, unknown> }) => ReactElement }
+]
+
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 type SettingsPatch = AppSettingsPatch
 type InlineNotice = {
@@ -258,14 +287,42 @@ export function SettingsView(): ReactElement {
     const root = settingsContentRef.current
     if (!root) return
     const rows = root.querySelectorAll<HTMLElement>('[data-setting-row]')
+    const sidebar = document.querySelector<HTMLElement>('[data-settings-sidebar]')
     const trimmed = searchQuery.trim().toLowerCase()
     const tokens = trimmed.split(/\s+/).filter(Boolean)
+
+    // No active search: reset every row to "match" (so nothing dims),
+    // zero the per-category counts, and skip the rest of the walk.
+    if (tokens.length === 0) {
+      rows.forEach((row) => {
+        row.dataset.searchMatch = 'true'
+      })
+      if (sidebar) {
+        sidebar.querySelectorAll<HTMLElement>('[data-settings-sidebar-button]').forEach((btn) => {
+          btn.dataset.searchMatchCount = '0'
+        })
+      }
+      setSearchStats({ matched: rows.length, total: rows.length })
+      return
+    }
+
     let matched = 0
+    // Per-category count so the sidebar can show a halo + badge on the
+    // matching categories even when their content is currently hidden
+    // (i.e. when not searching, only the active category is in the DOM,
+    // so the walk only finds rows in that category — counts for inactive
+    // categories are stale but irrelevant, since the halo only renders
+    // while a search is active).
+    const byCategory = new Map<string, number>()
     rows.forEach((row) => {
       const haystack = row.dataset.searchKeywords ?? ''
-      const isMatch = tokens.length === 0 || tokens.every((tok) => haystack.includes(tok))
+      const isMatch = tokens.every((tok) => haystack.includes(tok))
       row.dataset.searchMatch = isMatch ? 'true' : 'false'
-      if (isMatch) matched += 1
+      if (isMatch) {
+        matched += 1
+        const cat = row.closest('[data-category]')?.getAttribute('data-category')
+        if (cat) byCategory.set(cat, (byCategory.get(cat) ?? 0) + 1)
+      }
     })
     setSearchStats({ matched, total: rows.length })
     // Mark each SettingsCard with whether any of its rows matched so the
@@ -276,6 +333,17 @@ export function SettingsView(): ReactElement {
       const hasMatch = card.querySelector('[data-setting-row][data-search-match="true"]') !== null
       card.dataset.searchHasMatch = hasMatch ? 'true' : 'false'
     })
+    // Mirror per-category counts to the sidebar buttons. Sidebar lives
+    // outside the content root, so we walk it independently. The sidebar
+    // buttons already carry `data-category` (added in this change), so
+    // we can match by category id without prop drilling.
+    if (sidebar) {
+      sidebar.querySelectorAll<HTMLElement>('[data-settings-sidebar-button]').forEach((btn) => {
+        const cat = btn.dataset.category
+        if (!cat) return
+        btn.dataset.searchMatchCount = String(byCategory.get(cat) ?? 0)
+      })
+    }
   }, [searchQuery, category, form])
 
   // `/` focuses the search input (mirrors GitHub-style keyboard hint). Skip
@@ -1039,11 +1107,19 @@ export function SettingsView(): ReactElement {
   }
 
   return (
-    <div className="ds-drag flex h-full min-h-0 w-full min-w-0 bg-ds-main">
+    <div
+      className="ds-drag flex h-full min-h-0 w-full min-w-0 bg-ds-main"
+      data-search-active={searchQuery.trim() ? 'true' : 'false'}
+    >
       <SettingsSidebar category={category} setCategory={setCategory} goBack={goBack} t={t} />
 
       <div className="ds-no-drag min-h-0 min-w-0 flex-1 overflow-y-auto px-10 py-10">
-        <div className="mx-auto max-w-3xl" ref={settingsContentRef}>
+        <div
+          className="mx-auto max-w-3xl"
+          ref={settingsContentRef}
+          data-active-category={category}
+          data-search-active={searchQuery.trim() ? 'true' : 'false'}
+        >
           {!activeApiKey.trim() ? (
             <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
               <div className="text-[15px] font-semibold">{t('apiKeyRequiredTitle')}</div>
@@ -1141,21 +1217,21 @@ export function SettingsView(): ReactElement {
             </div>
           ) : null}
 
-          {category === 'general' ? <GeneralSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'providers' ? <ProvidersSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'write' ? <WriteSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'mediaGeneration' ? <MediaGenerationSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'speechToText' ? <SpeechToTextSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'agents' ? <AgentsSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'archives' ? <ArchivedThreadsSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'worktree' ? <WorktreeSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'memory' ? <MemorySettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'shortcuts' ? <KeyboardShortcutsSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'easterEgg' ? <EasterEggSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'claw' ? <ClawSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'updates' ? <UpdatesSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'terminal' ? <TerminalSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'debug' ? <LlmDebugSettingsSection ctx={settingsSectionContext} /> : null}
+          {SETTINGS_SECTIONS.map(({ id, Component }) => {
+            // `permissions` is a valid SettingsCategory value (callers from
+            // chat-store-claw-actions etc. set it), and AgentsSettingsSection
+            // is the section that actually renders the permissions card.
+            const isActive = id === category || (id === 'agents' && category === 'permissions')
+            return (
+              <div
+                key={id}
+                data-category={id}
+                data-section-active={isActive ? 'true' : 'false'}
+              >
+                <Component ctx={settingsSectionContext} />
+              </div>
+            )
+          })}
         </div>
       </div>
       {saveStatus === 'error' && saveError ? (
