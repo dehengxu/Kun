@@ -20,7 +20,7 @@ export function SettingsSidebar({
     `relative flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[14px] font-medium transition ${
       category === c
         ? 'bg-ds-subtle text-ds-ink shadow-sm ring-1 ring-ds-border-muted'
-        : 'text-ds-muted hover:bg-ds-hover'
+        : 'text-ds-muted'
     }`
 
   return (
