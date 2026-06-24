@@ -2231,7 +2231,7 @@ export function Workbench(): ReactElement {
 
   const renderPlanPanel = (className: string): ReactElement => (
     <PlanPanel
-      workspaceRoot={workspaceRoot}
+      workspaceRoot={activeSkillWorkspace}
       activeThreadId={activeThreadId}
       runtimeReady={runtimeConnection === 'ready'}
       busy={busy}
