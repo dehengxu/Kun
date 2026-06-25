@@ -1614,7 +1614,24 @@ function messagesToAnthropic(
           if (image) blocks.push({ type: 'image', source: image })
         }
       }
-      out.push({ role: 'user', content: blocks })
+      // Parallel tool calls arrive as N consecutive `role: 'tool'` messages.
+      // Anthropic requires every tool_use from a single assistant turn to be
+      // answered by tool_result blocks inside ONE user message — emitting N
+      // separate user messages trips "tool_use ids were found without
+      // tool_result blocks immediately after" on compat providers. Real user
+      // turns never carry a tool_result block, so its presence marks the run
+      // we are still folding into.
+      const last = out[out.length - 1]
+      if (
+        last &&
+        last.role === 'user' &&
+        Array.isArray(last.content) &&
+        (last.content as AnthropicContentBlock[]).some((b) => b.type === 'tool_result')
+      ) {
+        last.content.push(...blocks)
+      } else {
+        out.push({ role: 'user', content: blocks })
+      }
       continue
     }
     const content = chatContentToAnthropicContent(message.content)
