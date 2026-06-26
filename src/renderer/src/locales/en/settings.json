@@ -804,7 +804,7 @@
   "mcpPermissionRemoteServers": "HTTP/SSE servers",
   "mcpPermissionEnvServers": "Uses env",
   "mcpPermissionHeaderServers": "Uses headers",
-  "mcpPermissionParseError": "Permission preview unavailable until the MCP JSON is fixed: {{error}}",
+  "mcpPermissionParseError": "Permission preview unavailable until the MCP JSON is fixed.",
   "mcpPermissionRuntimeNote": "Secret values stay hidden here. Runtime access still follows each server's trust scope and the main agent permission mode.",
   "mcpPathDesc": "Location of the external tool connection config file.",
   "mcpEditor": "External tool config",

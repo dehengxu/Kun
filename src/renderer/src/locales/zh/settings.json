@@ -804,7 +804,7 @@
   "mcpPermissionRemoteServers": "HTTP/SSE 服务器",
   "mcpPermissionEnvServers": "使用环境变量",
   "mcpPermissionHeaderServers": "使用请求头",
-  "mcpPermissionParseError": "MCP JSON 修复前无法预览权限：{{error}}",
+  "mcpPermissionParseError": "MCP JSON 修复前无法预览权限。",
   "mcpPermissionRuntimeNote": "这里不会显示密钥值。运行时访问仍由每个服务器的信任范围和主 Agent 权限模式共同控制。",
   "mcpPathDesc": "外部工具连接配置文件的位置。",
   "mcpEditor": "外部工具配置",
