@@ -21,6 +21,25 @@ describe('parseModelIds', () => {
     ])
   })
 
+  test('derives concrete version ids from the description (dedupes default+sonnet)', () => {
+    const payload = JSON.stringify([
+      { value: 'default', description: 'Sonnet 4.6 · Efficient for routine tasks' },
+      { value: 'sonnet', description: 'Sonnet 4.6 · Efficient for routine tasks' },
+      { value: 'opus', description: 'Opus 4.8 · Best for everyday, complex tasks' },
+      { value: 'haiku', description: 'Haiku 4.5 · Fastest for quick answers' }
+    ])
+    expect(parseModelIds(`${MARK}${payload}${MARK}`)).toEqual([
+      'claude-sonnet-4-6',
+      'claude-opus-4-8',
+      'claude-haiku-4-5'
+    ])
+  })
+
+  test('falls back to the alias value when the description has no version', () => {
+    const payload = JSON.stringify([{ value: 'sonnet' }, { value: 'claude-opus-4-8', description: 'custom' }])
+    expect(parseModelIds(`${MARK}${payload}${MARK}`)).toEqual(['sonnet', 'claude-opus-4-8'])
+  })
+
   test('returns [] when the frame or JSON is absent/garbage', () => {
     expect(parseModelIds('')).toEqual([])
     expect(parseModelIds(`${MARK}not json${MARK}`)).toEqual([])

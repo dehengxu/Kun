@@ -102,12 +102,20 @@ export function parseModelIds(stdout: string): string[] {
     return []
   }
   if (!Array.isArray(parsed)) return []
-  const ids = parsed
-    .map((entry) =>
-      entry && typeof entry === 'object' && typeof (entry as { value?: unknown }).value === 'string'
-        ? (entry as { value: string }).value.trim()
-        : ''
-    )
-    .filter(Boolean)
+  const ids = parsed.map(modelIdFromInfo).filter(Boolean)
   return [...new Set(ids)]
+}
+
+/**
+ * The SDK's ModelInfo.value is an alias (`opus`/`sonnet`/`haiku`/`default`), but
+ * its description carries the concrete version (`Opus 4.8`, `Sonnet 4.6`, …). We
+ * prefer the specific code (`claude-opus-4-8`) and fall back to the alias.
+ */
+export function modelIdFromInfo(entry: unknown): string {
+  if (!entry || typeof entry !== 'object') return ''
+  const info = entry as { value?: unknown; description?: unknown }
+  const description = typeof info.description === 'string' ? info.description : ''
+  const match = description.match(/\b(opus|sonnet|haiku)\s+(\d+(?:\.\d+)*)/i)
+  if (match) return `claude-${match[1].toLowerCase()}-${match[2].replace(/\./g, '-')}`
+  return typeof info.value === 'string' ? info.value.trim() : ''
 }
