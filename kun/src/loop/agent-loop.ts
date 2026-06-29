@@ -104,7 +104,6 @@ const MAX_PARALLEL_TOOL_CALLS = 3
 // request. Older ones collapse to a text note (Anthropic-style "keep last
 // N images"), bounding context growth for long computer-use sessions.
 const MAX_FORWARDED_TOOL_IMAGES = 3
-const MAX_TURN_MODEL_STEPS = 64
 
 /**
  * Tools that, on their own, do not count as "progress" toward a goal when
@@ -1293,30 +1292,6 @@ export class AgentLoop {
   ): Promise<'completed' | 'failed' | 'aborted'> {
     for (let step = 0; ; step += 1) {
       if (signal.aborted) return 'aborted'
-      if (step >= MAX_TURN_MODEL_STEPS) {
-        const message =
-          `Turn stopped after ${MAX_TURN_MODEL_STEPS} model steps without reaching a final response.`
-        await this.opts.events.record({
-          kind: 'error',
-          threadId,
-          turnId,
-          message,
-          code: 'turn_step_limit_exceeded',
-          severity: 'error'
-        })
-        await this.opts.turns.applyItem(
-          threadId,
-          makeErrorItem({
-            id: this.opts.ids.next('item_error'),
-            turnId,
-            threadId,
-            message,
-            code: 'turn_step_limit_exceeded',
-            severity: 'error'
-          })
-        )
-        return 'failed'
-      }
       await this.drainSteering(threadId, turnId, signal)
       const stepResult = await this.modelStep(threadId, turnId, signal, step)
       if (stepResult === 'stop') return 'completed'
