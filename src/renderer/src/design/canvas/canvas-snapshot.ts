@@ -7,7 +7,7 @@
  *
  * The id is still included so the AI can target shapes precisely in ShapeOps.
  */
-import { isImplicitImageSlot } from './canvas-types'
+import { fillColor, isImplicitImageSlot } from './canvas-types'
 import type { CanvasDocument, CanvasShape, Point } from './canvas-types'
 
 export type CanvasSnapshotShape = {
@@ -41,12 +41,20 @@ export type CanvasSnapshotShape = {
 
   /** Primary fill color (hex) when the shape has a visible fill. */
   fill?: string
+  /** Gradient summary (e.g. `linear 90deg #a→#b`) for gradient-filled shapes. */
+  gradient?: string
   /** Primary stroke as `color/width` (e.g. `#111827/1`) when visibly stroked. */
   stroke?: string
   /** Text color (hex) for text shapes. */
   fontColor?: string
   /** Corner radius in px when rounded. */
   cornerRadius?: number
+  /** Compact shadow summary (e.g. `0/4 b8`) when the shape has a shadow. */
+  shadow?: string
+  /** CSS mix-blend-mode when not normal. */
+  blendMode?: string
+  /** Auto-layout summary (e.g. `row gap12 pad16`) on laid-out frames/groups. */
+  layout?: string
 
   /** Linear shapes only: vertices in ABSOLUTE canvas coords. */
   points?: Point[]
@@ -57,19 +65,46 @@ export type CanvasSnapshotShape = {
  * fontColor/cornerRadius, and only when present. Lets the agent reuse the real
  * palette ("match the same blue", "restyle to fit") instead of guessing blind.
  */
-function styleDigest(s: CanvasShape): {
+type StyleDigest = {
   fill?: string
+  /** Gradient fills only: `linear 90deg #a→#b` so the agent can match/extend them. */
+  gradient?: string
   stroke?: string
   fontColor?: string
   cornerRadius?: number
-} {
-  const out: { fill?: string; stroke?: string; fontColor?: string; cornerRadius?: number } = {}
+  /** Compact effect summary, e.g. `shadow 0/4 b8` so the agent reuses the elevation. */
+  shadow?: string
+  blendMode?: string
+  /** Auto-layout summary, e.g. `row gap12 pad16` — present on laid-out frames. */
+  layout?: string
+}
+
+function styleDigest(s: CanvasShape): StyleDigest {
+  const out: StyleDigest = {}
   const fill = s.fills?.find((f) => f.opacity > 0)
-  if (fill?.color) out.fill = fill.color
+  if (fill) {
+    if (fill.type === 'solid') {
+      out.fill = fill.color
+    } else {
+      const dir = fill.type === 'linear' ? `linear ${round(fill.angle ?? 90)}deg` : 'radial'
+      out.gradient = `${dir} ${fill.stops.map((st) => st.color).join('→')}`
+      const primary = fillColor(fill)
+      if (primary) out.fill = primary
+    }
+  }
   const stroke = s.strokes?.find((st) => st.opacity > 0 && st.width > 0)
   if (stroke) out.stroke = `${stroke.color}/${round(stroke.width)}`
   if (s.fontColor) out.fontColor = s.fontColor
   if (typeof s.cornerRadius === 'number' && s.cornerRadius > 0) out.cornerRadius = round(s.cornerRadius)
+  if (s.shadows && s.shadows.length > 0) {
+    const sh = s.shadows[0]
+    out.shadow = `${sh.type === 'inner' ? 'inner ' : ''}${round(sh.x)}/${round(sh.y)} b${round(sh.blur)}`
+  }
+  if (s.blendMode && s.blendMode !== 'normal') out.blendMode = s.blendMode
+  if (s.layout) {
+    const dir = s.layout.direction === 'horizontal' ? 'row' : 'col'
+    out.layout = `${dir} gap${round(s.layout.gap)} pad${round(s.layout.paddingTop)}`
+  }
   return out
 }
 

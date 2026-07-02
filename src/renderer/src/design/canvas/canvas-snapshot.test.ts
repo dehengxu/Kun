@@ -168,6 +168,41 @@ describe('snapshotCanvas', () => {
     expect(snap.shapes[1].fontColor).toBe('#0a0a0a')
   })
 
+  it('summarizes gradient, shadow and auto-layout in the digest', () => {
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const card = createDefaultShape('frame', 0, 0)
+    card.fills = [
+      {
+        type: 'linear',
+        angle: 90,
+        opacity: 1,
+        stops: [
+          { offset: 0, color: '#6366f1' },
+          { offset: 1, color: '#8b5cf6' }
+        ]
+      }
+    ]
+    card.shadows = [{ x: 0, y: 4, blur: 12, color: '#0f172a', opacity: 0.2 }]
+    card.layout = {
+      direction: 'horizontal',
+      gap: 12,
+      paddingTop: 16,
+      paddingRight: 16,
+      paddingBottom: 16,
+      paddingLeft: 16
+    }
+    doc.objects[card.id] = { ...card, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...root, children: [card.id] }
+
+    const snap = snapshotCanvas(doc)
+    expect(snap.shapes[0].gradient).toBe('linear 90deg #6366f1→#8b5cf6')
+    expect(snap.shapes[0].shadow).toBe('0/4 b12')
+    expect(snap.shapes[0].layout).toBe('row gap12 pad16')
+    // The gradient's first stop still surfaces as the primary fill color.
+    expect(snap.shapes[0].fill).toBe('#6366f1')
+  })
+
   it('omits stroke when it is invisible (width 0 or opacity 0)', () => {
     const doc = createEmptyDocument()
     const root = doc.objects[doc.rootId]

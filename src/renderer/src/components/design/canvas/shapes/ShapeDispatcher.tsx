@@ -1,5 +1,7 @@
 import { memo } from 'react'
+import type { CSSProperties } from 'react'
 import type { CanvasShape } from '../../../../design/canvas/canvas-types'
+import { hasShadow, shadowFilterId } from './shape-paint'
 import { RectShape } from './RectShape'
 import { EllipseShape } from './EllipseShape'
 import { TextShape } from './TextShape'
@@ -49,12 +51,21 @@ function ShapeDispatcherInner({
       return null
   }
 
+  // Shadows render through a per-shape SVG filter declared inside the shape
+  // content (ShapePaintDefs); blend mode maps straight to CSS mix-blend-mode.
+  const style: CSSProperties = { pointerEvents: shape.locked ? 'none' : 'auto' }
+  if (shape.blendMode && shape.blendMode !== 'normal') {
+    style.mixBlendMode = shape.blendMode
+  }
+  const filter = hasShadow(shape) ? `url(#${shadowFilterId(shape.id)})` : undefined
+
   return (
     <g
       id={`shape-${shape.id}`}
       transform={transform}
       opacity={shape.opacity}
-      style={{ pointerEvents: shape.locked ? 'none' : 'auto' }}
+      filter={filter}
+      style={style}
     >
       {content}
     </g>

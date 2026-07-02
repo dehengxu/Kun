@@ -6,6 +6,7 @@ import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasUndoStore } from '../../../design/canvas/canvas-undo-store'
 import {
   DEFAULT_FILL,
+  fillColor as resolveFillColor,
   isHtmlFrame,
   isImplicitImageSlot,
   type Arrowhead,
@@ -436,7 +437,7 @@ function PropertiesPanelInner({ onImplementDesign }: Props): ReactElement | null
   )
 
   const firstFill: Fill | undefined = shapes[0]?.fills[0]
-  const fillColor = reduceField(shapes, (s) => s.fills[0]?.color)
+  const fillColor = reduceField(shapes, (s) => resolveFillColor(s.fills[0]) ?? undefined)
 
   const firstStroke: Stroke | undefined = shapes[0]?.strokes[0]
   const strokeColor = reduceField(shapes, (s) => s.strokes[0]?.color)

@@ -28,6 +28,15 @@ describe('last-canvas-op-errors stash (agent self-correction bridge)', () => {
     expect(takeLastCanvasOpErrors()).toEqual([{ code: 'SHAPE_NOT_FOUND', message: 'No shape "x"' }])
     expect(takeLastCanvasOpErrors()).toEqual([])
   })
+
+  it('isolates errors per design key so two documents do not cross-contaminate', () => {
+    setLastCanvasOpErrors([{ code: 'SHAPE_NOT_FOUND', message: 'doc A' }], 'docA')
+    setLastCanvasOpErrors([{ code: 'PARENT_NOT_FOUND', message: 'doc B' }], 'docB')
+    expect(takeLastCanvasOpErrors('docA')).toEqual([{ code: 'SHAPE_NOT_FOUND', message: 'doc A' }])
+    // Taking docA must not have drained docB.
+    expect(takeLastCanvasOpErrors('docB')).toEqual([{ code: 'PARENT_NOT_FOUND', message: 'doc B' }])
+    expect(takeLastCanvasOpErrors('docA')).toEqual([])
+  })
 })
 
 describe('extractShapeOpsBlocks', () => {

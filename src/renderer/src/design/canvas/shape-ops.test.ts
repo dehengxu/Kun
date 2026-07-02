@@ -143,6 +143,202 @@ describe('executeOps execution', () => {
   })
 })
 
+describe('set-style batch op', () => {
+  it('applies one style to many shapes at once', () => {
+    const r1 = executeOps([
+      { op: 'add', shape: { type: 'rect', x: 0, y: 0, width: 10, height: 10 } },
+      { op: 'add', shape: { type: 'rect', x: 50, y: 0, width: 10, height: 10 } }
+    ])
+    const [a, b] = r1.affectedIds
+    const r2 = executeOps([
+      {
+        op: 'set-style',
+        ids: [a, b],
+        style: {
+          fills: [{ type: 'solid', color: '#3b82d8', opacity: 1 }],
+          shadows: [{ x: 0, y: 4, blur: 12, color: '#0f172a', opacity: 0.2 }]
+        }
+      }
+    ])
+    expect(r2.ok).toBe(true)
+    const doc = useCanvasShapeStore.getState().document
+    for (const id of [a, b]) {
+      const fill = doc.objects[id].fills[0]
+      expect(fill.type === 'solid' && fill.color).toBe('#3b82d8')
+      expect(doc.objects[id].shadows?.[0].blur).toBe(12)
+    }
+  })
+
+  it('reports missing ids but styles the present ones', () => {
+    const r1 = executeOps([{ op: 'add', shape: { type: 'rect', x: 0, y: 0, width: 10, height: 10 } }])
+    const a = r1.affectedIds[0]
+    const r2 = executeOps([
+      { op: 'set-style', ids: [a, 'ghost'], style: { opacity: 0.5 } }
+    ])
+    expect(r2.errors.some((e) => e.code === 'SHAPE_NOT_FOUND')).toBe(true)
+    expect(useCanvasShapeStore.getState().document.objects[a].opacity).toBe(0.5)
+  })
+})
+
+describe('gradient fills', () => {
+  it('accepts a linear gradient fill on add', () => {
+    const r = executeOps([
+      {
+        op: 'add',
+        shape: {
+          type: 'rect',
+          x: 0,
+          y: 0,
+          width: 100,
+          height: 100,
+          fills: [
+            {
+              type: 'linear',
+              angle: 90,
+              opacity: 1,
+              stops: [
+                { offset: 0, color: '#6366f1' },
+                { offset: 1, color: '#8b5cf6' }
+              ]
+            }
+          ]
+        }
+      }
+    ])
+    expect(r.ok).toBe(true)
+    const fill = useCanvasShapeStore.getState().document.objects[r.affectedIds[0]].fills[0]
+    expect(fill.type).toBe('linear')
+  })
+
+  it('rejects a gradient with fewer than 2 stops', () => {
+    const r = executeOps([
+      {
+        op: 'add',
+        shape: {
+          type: 'rect',
+          x: 0,
+          y: 0,
+          width: 10,
+          height: 10,
+          fills: [{ type: 'linear', opacity: 1, stops: [{ offset: 0, color: '#fff' }] }]
+        }
+      }
+    ])
+    expect(r.ok).toBe(false)
+    expect(r.errors[0].code).toBe('INVALID_OP')
+  })
+})
+
+describe('group / ungroup ops', () => {
+  it('groups shapes, wrapping them in a group sized to their bounds', () => {
+    const r1 = executeOps([
+      { op: 'add', shape: { type: 'rect', x: 0, y: 0, width: 50, height: 50 } },
+      { op: 'add', shape: { type: 'rect', x: 100, y: 100, width: 50, height: 50 } }
+    ])
+    const [a, b] = r1.affectedIds
+    const r2 = executeOps([{ op: 'group', ids: [a, b], name: 'Card' }])
+    expect(r2.ok).toBe(true)
+    const doc = useCanvasShapeStore.getState().document
+    const groupId = r2.affectedIds.find((id) => doc.objects[id]?.type === 'group')
+    expect(groupId).toBeDefined()
+    const group = doc.objects[groupId!]
+    expect(group.width).toBe(150)
+    expect(group.height).toBe(150)
+    // Members now parented under the group.
+    expect(doc.objects[a].parentId).toBe(groupId)
+    expect(doc.objects[b].parentId).toBe(groupId)
+  })
+
+  it('ungroup lifts children back to the grandparent and deletes the group', () => {
+    const r1 = executeOps([
+      { op: 'add', shape: { type: 'rect', x: 0, y: 0, width: 50, height: 50 } },
+      { op: 'add', shape: { type: 'rect', x: 100, y: 100, width: 50, height: 50 } }
+    ])
+    const [a, b] = r1.affectedIds
+    const rg = executeOps([{ op: 'group', ids: [a, b] }])
+    const doc1 = useCanvasShapeStore.getState().document
+    const groupId = rg.affectedIds.find((id) => doc1.objects[id]?.type === 'group')!
+    const ru = executeOps([{ op: 'ungroup', id: groupId }])
+    expect(ru.ok).toBe(true)
+    const doc = useCanvasShapeStore.getState().document
+    expect(doc.objects[groupId]).toBeUndefined()
+    expect(doc.objects[a].parentId).toBe(doc.rootId)
+    expect(doc.objects[b].parentId).toBe(doc.rootId)
+  })
+})
+
+describe('auto-layout op', () => {
+  it('sets a layout and reflows the frame children', () => {
+    const rf = executeOps([
+      { op: 'add', shape: { type: 'frame', x: 0, y: 0, width: 200, height: 400 } }
+    ])
+    const frameId = rf.affectedIds[0]
+    executeOps([
+      { op: 'add', shape: { type: 'rect', x: 999, y: 999, width: 50, height: 30 }, parentId: frameId },
+      { op: 'add', shape: { type: 'rect', x: 999, y: 999, width: 50, height: 40 }, parentId: frameId }
+    ])
+    const r = executeOps([
+      {
+        op: 'auto-layout',
+        id: frameId,
+        layout: { direction: 'vertical', gap: 10, padding: 16 }
+      }
+    ])
+    expect(r.ok).toBe(true)
+    const doc = useCanvasShapeStore.getState().document
+    const [c1, c2] = doc.objects[frameId].children
+    expect(doc.objects[c1].x).toBe(16)
+    expect(doc.objects[c1].y).toBe(16)
+    expect(doc.objects[c2].y).toBe(56) // 16 + 30 + 10
+  })
+
+  it('rejects auto-layout on a non-container shape', () => {
+    const rr = executeOps([{ op: 'add', shape: { type: 'rect', x: 0, y: 0, width: 10, height: 10 } }])
+    const r = executeOps([{ op: 'auto-layout', id: rr.affectedIds[0], layout: { direction: 'horizontal' } }])
+    expect(r.ok).toBe(false)
+    expect(r.errors[0].code).toBe('UNSUPPORTED_TYPE')
+  })
+
+  it('adding a child to a laid-out frame reflows it automatically', () => {
+    const rf = executeOps([
+      { op: 'add', shape: { type: 'frame', x: 0, y: 0, width: 200, height: 400 } }
+    ])
+    const frameId = rf.affectedIds[0]
+    executeOps([{ op: 'auto-layout', id: frameId, layout: { direction: 'vertical', gap: 8, padding: 10 } }])
+    const ra = executeOps([
+      { op: 'add', shape: { type: 'rect', x: 500, y: 500, width: 40, height: 20 }, parentId: frameId }
+    ])
+    const childId = ra.affectedIds.find((id) => {
+      const s = useCanvasShapeStore.getState().document.objects[id]
+      return s?.type === 'rect'
+    })!
+    const doc = useCanvasShapeStore.getState().document
+    expect(doc.objects[childId].x).toBe(10)
+    expect(doc.objects[childId].y).toBe(10)
+  })
+})
+
+describe('resize honors child constraints', () => {
+  it('a right-constrained child sticks to the frame’s right edge on resize', () => {
+    const rf = executeOps([
+      { op: 'add', shape: { type: 'frame', x: 0, y: 0, width: 200, height: 200 } }
+    ])
+    const frameId = rf.affectedIds[0]
+    const rc = executeOps([
+      {
+        op: 'add',
+        shape: { type: 'rect', x: 130, y: 10, width: 50, height: 50, constraints: { h: 'right', v: 'top' } },
+        parentId: frameId
+      }
+    ])
+    const childId = rc.affectedIds.find((id) => useCanvasShapeStore.getState().document.objects[id]?.type === 'rect')!
+    executeOps([{ op: 'resize', id: frameId, bounds: { x: 0, y: 0, width: 400, height: 200 } }])
+    const doc = useCanvasShapeStore.getState().document
+    // Trailing gap was 20px (200 - 180); preserved against the new 400 width → x 330.
+    expect(doc.objects[childId].x).toBe(330)
+  })
+})
+
 describe('addShape unique naming', () => {
   it('renames duplicates with " 2", " 3" etc. under the same parent', () => {
     executeOps([{ op: 'add', shape: { type: 'rect', name: 'Card', x: 0, y: 0, width: 10, height: 10 } }])

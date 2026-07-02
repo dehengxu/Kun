@@ -7,16 +7,19 @@
  * self-correct in one turn instead of throwing.
  */
 import { z } from 'zod'
-import type { CanvasShape, Point, ShapeType } from './canvas-types'
+import type { AutoLayout, CanvasShape, Point, Rect, ShapeType } from './canvas-types'
 import { createDefaultShape, createHtmlFrameShape, type DevicePreset } from './canvas-types'
 import { useCanvasShapeStore, withDescendants } from './canvas-shape-store'
 import { useCanvasUndoStore } from './canvas-undo-store'
 import {
   alignShapes,
+  collectiveBounds,
   distributeShapes,
   type AlignAxis,
   type DistributeAxis
 } from './canvas-align'
+import { computeAutoLayout, defaultAutoLayout } from './canvas-auto-layout'
+import { constrainedBox } from './canvas-constraints'
 
 import { getScreenArtifactFactory, setScreenBrief } from './screen-artifact-bridge'
 
@@ -34,10 +37,83 @@ const ShapeTypeSchema = z.enum([
 
 const PointSchema = z.object({ x: z.number(), y: z.number() })
 
-const FillSchema = z.object({
+const SolidFillSchema = z.object({
   type: z.literal('solid'),
   color: z.string(),
   opacity: z.number().min(0).max(1)
+})
+
+const GradientStopSchema = z.object({
+  offset: z.number().min(0).max(1),
+  color: z.string(),
+  opacity: z.number().min(0).max(1).optional()
+})
+
+const GradientFillSchema = z.object({
+  type: z.enum(['linear', 'radial']),
+  stops: z.array(GradientStopSchema).min(2),
+  angle: z.number().optional(),
+  opacity: z.number().min(0).max(1)
+})
+
+const FillSchema = z.union([SolidFillSchema, GradientFillSchema])
+
+const ShadowSchema = z.object({
+  type: z.enum(['drop', 'inner']).optional(),
+  x: z.number(),
+  y: z.number(),
+  blur: z.number().min(0),
+  spread: z.number().optional(),
+  color: z.string(),
+  opacity: z.number().min(0).max(1)
+})
+
+const BlendModeSchema = z.enum([
+  'normal',
+  'multiply',
+  'screen',
+  'overlay',
+  'darken',
+  'lighten',
+  'color-dodge',
+  'color-burn',
+  'hard-light',
+  'soft-light',
+  'difference',
+  'exclusion',
+  'hue',
+  'saturation',
+  'color',
+  'luminosity'
+])
+
+const AutoLayoutSchema = z.object({
+  direction: z.enum(['horizontal', 'vertical']),
+  gap: z.number().min(0),
+  paddingTop: z.number().min(0),
+  paddingRight: z.number().min(0),
+  paddingBottom: z.number().min(0),
+  paddingLeft: z.number().min(0),
+  primaryAlign: z.enum(['start', 'center', 'end', 'space-between']).optional(),
+  counterAlign: z.enum(['start', 'center', 'end']).optional()
+})
+
+/** Loose layout spec accepted by the `auto-layout` op — merged over defaults. */
+const PartialAutoLayoutSchema = z.object({
+  direction: z.enum(['horizontal', 'vertical']).optional(),
+  gap: z.number().min(0).optional(),
+  padding: z.number().min(0).optional(),
+  paddingTop: z.number().min(0).optional(),
+  paddingRight: z.number().min(0).optional(),
+  paddingBottom: z.number().min(0).optional(),
+  paddingLeft: z.number().min(0).optional(),
+  primaryAlign: z.enum(['start', 'center', 'end', 'space-between']).optional(),
+  counterAlign: z.enum(['start', 'center', 'end']).optional()
+})
+
+const ConstraintsSchema = z.object({
+  h: z.enum(['left', 'right', 'left-right', 'center', 'scale']),
+  v: z.enum(['top', 'bottom', 'top-bottom', 'center', 'scale'])
 })
 
 const StrokeSchema = z.object({
@@ -75,7 +151,11 @@ const PartialShapeSchema = z
     clipContent: z.boolean().optional(),
     points: z.array(PointSchema).optional(),
     arrowheadStart: ArrowheadSchema.optional(),
-    arrowheadEnd: ArrowheadSchema.optional()
+    arrowheadEnd: ArrowheadSchema.optional(),
+    shadows: z.array(ShadowSchema).optional(),
+    blendMode: BlendModeSchema.optional(),
+    layout: AutoLayoutSchema.optional(),
+    constraints: ConstraintsSchema.optional()
   })
   .strict()
 
@@ -104,8 +184,30 @@ const PatchSchema = z
     points: z.array(PointSchema).optional(),
     arrowheadStart: ArrowheadSchema.optional(),
     arrowheadEnd: ArrowheadSchema.optional(),
+    shadows: z.array(ShadowSchema).optional(),
+    blendMode: BlendModeSchema.optional(),
+    layout: AutoLayoutSchema.optional(),
+    constraints: ConstraintsSchema.optional(),
     visible: z.boolean().optional(),
     locked: z.boolean().optional()
+  })
+  .strict()
+
+/** Style-only fields for the batch `set-style` op (no geometry/structure). */
+const StyleSchema = z
+  .object({
+    fills: z.array(FillSchema).optional(),
+    strokes: z.array(StrokeSchema).optional(),
+    cornerRadius: z.number().min(0).optional(),
+    opacity: z.number().min(0).max(1).optional(),
+    shadows: z.array(ShadowSchema).optional(),
+    blendMode: BlendModeSchema.optional(),
+    fontColor: z.string().optional(),
+    fontSize: z.number().positive().optional(),
+    fontFamily: z.string().optional(),
+    fontWeight: z.number().min(100).max(900).optional(),
+    textAlign: z.enum(['left', 'center', 'right']).optional(),
+    lineHeight: z.number().positive().optional()
   })
   .strict()
 
@@ -158,6 +260,26 @@ export const ShapeOpSchema = z.discriminatedUnion('op', [
     op: z.literal('reorder'),
     id: z.string(),
     action: z.enum(['front', 'back', 'forward', 'backward'])
+  }),
+  z.object({
+    op: z.literal('group'),
+    ids: z.array(z.string()).min(1),
+    name: z.string().optional(),
+    /** Wrap into a `frame` (clips, can carry a fill/layout) instead of a bare `group`. */
+    asFrame: z.boolean().optional()
+  }),
+  z.object({ op: z.literal('ungroup'), id: z.string() }),
+  z.object({
+    op: z.literal('set-style'),
+    ids: z.array(z.string()).min(1),
+    style: StyleSchema
+  }),
+  z.object({
+    op: z.literal('auto-layout'),
+    id: z.string(),
+    layout: PartialAutoLayoutSchema.optional(),
+    /** Remove the layout instead of (re)applying one. */
+    clear: z.boolean().optional()
   })
 ])
 
@@ -229,6 +351,97 @@ function bboxRelative(pts: Point[]): {
   }
 }
 
+/**
+ * Re-run auto-layout for a frame/group and write the children's new positions.
+ * No-op when the shape has no layout. Called after structural edits (add /
+ * reparent / delete / resize) so a laid-out container stays tidy automatically.
+ */
+function reflowFrame(frameId: string, affectedIds: Set<string>): void {
+  const store = useCanvasShapeStore.getState()
+  const objects = store.document.objects
+  const frame = objects[frameId]
+  if (!frame?.layout) return
+  const positions = computeAutoLayout(objects, frameId)
+  for (const pos of positions) {
+    const child = store.document.objects[pos.id]
+    if (!child) continue
+    if (child.x !== pos.x || child.y !== pos.y) {
+      // Children may themselves carry descendants (absolute coords) — shift the
+      // whole subtree by the delta so nested content tracks the laid-out child.
+      const dx = pos.x - child.x
+      const dy = pos.y - child.y
+      const objs = store.document.objects
+      for (const id of withDescendants(objs, [pos.id])) {
+        const s = objs[id]
+        if (s) store.updateShape(id, { x: s.x + dx, y: s.y + dy })
+      }
+      affectedIds.add(pos.id)
+    }
+  }
+}
+
+/** Whether a shape exists and carries an auto-layout. */
+function objectHasLayout(id: string): boolean {
+  return Boolean(useCanvasShapeStore.getState().document.objects[id]?.layout)
+}
+
+/**
+ * Reposition/resize the direct children of a just-resized frame per their
+ * `constraints`. Children that have no constraints stick to top-left (the engine
+ * default). A child's descendants are shifted by the same positional delta so
+ * nested content tracks its constrained parent.
+ */
+function applyConstraintsOnResize(
+  frameId: string,
+  oldBounds: Rect,
+  newBounds: Rect,
+  affectedIds: Set<string>
+): void {
+  const store = useCanvasShapeStore.getState()
+  const frame = store.document.objects[frameId]
+  if (!frame) return
+  for (const childId of [...frame.children]) {
+    const child = store.document.objects[childId]
+    if (!child) continue
+    // Only act on children that opted into constraints — leave plain children put.
+    if (!child.constraints) continue
+    const box = constrainedBox(child, oldBounds, newBounds)
+    const dx = box.x - child.x
+    const dy = box.y - child.y
+    store.updateShape(childId, { x: box.x, y: box.y, width: box.width, height: box.height })
+    affectedIds.add(childId)
+    if (dx !== 0 || dy !== 0) {
+      const objs = store.document.objects
+      for (const descId of withDescendants(objs, [childId])) {
+        if (descId === childId) continue
+        const d = objs[descId]
+        if (d) store.updateShape(descId, { x: d.x + dx, y: d.y + dy })
+      }
+    }
+  }
+}
+
+type PartialAutoLayout = z.infer<typeof PartialAutoLayoutSchema>
+
+/**
+ * Merge a loose layout spec over the frame's existing layout (or defaults).
+ * The `padding` shorthand sets all four sides; explicit per-side values win.
+ */
+function mergeAutoLayout(existing: AutoLayout | undefined, partial?: PartialAutoLayout): AutoLayout {
+  const base = existing ?? defaultAutoLayout()
+  const pad = partial?.padding
+  return {
+    direction: partial?.direction ?? base.direction,
+    gap: partial?.gap ?? base.gap,
+    paddingTop: partial?.paddingTop ?? pad ?? base.paddingTop,
+    paddingRight: partial?.paddingRight ?? pad ?? base.paddingRight,
+    paddingBottom: partial?.paddingBottom ?? pad ?? base.paddingBottom,
+    paddingLeft: partial?.paddingLeft ?? pad ?? base.paddingLeft,
+    primaryAlign: partial?.primaryAlign ?? base.primaryAlign,
+    counterAlign: partial?.counterAlign ?? base.counterAlign
+  }
+}
+
 function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): void {
   const store = useCanvasShapeStore.getState()
   switch (op.op) {
@@ -259,6 +472,7 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
       }
       store.addShape(base, op.parentId)
       affectedIds.add(base.id)
+      if (op.parentId) reflowFrame(op.parentId, affectedIds)
       break
     }
     case 'update': {
@@ -282,7 +496,8 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
       break
     }
     case 'delete': {
-      if (!findShape(op.id)) {
+      const target = findShape(op.id)
+      if (!target) {
         errors.push({
           code: 'SHAPE_NOT_FOUND',
           message: `No shape with id "${op.id}"`,
@@ -290,8 +505,11 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
         })
         return
       }
+      const parentId = target.parentId
       store.deleteShape(op.id)
       affectedIds.add(op.id)
+      // Closing the gap a deleted child left in a laid-out container.
+      if (parentId && objectHasLayout(parentId)) reflowFrame(parentId, affectedIds)
       break
     }
     case 'reparent': {
@@ -305,6 +523,7 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
       }
       store.reparentShape(op.id, op.newParentId, op.index)
       affectedIds.add(op.id)
+      if (objectHasLayout(op.newParentId)) reflowFrame(op.newParentId, affectedIds)
       break
     }
     case 'move': {
@@ -326,17 +545,27 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
       break
     }
     case 'resize': {
-      if (!findShape(op.id)) {
+      const target = findShape(op.id)
+      if (!target) {
         errors.push({ code: 'SHAPE_NOT_FOUND', message: `No shape "${op.id}"` })
         return
       }
-      store.updateShape(op.id, {
+      const oldBounds = { x: target.x, y: target.y, width: target.width, height: target.height }
+      const newBounds = {
         x: op.bounds.x,
         y: op.bounds.y,
         width: op.bounds.width,
         height: op.bounds.height
-      })
+      }
+      store.updateShape(op.id, newBounds)
       affectedIds.add(op.id)
+      if (target.layout) {
+        // Auto-layout owns child positions — re-flow to the new box.
+        reflowFrame(op.id, affectedIds)
+      } else if (target.type === 'frame' || target.type === 'group') {
+        // Otherwise honor each child's resize constraints.
+        applyConstraintsOnResize(op.id, oldBounds, newBounds, affectedIds)
+      }
       break
     }
     case 'align': {
@@ -451,6 +680,112 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
       // designs from it instead of the raw user prompt (see the turn-complete hook).
       if (op.brief) setScreenBrief(shape.id, op.brief)
       affectedIds.add(shape.id)
+      break
+    }
+    case 'group': {
+      const doc0 = useCanvasShapeStore.getState().document
+      const members = op.ids
+        .map((id) => doc0.objects[id])
+        .filter((s): s is CanvasShape => Boolean(s) && s.id !== doc0.rootId)
+      if (members.length === 0) {
+        errors.push({
+          code: 'SHAPE_NOT_FOUND',
+          message: `group: none of [${op.ids.join(', ')}] exist`,
+          suggestion: suggestionForMissingId(op.ids[0])
+        })
+        return
+      }
+      // The group lands under the first member's parent so it sits where the
+      // content already is; bounds wrap the whole selection.
+      const parentId = members[0].parentId ?? doc0.rootId
+      const bounds = collectiveBounds(
+        members.map((s) => ({ id: s.id, x: s.x, y: s.y, width: s.width, height: s.height }))
+      )
+      const container = createDefaultShape(op.asFrame ? 'frame' : 'group', bounds.x, bounds.y)
+      container.name = op.name ?? (op.asFrame ? 'Frame' : 'Group')
+      container.width = bounds.width
+      container.height = bounds.height
+      if (op.asFrame) {
+        container.clipContent = false
+      } else {
+        container.fills = []
+      }
+      store.addShape(container, parentId)
+      // Reparent members into the container, preserving their on-canvas order.
+      for (const m of members) {
+        store.reparentShape(m.id, container.id)
+        affectedIds.add(m.id)
+      }
+      affectedIds.add(container.id)
+      break
+    }
+    case 'ungroup': {
+      const group = findShape(op.id)
+      if (!group) {
+        errors.push({
+          code: 'SHAPE_NOT_FOUND',
+          message: `No shape with id "${op.id}"`,
+          suggestion: suggestionForMissingId(op.id)
+        })
+        return
+      }
+      const grandparentId = group.parentId
+      if (!grandparentId) {
+        errors.push({ code: 'INVALID_OP', message: `Cannot ungroup "${op.id}" — it has no parent to lift children into` })
+        return
+      }
+      // Snapshot children first: reparenting mutates group.children as we go.
+      const childIds = [...group.children]
+      for (const childId of childIds) {
+        store.reparentShape(childId, grandparentId)
+        affectedIds.add(childId)
+      }
+      store.deleteShape(op.id)
+      affectedIds.add(op.id)
+      if (objectHasLayout(grandparentId)) reflowFrame(grandparentId, affectedIds)
+      break
+    }
+    case 'set-style': {
+      const present = op.ids.filter((id) => {
+        if (findShape(id)) return true
+        errors.push({ code: 'SHAPE_NOT_FOUND', message: `No shape "${id}"`, suggestion: suggestionForMissingId(id) })
+        return false
+      })
+      if (present.length === 0) return
+      const patch = op.style as Partial<CanvasShape>
+      for (const id of present) {
+        store.updateShape(id, patch)
+        affectedIds.add(id)
+      }
+      break
+    }
+    case 'auto-layout': {
+      const frame = findShape(op.id)
+      if (!frame) {
+        errors.push({
+          code: 'SHAPE_NOT_FOUND',
+          message: `No shape with id "${op.id}"`,
+          suggestion: suggestionForMissingId(op.id)
+        })
+        return
+      }
+      if (frame.type !== 'frame' && frame.type !== 'group') {
+        errors.push({
+          code: 'UNSUPPORTED_TYPE',
+          message: `auto-layout needs a frame or group, got "${frame.type}"`,
+          suggestion: 'Group the shapes first (op "group"), then auto-layout the group.'
+        })
+        return
+      }
+      if (op.clear) {
+        store.updateShape(op.id, { layout: undefined })
+        affectedIds.add(op.id)
+        break
+      }
+      const merged = mergeAutoLayout(frame.layout, op.layout)
+      store.updateShape(op.id, { layout: merged })
+      affectedIds.add(op.id)
+      reflowFrame(op.id, affectedIds)
       break
     }
     default: {

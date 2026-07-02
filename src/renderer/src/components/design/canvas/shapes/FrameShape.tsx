@@ -2,6 +2,7 @@ import { memo } from 'react'
 import type { CanvasShape } from '../../../../design/canvas/canvas-types'
 import { isHtmlFrame } from '../../../../design/canvas/canvas-types'
 import { ShapeDispatcher } from './ShapeDispatcher'
+import { ShapePaintDefs, primaryFillPaint } from './shape-paint'
 
 function HtmlFramePlaceholder({ shape }: { shape: CanvasShape }) {
   return (
@@ -33,8 +34,7 @@ function FrameShapeInner({
     return <HtmlFramePlaceholder shape={shape} />
   }
 
-  const fill = shape.fills.length > 0 ? shape.fills[0].color : 'none'
-  const fillOpacity = shape.fills.length > 0 ? shape.fills[0].opacity : 0
+  const { fill, fillOpacity } = primaryFillPaint(shape)
   const clipId = shape.clipContent ? `clip-${shape.id}` : undefined
 
   // AI image holder: a frame the design agent fills with a child image on
@@ -46,6 +46,7 @@ function FrameShapeInner({
 
   return (
     <>
+      <ShapePaintDefs shape={shape} />
       <rect
         x={0}
         y={0}

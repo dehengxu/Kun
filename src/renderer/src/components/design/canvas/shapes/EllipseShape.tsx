@@ -1,16 +1,17 @@
 import { memo } from 'react'
 import type { CanvasShape } from '../../../../design/canvas/canvas-types'
+import { ShapePaintDefs, primaryFillPaint } from './shape-paint'
 
 function EllipseShapeInner({ shape }: { shape: CanvasShape }) {
   const cx = shape.width / 2
   const cy = shape.height / 2
   const rx = shape.width / 2
   const ry = shape.height / 2
-  const fill = shape.fills.length > 0 ? shape.fills[0].color : 'none'
-  const fillOpacity = shape.fills.length > 0 ? shape.fills[0].opacity : 0
+  const { fill, fillOpacity } = primaryFillPaint(shape)
 
   return (
     <>
+      <ShapePaintDefs shape={shape} />
       <ellipse cx={cx} cy={cy} rx={rx} ry={ry} fill={fill} fillOpacity={fillOpacity} />
       {shape.strokes.map((s, i) => (
         <ellipse

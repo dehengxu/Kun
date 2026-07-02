@@ -79,7 +79,14 @@ function parseShape(raw: unknown, id: string): CanvasShape | null {
       points: (raw.points as unknown[]).filter(
         (p): p is Point => isObj(p) && typeof p.x === 'number' && typeof p.y === 'number'
       )
-    })
+    }),
+    // Effects / layout / constraints are passed through structurally — the
+    // executor's Zod schema is the source of truth on write, so loading trusts
+    // the on-disk shape and only guards the container kind to avoid crashes.
+    ...(Array.isArray(raw.shadows) && { shadows: raw.shadows as CanvasShape['shadows'] }),
+    ...(typeof raw.blendMode === 'string' && { blendMode: raw.blendMode as CanvasShape['blendMode'] }),
+    ...(isObj(raw.layout) && { layout: raw.layout as unknown as CanvasShape['layout'] }),
+    ...(isObj(raw.constraints) && { constraints: raw.constraints as unknown as CanvasShape['constraints'] })
   }
 }
 

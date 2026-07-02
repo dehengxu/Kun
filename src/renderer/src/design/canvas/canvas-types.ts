@@ -9,10 +9,53 @@ export type ShapeType =
   | 'line'
   | 'draw'
 
-export type Fill = {
+export type SolidFill = {
   type: 'solid'
   color: string
   opacity: number
+}
+
+/** One color stop of a gradient fill. `offset` is 0..1 along the gradient axis. */
+export type GradientStop = {
+  offset: number
+  color: string
+  /** Per-stop alpha, 0..1. Defaults to 1 when omitted. */
+  opacity?: number
+}
+
+/**
+ * A linear or radial gradient fill. For `linear`, `angle` is in degrees measured
+ * clockwise from the positive X axis (0 = left→right, 90 = top→bottom). For
+ * `radial`, the gradient is centered with a radius covering the shape.
+ */
+export type GradientFill = {
+  type: 'linear' | 'radial'
+  stops: GradientStop[]
+  /** Linear only: direction in degrees. Defaults to 90 (top→bottom). */
+  angle?: number
+  /** Overall fill opacity, 0..1. */
+  opacity: number
+}
+
+export type Fill = SolidFill | GradientFill
+
+export function isSolidFill(fill: Fill): fill is SolidFill {
+  return fill.type === 'solid'
+}
+
+export function isGradientFill(fill: Fill): fill is GradientFill {
+  return fill.type === 'linear' || fill.type === 'radial'
+}
+
+/**
+ * The representative color of a fill — its solid color, or the first gradient
+ * stop. Lets renderers, the snapshot digest and the properties panel keep a
+ * single "primary color" notion without branching on the fill kind everywhere.
+ */
+export function fillColor(fill: Fill | undefined): string | null {
+  if (!fill) return null
+  if (isSolidFill(fill)) return fill.color
+  return fill.stops[0]?.color ?? null
 }
 
 export type StrokePosition = 'center' | 'inside' | 'outside'
@@ -30,6 +73,69 @@ export type Stroke = {
 
 /** Endpoint decoration for linear shapes (arrow/line). `none` = bare end. */
 export type Arrowhead = 'none' | 'arrow' | 'triangle' | 'circle' | 'bar' | 'diamond'
+
+/**
+ * A drop/inner shadow effect. Multiple shadows stack (painted in array order).
+ * `drop` casts outside the shape, `inner` insets it. Rendered as an SVG filter.
+ */
+export type Shadow = {
+  type?: 'drop' | 'inner'
+  x: number
+  y: number
+  blur: number
+  /** Grows/shrinks the shadow before blurring. Defaults to 0. */
+  spread?: number
+  color: string
+  opacity: number
+}
+
+/** CSS mix-blend-mode values the canvas understands. */
+export type BlendMode =
+  | 'normal'
+  | 'multiply'
+  | 'screen'
+  | 'overlay'
+  | 'darken'
+  | 'lighten'
+  | 'color-dodge'
+  | 'color-burn'
+  | 'hard-light'
+  | 'soft-light'
+  | 'difference'
+  | 'exclusion'
+  | 'hue'
+  | 'saturation'
+  | 'color'
+  | 'luminosity'
+
+export type AutoLayoutDirection = 'horizontal' | 'vertical'
+/** Distribution of children along the layout's main axis. */
+export type AutoLayoutPrimaryAlign = 'start' | 'center' | 'end' | 'space-between'
+/** Alignment of children across the layout's counter axis. */
+export type AutoLayoutCounterAlign = 'start' | 'center' | 'end'
+
+/**
+ * Auto-layout (flex-style) config on a `frame`/`group`. When present, the
+ * layout engine repositions direct children in a row/column with consistent
+ * gap + padding, so the agent stops hand-computing coordinates. Children keep
+ * absolute coords in the document — the engine writes those coords; nothing
+ * about rendering/hit-testing changes.
+ */
+export type AutoLayout = {
+  direction: AutoLayoutDirection
+  gap: number
+  paddingTop: number
+  paddingRight: number
+  paddingBottom: number
+  paddingLeft: number
+  primaryAlign?: AutoLayoutPrimaryAlign
+  counterAlign?: AutoLayoutCounterAlign
+}
+
+/** How a shape's edges track its parent frame when the frame is resized. */
+export type HConstraint = 'left' | 'right' | 'left-right' | 'center' | 'scale'
+export type VConstraint = 'top' | 'bottom' | 'top-bottom' | 'center' | 'scale'
+export type Constraints = { h: HConstraint; v: VConstraint }
 
 export type CanvasShape = {
   id: string
@@ -49,6 +155,14 @@ export type CanvasShape = {
   strokes: Stroke[]
   cornerRadius: number | [number, number, number, number]
   children: string[]
+  /** Stacked drop/inner shadows. Painted in array order. */
+  shadows?: Shadow[]
+  /** CSS mix-blend-mode for compositing this shape over what's behind it. */
+  blendMode?: BlendMode
+  /** Flex-style auto-layout for direct children (frame/group only). */
+  layout?: AutoLayout
+  /** Resize behaviour relative to the parent frame. */
+  constraints?: Constraints
   textContent?: string
   fontSize?: number
   fontFamily?: string

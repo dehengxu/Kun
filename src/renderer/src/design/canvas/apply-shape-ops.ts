@@ -5,16 +5,22 @@ import { executeOps, type OpError } from './shape-ops'
  * canvas turn so the agent SEES what failed (bad shape id, schema-invalid op,
  * missing parent) and self-corrects — instead of the op silently vanishing with
  * the agent believing it succeeded. One-shot: `take` reads and clears.
+ *
+ * Keyed by design document/artifact so two open designs never cross-contaminate
+ * each other's error feedback. Callers that don't track a key use the shared
+ * default bucket (the common single-active-board case).
  */
-let _lastCanvasOpErrors: OpError[] = []
+const DEFAULT_ERROR_KEY = '__default__'
+const _lastCanvasOpErrors = new Map<string, OpError[]>()
 
-export function setLastCanvasOpErrors(errors: OpError[]): void {
-  _lastCanvasOpErrors = errors
+export function setLastCanvasOpErrors(errors: OpError[], key: string = DEFAULT_ERROR_KEY): void {
+  if (errors.length === 0) _lastCanvasOpErrors.delete(key)
+  else _lastCanvasOpErrors.set(key, errors)
 }
 
-export function takeLastCanvasOpErrors(): OpError[] {
-  const errors = _lastCanvasOpErrors
-  _lastCanvasOpErrors = []
+export function takeLastCanvasOpErrors(key: string = DEFAULT_ERROR_KEY): OpError[] {
+  const errors = _lastCanvasOpErrors.get(key) ?? []
+  _lastCanvasOpErrors.delete(key)
   return errors
 }
 
