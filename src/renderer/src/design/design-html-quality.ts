@@ -211,6 +211,10 @@ const FAQ_SECTION_RE =
   /\b(?:faq|frequently asked questions|frequently asked|question answers?|q and a|q&a)\b/i
 const FAQ_QUESTION_RE =
   /\?|^(?:can|do|does|how|what|when|where|who|why|will|is|are|should|which)\b/i
+const GENERIC_FAQ_QUESTION_RE =
+  /^(?:can i (?:get started|try it|use it)|do you offer support|how does (?:it|this|the (?:platform|product|service|solution)) work|is (?:it|this) (?:easy|easy to use|right for me)|what (?:do i get|is (?:it|this|the (?:platform|product|service|solution)))|who is (?:it|this) for|why choose (?:us|this))\??$/i
+const CONCRETE_FAQ_QUESTION_RE =
+  /\b(?:api|audit|billing|cancel|compliance|data|demo|export|gdpr|hipaa|implementation|import|integrations?|migrat(?:e|ion)|onboarding|permissions?|pricing|refund|retention|security|setup|sla|soc\s?2|sso|support|timeline|training|trial|uptime|users?)\b|[$€£¥]\s*\d|\b\d[\d,.]*\s?(?:%|business days?|days?|weeks?|months?|hours?|users?|seats?|projects?|pages?|records?)\b/i
 const GENERIC_FAQ_ANSWER_RE =
   /^(?:yes|no|it depends|contact (?:us|sales|support)|reach out|get in touch|learn more|coming soon|we support this|we can help|our team can help|our team will help|this is available|all plans include this|available on all plans)\b/i
 const CONCRETE_FAQ_DETAIL_RE =
@@ -378,6 +382,7 @@ const AUTO_REPAIR_WARNING_CODES = new Set([
   'generic-document-title',
   'generic-dialog-title',
   'generic-faq-answers',
+  'generic-faq-questions',
   'generic-breadcrumb-labels',
   'generic-chart-labels',
   'generic-feature-card-detail',
@@ -2757,13 +2762,21 @@ function faqBlocks(html: string): string[] {
 }
 
 function faqQuestionCount(markup: string): number {
+  return faqQuestionTexts(markup).length
+}
+
+function faqQuestionTexts(markup: string): string[] {
   const questionTexts = [
     ...['h3', 'h4', 'summary', 'dt', 'button'].flatMap((tagName) =>
       pairedTagMatches(markup, tagName).map(({ inner }) => textContent(inner))
     ),
     ...(textContent(markup).match(/[^.!?。！？]*\?/g) ?? [])
   ]
-  return questionTexts.filter((text) => FAQ_QUESTION_RE.test(text.trim())).length
+  return Array.from(new Set(
+    questionTexts
+      .map((text) => text.replace(/\s+/g, ' ').trim())
+      .filter((text) => FAQ_QUESTION_RE.test(text))
+  ))
 }
 
 function faqAnswerCount(markup: string): number {
@@ -2794,6 +2807,33 @@ function genericFaqAnswer(text: string): boolean {
 
 function genericFaqAnswerTags(html: string): string[] {
   return faqBlocks(html).filter((block) => hasFaqAnatomy(block) && faqAnswerTexts(block).filter(genericFaqAnswer).length >= 2)
+}
+
+function genericFaqQuestion(text: string): boolean {
+  const normalized = text
+    .replace(/\s+/g, ' ')
+    .replace(/[.!?。！？]+$/g, '')
+    .trim()
+  return normalized.length >= 8 && normalized.length <= 80 && GENERIC_FAQ_QUESTION_RE.test(normalized)
+}
+
+function concreteFaqQuestion(text: string): boolean {
+  const normalized = text
+    .replace(/\s+/g, ' ')
+    .replace(/[.!?。！？]+$/g, '')
+    .trim()
+  return normalized.length > 0 && CONCRETE_FAQ_QUESTION_RE.test(normalized)
+}
+
+function genericFaqQuestionTags(html: string): string[] {
+  return faqBlocks(html).filter((block) => {
+    if (!hasFaqAnatomy(block)) return false
+    const questions = faqQuestionTexts(block)
+    if (questions.length < 2) return false
+    const genericCount = questions.filter(genericFaqQuestion).length
+    const concreteCount = questions.filter(concreteFaqQuestion).length
+    return concreteCount === 0 && genericCount >= Math.ceil(questions.length * 0.67)
+  })
 }
 
 function hasWeakFaqAnatomy(html: string, visibleText: string): boolean {
@@ -5008,6 +5048,37 @@ export function buildDesignRuntimeQualityAuditScript(): string {
     if (brandLandingSignal() && weakFaqs.length > 0) {
       push('runtime-weak-faq-anatomy', 'warning', weakFaqs.length + ' FAQ or frequently asked questions section(s) are too thin to handle real customer objections.', 'Add multiple concrete question/answer items covering objections such as pricing, migration, support, security, setup, or timeline.')
     }
+    const faqQuestionTexts = (el) => {
+      const questionTexts = [
+        ...[...el.querySelectorAll('h3,h4,summary,dt,button')]
+          .filter(visible)
+          .map(textOf),
+        ...((textOf(el).match(/[^.!?。！？]*\?/g)) || [])
+      ]
+      return [...new Set(questionTexts
+        .map((text) => String(text || '').replace(/\s+/g, ' ').trim())
+        .filter((text) => /\?|^(?:can|do|does|how|what|when|where|who|why|will|is|are|should|which)\b/i.test(text)))]
+    }
+    const genericFaqQuestion = (text) => {
+      const normalized = String(text || '').replace(/\s+/g, ' ').replace(/[.!?。！？]+$/g, '').trim()
+      return normalized.length >= 8 && normalized.length <= 80 &&
+        /^(?:can i (?:get started|try it|use it)|do you offer support|how does (?:it|this|the (?:platform|product|service|solution)) work|is (?:it|this) (?:easy|easy to use|right for me)|what (?:do i get|is (?:it|this|the (?:platform|product|service|solution)))|who is (?:it|this) for|why choose (?:us|this))\??$/i.test(normalized)
+    }
+    const concreteFaqQuestion = (text) => {
+      const normalized = String(text || '').replace(/\s+/g, ' ').replace(/[.!?。！？]+$/g, '').trim()
+      return /\b(?:api|audit|billing|cancel|compliance|data|demo|export|gdpr|hipaa|implementation|import|integrations?|migrat(?:e|ion)|onboarding|permissions?|pricing|refund|retention|security|setup|sla|soc\s?2|sso|support|timeline|training|trial|uptime|users?)\b|[$€£¥]\s*\d|\b\d[\d,.]*\s?(?:%|business days?|days?|weeks?|months?|hours?|users?|seats?|projects?|pages?|records?)\b/i.test(normalized)
+    }
+    const genericFaqQuestionBlocks = faqBlocks().filter((el) => {
+      if (faqQuestionCount(el) < 2 || faqAnswerCount(el) < 2) return false
+      const questions = faqQuestionTexts(el)
+      if (questions.length < 2) return false
+      const genericCount = questions.filter(genericFaqQuestion).length
+      const concreteCount = questions.filter(concreteFaqQuestion).length
+      return concreteCount === 0 && genericCount >= Math.ceil(questions.length * 0.67)
+    })
+    if (brandLandingSignal() && genericFaqQuestionBlocks.length > 0) {
+      push('runtime-generic-faq-questions', 'warning', genericFaqQuestionBlocks.length + ' FAQ or frequently asked questions section(s) use generic template questions.', 'Replace questions such as What is this, How does it work, or Who is this for with concrete objections about pricing, migration, setup time, security, support, integrations, or plan limits.')
+    }
     const faqAnswerTexts = (el) => [...el.querySelectorAll('p,dd,li')]
       .filter(visible)
       .map(textOf)
@@ -6461,6 +6532,15 @@ export function auditDesignHtmlQuality(input: DesignHtmlQualityAuditInput): Desi
     })
   }
 
+  if (genericFaqQuestionTags(normalized).length > 0) {
+    pushFinding(findings, {
+      code: 'generic-faq-questions',
+      severity: 'warning',
+      message: 'An FAQ or frequently asked questions section uses generic template questions.',
+      suggestion: 'Replace questions such as What is this, How does it work, or Who is this for with concrete objections about pricing, migration, setup time, security, support, integrations, or plan limits.'
+    })
+  }
+
   if (genericFaqAnswerTags(normalized).length > 0) {
     pushFinding(findings, {
       code: 'generic-faq-answers',
@@ -7231,6 +7311,8 @@ function designQualityRepairDirective(code: string): string | undefined {
       return 'Conversion close detail: replace generic closes like Ready to get started, Start today, and Take the next step with a specific outcome, timeframe, next deliverable, or domain-specific CTA.'
     case 'weak-faq-anatomy':
       return 'FAQ anatomy: when an FAQ section is present, include multiple concrete question/answer items covering real objections such as pricing, migration, support, security, setup, or timeline.'
+    case 'generic-faq-questions':
+      return 'FAQ question specificity: replace generic questions like What is this, How does it work, and Who is this for with real objections about pricing, migration, setup time, security, support, integrations, or plan limits.'
     case 'generic-faq-answers':
       return 'FAQ answer detail: replace generic answers like Contact us, Learn more, or Our team can help with concrete objection-handling details about pricing, migration, support, security, setup, timelines, integrations, or plan limits.'
     case 'weak-site-footer':
