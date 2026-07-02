@@ -1,6 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
 import { CanvasToolbar } from './CanvasToolbar'
 
 describe('CanvasToolbar prototype playback', () => {
@@ -52,5 +53,16 @@ describe('CanvasToolbar prototype playback', () => {
 
     expect(html).toContain('aria-label="Play prototype"')
     expect(html).not.toContain('Create at least one screen before playing the prototype')
+  })
+
+  it('labels the open design assistant button as a collapsible toggle', () => {
+    useDesignWorkspaceStore.setState({ canvasAssistantOpen: true, aiRailCollapsed: false })
+    const openHtml = renderToStaticMarkup(
+      createElement(CanvasToolbar, {
+        workspaceRoot: '/workspace'
+      })
+    )
+    expect(openHtml).toContain('aria-label="Collapse assistant"')
+    expect(openHtml).toContain('aria-pressed="true"')
   })
 })

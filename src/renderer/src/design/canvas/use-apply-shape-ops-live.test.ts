@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
 import {
   activeCanvasTurnMatchesThread,
+  canvasReplayStateForStoreUpdate,
   replayActiveCanvasTurn
 } from './use-apply-shape-ops-live'
 
@@ -206,5 +207,41 @@ describe('replayActiveCanvasTurn', () => {
     expect(activeCanvasTurnMatchesThread({ activeThreadId: 'thread-other' }, 'thread-code')).toBe(false)
     expect(applyToolBlock).not.toHaveBeenCalled()
     expect(processStreaming).not.toHaveBeenCalled()
+  })
+
+  it('can replay tool blocks that arrive in the same update that clears the turn id', () => {
+    const toolBlock: ToolBlock = {
+      kind: 'tool',
+      id: 'tool-late',
+      summary: 'canvas op',
+      status: 'success',
+      meta: { toolName: 'design_update_shapes' },
+      detail: '{"ops":[]}'
+    }
+    const applyToolBlock = vi.fn()
+    const processStreaming = vi.fn()
+    const replayState = canvasReplayStateForStoreUpdate(
+      {
+        activeThreadId: 'thread-code',
+        currentTurnId: null,
+        currentTurnUserId: null,
+        blocks: [
+          { kind: 'user', id: 'user-1', text: 'put it on the canvas' },
+          toolBlock
+        ] satisfies ChatBlock[]
+      },
+      {
+        currentTurnId: 'turn-1',
+        currentTurnUserId: 'user-1'
+      }
+    )
+
+    replayActiveCanvasTurn(replayState, applyToolBlock, processStreaming, 'thread-code')
+
+    expect(replayState.currentTurnId).toBe('turn-1')
+    expect(replayState.currentTurnUserId).toBe('user-1')
+    expect(applyToolBlock).toHaveBeenCalledTimes(1)
+    expect(applyToolBlock).toHaveBeenCalledWith(toolBlock)
+    expect(processStreaming).toHaveBeenCalledTimes(1)
   })
 })

@@ -48,6 +48,13 @@ import {
   type ComposerExecutionSettings,
   type ComposerFileReference
 } from './chat/FloatingComposer'
+import {
+  composerAttachmentScopeForSurface,
+  createEmptyComposerAttachmentsByScope,
+  updateComposerAttachmentsByScope,
+  type ComposerAttachmentScope,
+  type ComposerAttachmentUpdater
+} from './workbench-composer-attachments'
 import { ChatFileTreePanel, type ChatFileTreeReference } from './chat/ChatFileTreePanel'
 import {
   composerReasoningEffortRequestValue,
@@ -692,7 +699,9 @@ export function Workbench(): ReactElement {
     useState<ComposerReasoningEffort>('max')
   const [runtimeInfo, setRuntimeInfo] = useState<CoreRuntimeInfoJson | null>(null)
   const [runtimeSkills, setRuntimeSkills] = useState<CoreRuntimeSkillJson[]>([])
-  const [composerAttachments, setComposerAttachments] = useState<AttachmentReference[]>([])
+  const [composerAttachmentsByScope, setComposerAttachmentsByScope] = useState(
+    createEmptyComposerAttachmentsByScope
+  )
   const [composerFileReferences, setComposerFileReferences] = useState<ComposerFileReference[]>([])
   const [composerExecutionSettings, setComposerExecutionSettings] =
     useState<ComposerExecutionSettings | null>(null)
@@ -1052,6 +1061,21 @@ export function Workbench(): ReactElement {
     workspaceRoot,
     writeAssistantOpen
   })
+  const composerAttachmentScope = composerAttachmentScopeForSurface(route, rightPanelMode)
+  const composerAttachmentScopeRef = useRef<ComposerAttachmentScope>(composerAttachmentScope)
+  useEffect(() => {
+    composerAttachmentScopeRef.current = composerAttachmentScope
+  }, [composerAttachmentScope])
+  const composerAttachments = composerAttachmentsByScope[composerAttachmentScope]
+  const setComposerAttachmentsForScope = useCallback((
+    scope: ComposerAttachmentScope,
+    updater: ComposerAttachmentUpdater
+  ): void => {
+    setComposerAttachmentsByScope((current) => updateComposerAttachmentsByScope(current, scope, updater))
+  }, [])
+  const setComposerAttachments = useCallback((updater: ComposerAttachmentUpdater): void => {
+    setComposerAttachmentsForScope(composerAttachmentScopeRef.current, updater)
+  }, [setComposerAttachmentsForScope])
   const titleForSddDraft = useCallback((draft: SddDraft): string => {
     const snapshot = useSddDraftStore.getState()
     const markdown = snapshot.activeDraft?.id === draft.id ? snapshot.content : ''
@@ -1493,9 +1517,13 @@ export function Workbench(): ReactElement {
     })
   }, [composerAttachments.length, selectedModelSupportsImageInput, t])
 
-  const clearComposerAttachments = (): void => {
-    setComposerAttachments([])
-    canvasAutoAttachIdRef.current = null
+  useEffect(() => {
+    setAttachmentUploadError(null)
+  }, [composerAttachmentScope])
+
+  const clearComposerAttachments = (scope = composerAttachmentScopeRef.current): void => {
+    setComposerAttachmentsForScope(scope, [])
+    if (scope === 'design') canvasAutoAttachIdRef.current = null
   }
 
   const activeComposerWorkspace = (): string | undefined => {
@@ -1606,6 +1634,7 @@ export function Workbench(): ReactElement {
   ): Promise<void> => {
     if (!files.length || !attachmentUploadEnabled) return
     const provider = getProvider()
+    const attachmentScope = composerAttachmentScopeRef.current
     setAttachmentUploadBusy(true)
     setAttachmentUploadError(null)
     try {
@@ -1667,7 +1696,7 @@ export function Workbench(): ReactElement {
         })
       }
       if (uploaded.length > 0) {
-        setComposerAttachments((current) => {
+        setComposerAttachmentsForScope(attachmentScope, (current) => {
           const byId = new Map(current.map((attachment) => [attachment.id, attachment]))
           for (const attachment of uploaded) {
             byId.set(attachment.id, attachment)
@@ -1709,7 +1738,7 @@ export function Workbench(): ReactElement {
     const removeAutoAttach = (): void => {
       const id = canvasAutoAttachIdRef.current
       if (id) {
-        setComposerAttachments((cur) => cur.filter((a) => a.id !== id))
+        setComposerAttachmentsForScope('design', (cur) => cur.filter((a) => a.id !== id))
         canvasAutoAttachIdRef.current = null
       }
     }
@@ -1784,7 +1813,7 @@ export function Workbench(): ReactElement {
           height: uploaded.height,
           previewUrl: `data:${prepared.mimeType};base64,${prepared.dataBase64}`
         }
-        setComposerAttachments((cur) => [...cur, ref])
+        setComposerAttachmentsForScope('design', (cur) => [...cur, ref])
         canvasAutoAttachIdRef.current = uploaded.id
       } catch {
         // Silently fail — don't disrupt canvas selection UX
@@ -1799,6 +1828,7 @@ export function Workbench(): ReactElement {
 
   const sendWritePrompt = (value: string): void => {
     const v = value.trim()
+    const attachmentScope = composerAttachmentScopeRef.current
     const attachments = composerAttachments
     const imageAttachments = attachments.filter((attachment) => attachment.kind !== 'document')
     const documentAttachments = attachments.filter((attachment) => attachment.kind === 'document')
@@ -1871,7 +1901,7 @@ export function Workbench(): ReactElement {
       })
       if (sent) {
         useWriteWorkspaceStore.getState().clearQuotedSelections()
-        if (attachments.length > 0) clearComposerAttachments()
+        if (attachments.length > 0) clearComposerAttachments(attachmentScope)
       }
     })()
   }
@@ -1933,6 +1963,7 @@ export function Workbench(): ReactElement {
   ): void => {
     const text = value.trim()
     const source = options?.source ?? 'user'
+    const attachmentScope = composerAttachmentScopeRef.current
     const attachments = composerAttachments
     const attachmentIds = attachments.map((attachment) => attachment.id)
     if (!text && attachmentIds.length === 0) return
@@ -2266,7 +2297,7 @@ export function Workbench(): ReactElement {
       })
       if (sent) {
         setDesignHtmlElementContext(null)
-        if (attachmentIds.length > 0) clearComposerAttachments()
+        if (attachmentIds.length > 0) clearComposerAttachments(attachmentScope)
       }
     })()
   }
@@ -2702,6 +2733,7 @@ export function Workbench(): ReactElement {
   const sendSddAssistantPrompt = async (value: string): Promise<void> => {
     const v = value.trim()
     const draft = useSddDraftStore.getState().activeDraft
+    const attachmentScope = composerAttachmentScopeRef.current
     const attachments = composerAttachments
     const imageAttachments = attachments.filter((attachment) => attachment.kind !== 'document')
     const documentAttachments = attachments.filter((attachment) => attachment.kind === 'document')
@@ -2752,7 +2784,7 @@ export function Workbench(): ReactElement {
     if (sent) {
       pendingSddFrameworkRef.current = null
       pendingSddFrameworkPromptRef.current = null
-      if (attachments.length > 0) clearComposerAttachments()
+      if (attachments.length > 0) clearComposerAttachments(attachmentScope)
     } else {
       // Restore the composer (incl. any framework prompt) so a retry re-applies
       // the same guidance the user still sees; the refs are intentionally kept.
@@ -3087,6 +3119,7 @@ export function Workbench(): ReactElement {
 
   const handleSendAsync = async (): Promise<void> => {
     const v = input.trim()
+    const attachmentScope = composerAttachmentScopeRef.current
     const attachments = route === 'chat' || route === 'write' ? composerAttachments : []
     const imageAttachments = attachments.filter((attachment) => attachment.kind !== 'document')
     const documentAttachments = attachments.filter((attachment) => attachment.kind === 'document')
@@ -3156,7 +3189,7 @@ export function Workbench(): ReactElement {
       const prepared = await prepareChatMessage()
       if (!prepared) return
       setInput('')
-      clearComposerAttachments()
+      clearComposerAttachments(attachmentScope)
       clearComposerFileReferences()
       void sendPlanTurn(prepared.text, {
         ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
@@ -3264,7 +3297,7 @@ export function Workbench(): ReactElement {
     const prepared = await prepareChatMessage()
     if (!prepared) return
     setInput('')
-    clearComposerAttachments()
+    clearComposerAttachments(attachmentScope)
     clearComposerFileReferences()
     let outboundText = prepared.text
     let outboundDisplay = prepared.displayText

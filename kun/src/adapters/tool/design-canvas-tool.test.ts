@@ -114,12 +114,54 @@ describe('dedicated design tools', () => {
   it('normalizes design_update_shapes calls to renderer ops', async () => {
     const tool = createDesignUpdateShapesTool()
     expect(tool.name).toBe(DESIGN_UPDATE_SHAPES_TOOL_NAME)
+    expect(JSON.stringify(tool.inputSchema)).toContain('direct top-level ShapeOp')
     const op = { op: 'add', shape: { type: 'rect', width: 40, height: 40 } }
     const result = await tool.execute({ ops: op }, context())
     expect(result.output).toMatchObject({
       ok: true,
       tool: DESIGN_UPDATE_SHAPES_TOOL_NAME,
       ops: [op]
+    })
+  })
+
+  it('accepts a direct top-level ShapeOp when the model omits ops', async () => {
+    const tool = createDesignUpdateShapesTool()
+    const op = {
+      op: 'update',
+      id: 'shape_1',
+      patch: { imageUrl: '.deepseekgui-images/img.png' }
+    }
+    const result = await tool.execute(op, context())
+
+    expect(result.isError).toBeUndefined()
+    expect(result.output).toMatchObject({
+      ok: true,
+      tool: DESIGN_UPDATE_SHAPES_TOOL_NAME,
+      ops: [op]
+    })
+  })
+
+  it('normalizes loose update arguments into a ShapeOp', async () => {
+    const tool = createDesignUpdateShapesTool()
+    const result = await tool.execute(
+      {
+        shape_id: 'slot_1',
+        relative_path: '.deepseekgui-images/img-slot.png'
+      },
+      context()
+    )
+
+    expect(result.isError).toBeUndefined()
+    expect(result.output).toMatchObject({
+      ok: true,
+      tool: DESIGN_UPDATE_SHAPES_TOOL_NAME,
+      ops: [
+        {
+          op: 'update',
+          id: 'slot_1',
+          patch: { imageUrl: '.deepseekgui-images/img-slot.png' }
+        }
+      ]
     })
   })
 

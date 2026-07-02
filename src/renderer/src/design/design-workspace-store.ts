@@ -791,6 +791,10 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       set({ canvasAssistantOpen: open, aiRailCollapsed: !open })
     },
 
+    toggleCanvasAssistantOpen: () => {
+      get().setCanvasAssistantOpen(!get().canvasAssistantOpen)
+    },
+
     setCanvasInspectorPinned: (pinned) => {
       writeBrowserStorageItem(CANVAS_INSPECTOR_PINNED_KEY, pinned ? '1' : '0')
       set({ canvasInspectorPinned: pinned })

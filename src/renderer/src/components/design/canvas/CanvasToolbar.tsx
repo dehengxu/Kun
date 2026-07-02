@@ -74,6 +74,8 @@ function CanvasToolbarInner({
   const vbox = useCanvasViewportStore((s) => s.vbox)
   const setFileError = useDesignWorkspaceStore((s) => s.setFileError)
   const setCanvasAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
+  const canvasAssistantOpen = useDesignWorkspaceStore((s) => s.canvasAssistantOpen)
+  const toggleCanvasAssistantOpen = useDesignWorkspaceStore((s) => s.toggleCanvasAssistantOpen)
   const [imageImportBusy, setImageImportBusy] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
   const designSurface = surface === 'design'
@@ -181,10 +183,11 @@ function CanvasToolbarInner({
 
             <button
               type="button"
-              className={`${iconBtnBase} ${btnInactive}`}
-              onClick={() => setCanvasAssistantOpen(true)}
-              title={t('canvasToolAssistant')}
-              aria-label={t('canvasToolAssistant')}
+              className={`${iconBtnBase} ${canvasAssistantOpen ? btnActive : btnInactive}`}
+              onClick={toggleCanvasAssistantOpen}
+              title={t(canvasAssistantOpen ? 'designRailCollapse' : 'canvasToolAssistant')}
+              aria-label={t(canvasAssistantOpen ? 'designRailCollapse' : 'canvasToolAssistant')}
+              aria-pressed={canvasAssistantOpen}
             >
               <Sparkles className="h-4 w-4" strokeWidth={1.9} />
             </button>

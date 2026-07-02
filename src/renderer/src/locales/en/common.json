@@ -251,7 +251,6 @@
   "canvasInspectorAiHolderHint": "Keep it selected and ask the assistant to generate — it fills this slot.",
   "canvasInspectorAiHolderAuto": "Empty box · auto image slot",
   "canvasInspectorAiHolderAutoHint": "Just ask the assistant to generate — it fills this box automatically. No marking needed.",
-  "designQuickSuggestLogo": "Generate a brand logo for the selected image slot",
   "designRailTitle": "Design Assistant",
   "designRailTargetNew": "New design",
   "designRailTargetIterate": "Iterate: ",

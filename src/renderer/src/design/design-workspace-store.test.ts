@@ -322,6 +322,33 @@ describe('design workspace store', () => {
     expect(collapsedStore.getState().canvasAssistantOpen).toBe(false)
   })
 
+  it('toggles the canvas assistant open state and persists the collapsed mirror key', () => {
+    const storage = new Map<string, string>()
+    const localStorage = {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => {
+        storage.set(key, value)
+      })
+    }
+    vi.stubGlobal('window', { kunGui: { writeWorkspaceFile }, localStorage })
+    vi.stubGlobal('localStorage', localStorage)
+    useDesignWorkspaceStore.setState({ canvasAssistantOpen: true, aiRailCollapsed: false })
+
+    useDesignWorkspaceStore.getState().toggleCanvasAssistantOpen()
+
+    expect(useDesignWorkspaceStore.getState().canvasAssistantOpen).toBe(false)
+    expect(useDesignWorkspaceStore.getState().aiRailCollapsed).toBe(true)
+    expect(storage.get('kun.design.canvasAssistantOpen.v1')).toBe('0')
+    expect(storage.get('kun.design.aiRailCollapsed.v1')).toBe('1')
+
+    useDesignWorkspaceStore.getState().toggleCanvasAssistantOpen()
+
+    expect(useDesignWorkspaceStore.getState().canvasAssistantOpen).toBe(true)
+    expect(useDesignWorkspaceStore.getState().aiRailCollapsed).toBe(false)
+    expect(storage.get('kun.design.canvasAssistantOpen.v1')).toBe('1')
+    expect(storage.get('kun.design.aiRailCollapsed.v1')).toBe('0')
+  })
+
   it('new 画布 nest under the active 设计稿 directory', () => {
     const id = useDesignWorkspaceStore.getState().createDocument('Second')
     const { artifactId, relativePath } = useDesignWorkspaceStore.getState().prepareHtmlTurn('A landing page')

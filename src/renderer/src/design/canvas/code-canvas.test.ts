@@ -100,6 +100,19 @@ describe('shouldRouteCodePromptToCanvas', () => {
       text: 'Generate a chick image',
       whiteboardOpen: true
     })).toBe(true)
+    expect(shouldSendPromptToCodeCanvas({
+      text: '\u5e2e\u6211\u653e\u5230\u753b\u5e03\u4e0a',
+      whiteboardOpen: true
+    })).toBe(true)
+    expect(shouldSendPromptToCodeCanvas({
+      text: '\u5e2e\u6211\u653e\u7684\u753b\u5e03\u4e0a',
+      whiteboardOpen: true
+    })).toBe(true)
+    expect(shouldSendPromptToCodeCanvas({
+      text: 'Put it on the canvas',
+      whiteboardOpen: true,
+      hasSelection: true
+    })).toBe(true)
   })
 
   it('does not treat open-whiteboard references as active when the whiteboard is closed', () => {
@@ -111,6 +124,10 @@ describe('shouldRouteCodePromptToCanvas', () => {
       text: '\u5e2e\u6211\u751f\u6210\u4e00\u4e2a\u5c0f\u9e21\u7684\u56fe\u7247',
       whiteboardOpen: false,
       hasSelection: true
+    })).toBe(false)
+    expect(shouldSendPromptToCodeCanvas({
+      text: '\u5e2e\u6211\u653e\u5230\u753b\u5e03\u4e0a',
+      whiteboardOpen: false
     })).toBe(false)
     expect(shouldRouteOpenCodeWhiteboardPrompt('Move this node to the right')).toBe(true)
   })

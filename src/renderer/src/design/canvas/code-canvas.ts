@@ -109,6 +109,8 @@ const OPEN_WHITEBOARD_ENGLISH_SHAPE_TARGET =
   /\b(?:box|node|frame|shape|arrow|line|label|card|cluster|group|lane|column|row|sticky|note)\b/i
 const OPEN_WHITEBOARD_ENGLISH_DEICTIC_TARGET =
   /\b(?:selected|selection|this|that|it|here|there|these|those)\b/i
+const OPEN_WHITEBOARD_ENGLISH_PLACEMENT =
+  /\b(?:put|place|add|drop|paste|insert)\b[\s\S]{0,48}\b(?:on|onto|in|into|to)\b[\s\S]{0,24}\b(?:canvas|board|whiteboard|selected|selection|slot|frame|box|here)\b/i
 
 const OPEN_WHITEBOARD_CHINESE_EDIT_VERB =
   /(?:添加|加上|放到|移动|左移|右移|上移|下移|挪|删除|移除|改名|标注|连接|连到|对齐|排列|分组|取消分组|改成|变成|上色|换色|复制|整理)/
@@ -116,6 +118,8 @@ const OPEN_WHITEBOARD_CHINESE_SHAPE_TARGET =
   /(?:节点|框|画板|形状|箭头|线|标签|卡片|分组|泳道|列|行|便签|注释)/
 const OPEN_WHITEBOARD_CHINESE_DEICTIC_TARGET =
   /(?:选中|这个|那个|这里|那里|它|这些|那些)/
+const OPEN_WHITEBOARD_CHINESE_PLACEMENT =
+  /(?:放|放到|放进|加到|添加到|贴到|拖到|移到|置入)[\s\S]{0,20}(?:画布|白板|画板|选中|框|这里|这个|里面|上面)/
 
 export function shouldRouteCodePromptToCanvas(text: string): boolean {
   const value = text.trim()
@@ -131,6 +135,8 @@ export function shouldRouteOpenCodeWhiteboardPrompt(
   if (HTML_CANVAS_CODE_PATTERNS.some((pattern) => pattern.test(value))) return false
   if (/\bwhiteboard\b/i.test(value) || /白板/.test(value)) return true
   if (looksLikeStandaloneImageAssetPrompt(value)) return true
+  if (OPEN_WHITEBOARD_ENGLISH_PLACEMENT.test(value)) return true
+  if (OPEN_WHITEBOARD_CHINESE_PLACEMENT.test(value)) return true
   const hasSelection = options?.hasSelection === true
   const englishEdit = OPEN_WHITEBOARD_ENGLISH_EDIT_VERB.test(value)
   if (englishEdit && OPEN_WHITEBOARD_ENGLISH_SHAPE_TARGET.test(value)) return true

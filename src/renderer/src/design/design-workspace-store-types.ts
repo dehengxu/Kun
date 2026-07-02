@@ -140,6 +140,7 @@ export type DesignWorkspaceState = {
   ) => { artifactId: string; relativePath: string; basePath?: string; designMdPath: string }
   setAiRailCollapsed: (collapsed: boolean) => void
   setCanvasAssistantOpen: (open: boolean) => void
+  toggleCanvasAssistantOpen: () => void
   setCanvasInspectorPinned: (pinned: boolean) => void
   setAssistantModel: (model: string, providerId?: string) => void
   updateDesignContext: (patch: Partial<DesignContext>) => void

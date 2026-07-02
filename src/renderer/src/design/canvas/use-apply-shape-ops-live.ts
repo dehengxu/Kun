@@ -56,6 +56,17 @@ export function replayActiveCanvasTurn(
   processStreaming()
 }
 
+export function canvasReplayStateForStoreUpdate(
+  state: ActiveCanvasTurnReplayState,
+  prev?: Pick<ActiveCanvasTurnReplayState, 'currentTurnId' | 'currentTurnUserId'>
+): ActiveCanvasTurnReplayState {
+  return {
+    ...state,
+    currentTurnId: state.currentTurnId ?? prev?.currentTurnId ?? null,
+    currentTurnUserId: state.currentTurnUserId ?? prev?.currentTurnUserId ?? null
+  }
+}
+
 /**
  * Apply the `design_canvas` / legacy ```shapeops``` blocks the chat agent emits
  * — IN REAL TIME, as they stream — so the design draft builds up live on the
@@ -277,8 +288,9 @@ export function useApplyShapeOpsLive(
       const turnStarted = !prev.currentTurnId && Boolean(state.currentTurnId)
       const turnEnded = Boolean(prev.currentTurnId) && !state.currentTurnId
       if (turnStarted) resetTurn()
-      if (state.currentTurnId && state.blocks !== prev.blocks) {
-        for (const block of blocksForActiveCanvasTurn(state)) {
+      const replayState = canvasReplayStateForStoreUpdate(state, prev)
+      if (replayState.currentTurnId && state.blocks !== prev.blocks) {
+        for (const block of blocksForActiveCanvasTurn(replayState)) {
           if (block.kind === 'tool') applyToolBlock(block)
         }
       }

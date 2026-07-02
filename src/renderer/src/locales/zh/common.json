@@ -251,7 +251,6 @@
   "canvasInspectorAiHolderHint": "保持选中，让助手生成图片即可填入此槽位。",
   "canvasInspectorAiHolderAuto": "空白框 · 自动图片槽位",
   "canvasInspectorAiHolderAutoHint": "直接让助手生成图片即可，会自动填进这个框，无需手动标记。",
-  "designQuickSuggestLogo": "给选中的图片槽生成一个品牌 Logo",
   "designRailTitle": "设计助手",
   "designRailTargetNew": "新建设计",
   "designRailTargetIterate": "迭代：",

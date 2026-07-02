@@ -1389,7 +1389,8 @@ export function DesignProjectCanvas({
   const setViewport = useDesignWorkspaceStore((s) => s.setViewport)
   const setFileError = useDesignWorkspaceStore((s) => s.setFileError)
   const setDesignIntentMode = useDesignWorkspaceStore((s) => s.setDesignIntentMode)
-  const setCanvasAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
+  const canvasAssistantOpen = useDesignWorkspaceStore((s) => s.canvasAssistantOpen)
+  const toggleCanvasAssistantOpen = useDesignWorkspaceStore((s) => s.toggleCanvasAssistantOpen)
   const upsertArtifact = useDesignWorkspaceStore((s) => s.upsertArtifact)
   const updateArtifactNode = useDesignWorkspaceStore((s) => s.updateArtifactNode)
   const duplicateArtifact = useDesignWorkspaceStore((s) => s.duplicateArtifact)
@@ -1990,10 +1991,11 @@ export function DesignProjectCanvas({
           </button>
           <button
             type="button"
-            onClick={() => setCanvasAssistantOpen(true)}
-            className={`${projectToolButton} ${projectToolInactive}`}
-            aria-label={t('canvasToolAssistant')}
-            title={t('canvasToolAssistant')}
+            onClick={toggleCanvasAssistantOpen}
+            className={`${projectToolButton} ${canvasAssistantOpen ? projectToolActive : projectToolInactive}`}
+            aria-label={t(canvasAssistantOpen ? 'designRailCollapse' : 'canvasToolAssistant')}
+            title={t(canvasAssistantOpen ? 'designRailCollapse' : 'canvasToolAssistant')}
+            aria-pressed={canvasAssistantOpen}
           >
             <Sparkles className="h-[18px] w-[18px]" strokeWidth={1.9} />
           </button>

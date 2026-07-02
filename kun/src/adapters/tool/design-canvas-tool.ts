@@ -204,18 +204,22 @@ export function createDesignUpdateShapesTool(): LocalTool {
       type: 'object',
       properties: {
         ops: {
-          description: 'A ShapeOp object or array of ShapeOps. The renderer validates and applies each op atomically.',
+          description:
+            'Preferred: a ShapeOp object or array of ShapeOps. The renderer validates and applies each op atomically. If omitted, a direct top-level ShapeOp is also accepted.',
           anyOf: [
             { type: 'object', additionalProperties: true },
             { type: 'array', items: { type: 'object', additionalProperties: true } }
           ]
+        },
+        op: {
+          type: 'string',
+          description: 'Direct ShapeOp fallback. Prefer wrapping it in ops.'
         }
       },
-      required: ['ops'],
-      additionalProperties: false
+      additionalProperties: true
     },
     execute: async (args) => {
-      const ops = normalizeOps(args.ops)
+      const ops = normalizeDesignUpdateShapeOps(args)
       if (!ops) return designToolError('design_update_shapes requires ops as an object or array')
       return designToolOutput(DESIGN_UPDATE_SHAPES_TOOL_NAME, 'update_shapes', ops)
     }
@@ -413,6 +417,65 @@ function normalizeDesignCanvasArgs(args: Record<string, unknown>):
   }
 }
 
+function normalizeDesignUpdateShapeOps(args: Record<string, unknown>): unknown[] | null {
+  const explicitOps = firstNormalizedOps(
+    args.ops,
+    args.shapeOps,
+    args.shape_ops,
+    args.operations
+  )
+  if (explicitOps) return explicitOps
+  if (typeof args.op === 'string' && args.op.trim()) return [args]
+  const update = normalizeLooseUpdateShapeOp(args)
+  return update ? [update] : null
+}
+
+function firstNormalizedOps(...values: unknown[]): unknown[] | null {
+  for (const value of values) {
+    if (value === undefined) continue
+    const ops = normalizeOps(value)
+    if (ops) return ops
+  }
+  return null
+}
+
+function normalizeLooseUpdateShapeOp(args: Record<string, unknown>): Record<string, unknown> | null {
+  const id = stringArg(args.id) ?? stringArg(args.shapeId) ?? stringArg(args.shape_id)
+  if (!id) return null
+  const patchSource = isRecord(args.patch) ? args.patch : args
+  const patch = normalizeLooseShapePatch(patchSource)
+  if (Object.keys(patch).length === 0) return null
+  return { op: 'update', id, patch }
+}
+
+function normalizeLooseShapePatch(source: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {}
+  const skip = new Set([
+    'id',
+    'shapeId',
+    'shape_id',
+    'op',
+    'ops',
+    'shapeOps',
+    'shape_ops',
+    'operations',
+    'action',
+    'tool',
+    'patch'
+  ])
+  for (const [key, value] of Object.entries(source)) {
+    if (skip.has(key) || value === undefined) continue
+    const normalizedKey =
+      key === 'image_url' || key === 'relative_path' || key === 'relativePath'
+        ? 'imageUrl'
+        : key === 'text_content'
+          ? 'textContent'
+          : key
+    patch[normalizedKey] = value
+  }
+  return patch
+}
+
 function normalizeScreenSpecs(args: Record<string, unknown>):
   | { ok: true; specs: DesignScreenSpec[] }
   | { ok: false; error: string } {
@@ -510,6 +573,10 @@ function stringArg(value: unknown): string | undefined {
 
 function numberArg(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 function oneOf<const T extends readonly string[]>(value: unknown, values: T): T[number] | undefined {
