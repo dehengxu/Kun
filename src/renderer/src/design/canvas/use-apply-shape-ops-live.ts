@@ -165,14 +165,16 @@ export function takeNextReadyScreenGeneration({
   pendingScreens,
   document,
   currentTurnId,
+  busy = false,
   htmlArtifactIds
 }: {
   pendingScreens: PendingScreenGeneration[]
   document: CanvasDocument
   currentTurnId: string | null
+  busy?: boolean
   htmlArtifactIds?: ReadonlySet<string>
 }): PendingScreenGeneration | null {
-  if (currentTurnId) return null
+  if (currentTurnId || busy) return null
   while (pendingScreens.length > 0) {
     const next = pendingScreens.shift()
     if (!next) continue
@@ -222,6 +224,7 @@ export function useApplyShapeOpsLive(
     let framedThisTurn = false
     let lastRunAt = 0
     let trailingTimer: ReturnType<typeof setTimeout> | null = null
+    let screenDrainTimer: ReturnType<typeof setTimeout> | null = null
     const appliedToolBlockIds = new Set<string>()
     let generatedImageFallbackTarget: GeneratedImageFallbackTarget | null = null
 
@@ -346,22 +349,38 @@ export function useApplyShapeOpsLive(
       }
     }
 
+    function scheduleScreenDrain(delay = 160): void {
+      if (screenDrainTimer) return
+      screenDrainTimer = setTimeout(() => {
+        screenDrainTimer = null
+        drainPendingScreens()
+      }, delay)
+    }
+
     // Kick off the next queued screen's HTML generation — but only while the
-    // thread is idle, so the per-screen turns run strictly one at a time. Called
-    // on every turn-completion; the previous screen's generation turn ending is
-    // what advances the queue.
-    const drainPendingScreens = (): void => {
+    // thread is fully idle, so the per-screen turns run strictly one at a time.
+    // Turn completion and busy/currentTurnId clearing can land in separate store
+    // ticks, so this function re-schedules itself instead of consuming too early.
+    function drainPendingScreens(): void {
+      if (pendingScreens.length === 0) return
+      const chatState = useChatStore.getState()
       const next = takeNextReadyScreenGeneration({
         pendingScreens,
         document: useCanvasShapeStore.getState().document,
-        currentTurnId: useChatStore.getState().currentTurnId,
+        currentTurnId: chatState.currentTurnId,
+        busy: chatState.busy,
         htmlArtifactIds: new Set(
           useDesignWorkspaceStore.getState().artifacts
             .filter((artifact) => artifact.kind === 'html')
             .map((artifact) => artifact.id)
         )
       })
-      if (!next) return
+      if (!next) {
+        if (pendingScreens.length > 0 && (chatState.currentTurnId || chatState.busy)) {
+          scheduleScreenDrain()
+        }
+        return
+      }
       useCanvasSelectionStore.getState().select([next.shapeId])
       onScreenCreatedRef.current?.(next.shapeId, next.userPrompt, next.brief)
     }
@@ -444,8 +463,8 @@ export function useApplyShapeOpsLive(
       // them. Always set (even []) so a clean turn clears stale errors.
       setLastCanvasOpErrors([...errorsThisTurn], errorKey)
       resetTurn()
-      // Now that the just-finished turn has cleared, start the next queued screen.
-      drainPendingScreens()
+      // Let chat/runtime state settle before starting the follow-up HTML turn.
+      scheduleScreenDrain(120)
     }
 
     // If this hook becomes enabled after a turn has already started (common for
@@ -474,10 +493,14 @@ export function useApplyShapeOpsLive(
         scheduleStreaming()
       }
       if (turnEnded) finalizeTurn()
+      if (!state.currentTurnId && !state.busy && pendingScreens.length > 0) {
+        scheduleScreenDrain(0)
+      }
     })
 
     return () => {
       if (trailingTimer) clearTimeout(trailingTimer)
+      if (screenDrainTimer) clearTimeout(screenDrainTimer)
       unsubscribe()
     }
   }, [enabled, executeOptions, errorKey, targetThreadId])

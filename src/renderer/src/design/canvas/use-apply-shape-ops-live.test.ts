@@ -356,6 +356,21 @@ describe('screen generation queue helpers', () => {
     expect(queue).toHaveLength(1)
   })
 
+  it('waits while chat is busy without consuming the queue', () => {
+    const document = createEmptyDocument()
+    const frame = createHtmlFrameShape('Home', 0, 0, 'artifact-home', 'desktop')
+    document.objects[frame.id] = frame
+    const queue = [{ shapeId: frame.id, userPrompt: 'make a home screen' }]
+
+    expect(takeNextReadyScreenGeneration({
+      pendingScreens: queue,
+      document,
+      currentTurnId: null,
+      busy: true
+    })).toBeNull()
+    expect(queue).toHaveLength(1)
+  })
+
   it('skips deleted or non-html frames and returns the next live html screen', () => {
     const document = createEmptyDocument()
     const plainFrame = createDefaultShape('frame', 0, 0)
