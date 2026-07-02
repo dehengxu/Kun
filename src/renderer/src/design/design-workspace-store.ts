@@ -9,6 +9,7 @@ import {
   reconstructArtifact
 } from './design-artifact-persistence'
 import { hashDesignSystem } from './design-context'
+import { createDesignArtifactId } from './design-types'
 import type { DesignArtifact, DesignCanvasView, DesignViewport } from './design-types'
 import type { DesignWorkspaceState } from './design-workspace-store-types'
 
@@ -151,6 +152,41 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
   openImplementPanel: (title) => set({ implementOpen: true, implementTitle: title }),
 
   closeImplementPanel: () => set({ implementOpen: false }),
+
+  prepareHtmlTurn: (brief) => {
+    const text = brief.trim()
+    const state = get()
+    const active = state.artifacts.find((item) => item.id === state.activeArtifactId) ?? null
+    // Only HTML artifacts can be iterated; a canvas/other active artifact starts a fresh draft.
+    const activeHtml = active?.kind === 'html' ? active : null
+    const createdAt = new Date().toISOString()
+
+    if (activeHtml) {
+      const versionN = activeHtml.versions.length + 1
+      const relativePath = `.kun-design/${activeHtml.id}/v${versionN}.html`
+      get().addArtifactVersion(activeHtml.id, {
+        id: `${activeHtml.id}-v${versionN}`,
+        relativePath,
+        createdAt,
+        summary: text
+      })
+      return { relativePath, basePath: activeHtml.relativePath }
+    }
+
+    const artifactId = createDesignArtifactId()
+    const relativePath = `.kun-design/${artifactId}/v1.html`
+    const title = text.length > 48 ? `${text.slice(0, 48)}…` : text || 'Untitled design'
+    get().upsertArtifact({
+      id: artifactId,
+      kind: 'html',
+      title,
+      relativePath,
+      createdAt,
+      updatedAt: createdAt,
+      versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: text }]
+    })
+    return { relativePath }
+  },
 
   setAiRailCollapsed: (collapsed) => {
     writeBrowserStorageItem(AI_RAIL_COLLAPSED_KEY, collapsed ? '1' : '0')

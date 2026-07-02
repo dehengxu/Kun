@@ -61,7 +61,7 @@ import { DesignImplementPanel } from './design/DesignImplementPanel'
 import { DesignAIRail } from './design/DesignAIRail'
 import { DesignSidebar } from './design/DesignSidebar'
 import { useDesignWorkspaceStore } from '../design/design-workspace-store'
-import { buildDesignFromCodePrompt, buildDesignTurnPrompt } from '../design/design-turn-prompt'
+import { buildDesignFromCodePrompt } from '../design/design-turn-prompt'
 import { buildImplementDesignPrompt } from '../design/design-implement-prompt'
 import { createDesignArtifactId, type DesignArtifact } from '../design/design-types'
 import { formatDesignSystemMarkdown, hashDesignSystem } from '../design/design-context'
@@ -2179,78 +2179,6 @@ export function Workbench(): ReactElement {
     })()
   }
 
-  const sendDesignTurn = (brief: string): void => {
-    const text = brief.trim()
-    if (!text) return
-    const designWorkspaceRoot = useDesignWorkspaceStore.getState().workspaceRoot || workspaceRoot
-    if (!designWorkspaceRoot) {
-      setError(t('workspaceRequiredToCreateThread'))
-      return
-    }
-    setInput('')
-    void (async () => {
-      const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot)
-      if (!threadId) {
-        setInput(text)
-        return
-      }
-      const store = useDesignWorkspaceStore.getState()
-      store.setWorkspaceRoot(designWorkspaceRoot)
-      const createdAt = new Date().toISOString()
-      // Only HTML artifacts can be iterated by the free-form design composer.
-      // Graph artifacts run from their own node canvas; when one is selected, a
-      // composer turn starts a fresh HTML draft instead of treating graph.json
-      // as a prior HTML version.
-      const active = store.artifacts.find((item) => item.id === store.activeArtifactId) ?? null
-      const activeHtml = canImplementDesignArtifact(active) ? active : null
-      let relativePath: string
-      let basePath: string | undefined
-      if (activeHtml) {
-        const versionN = activeHtml.versions.length + 1
-        relativePath = `.kun-design/${activeHtml.id}/v${versionN}.html`
-        basePath = activeHtml.relativePath
-        store.addArtifactVersion(activeHtml.id, {
-          id: `${activeHtml.id}-v${versionN}`,
-          relativePath,
-          createdAt,
-          summary: text
-        })
-      } else {
-        const artifactId = createDesignArtifactId()
-        relativePath = `.kun-design/${artifactId}/v1.html`
-        const title = text.length > 48 ? `${text.slice(0, 48)}…` : text
-        store.upsertArtifact({
-          id: artifactId,
-          kind: 'html',
-          title,
-          relativePath,
-          createdAt,
-          updatedAt: createdAt,
-          versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: text }]
-        })
-      }
-      const prompt = buildDesignTurnPrompt({
-        target: 'html',
-        mode: 'text',
-        text,
-        artifactRelativePath: relativePath,
-        basePath,
-        workspaceRoot: designWorkspaceRoot,
-        customPrompt: store.generationPrompt || undefined,
-        designContext: store.designContext
-      })
-      const model = store.assistantModel.trim()
-      const providerId =
-        store.assistantProviderId.trim() || providerIdForComposerModel(composerModelGroups, model)
-      const reasoningEffort = store.reasoningEffort.trim()
-      void sendMessage(prompt, 'agent', {
-        displayText: text,
-        ...(model ? { model } : {}),
-        ...(providerId ? { providerId } : {}),
-        ...(reasoningEffort ? { reasoningEffort } : {})
-      })
-    })()
-  }
 
   // Design → code spine: hand an approved design to the coding agent. Publishes
   // the shared design system to the workspace, then dispatches an implement turn
@@ -2770,9 +2698,6 @@ export function Workbench(): ReactElement {
             <DesignWorkspaceView
               leftSidebarCollapsed={leftSidebarCollapsed}
               onToggleLeftSidebar={toggleLeftSidebar}
-              input={input}
-              setInput={setInput}
-              onSubmitPrompt={sendDesignTurn}
               onOpenAgentSettings={() => openSettings('design')}
             />
             {designImplementOpen ? (

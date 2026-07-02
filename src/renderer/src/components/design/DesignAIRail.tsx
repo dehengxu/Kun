@@ -52,20 +52,36 @@ function DesignAIRailInner({ onOpenSettings }: Props) {
     const active = store.artifacts.find((a) => a.id === store.activeArtifactId) ?? null
     const isCanvas = active?.kind === 'canvas'
 
+    // Single entry point for all design work:
+    // - canvas artifact → send the shape snapshot, AI replies with ShapeOps
+    // - anything else   → ensure/iterate an HTML artifact, AI writes the file
+    let artifactRelativePath = active?.relativePath ?? ''
+    let basePath: string | undefined
+    let canvasSnapshot
+    if (isCanvas) {
+      canvasSnapshot = snapshotCanvas(useCanvasShapeStore.getState().document)
+    } else {
+      const prep = store.prepareHtmlTurn(text)
+      artifactRelativePath = prep.relativePath
+      basePath = prep.basePath
+    }
+
     const prompt = buildDesignTurnPrompt({
       target: isCanvas ? 'canvas' : 'html',
       mode: 'text',
       text,
-      artifactRelativePath: active?.relativePath ?? '',
+      artifactRelativePath,
+      basePath,
       workspaceRoot,
       customPrompt: store.generationPrompt || undefined,
       designContext: store.designContext,
-      ...(isCanvas
-        ? { canvasSnapshot: snapshotCanvas(useCanvasShapeStore.getState().document) }
-        : {})
+      ...(canvasSnapshot ? { canvasSnapshot } : {})
     })
 
-    void sendMessage(text, prompt, workspaceRoot)
+    void sendMessage(text, prompt, workspaceRoot, {
+      model: store.assistantModel.trim() || undefined,
+      reasoningEffort: store.reasoningEffort.trim() || undefined
+    })
   }, [input, busy, workspaceRoot, sendMessage])
 
   const handleKeyDown = useCallback(

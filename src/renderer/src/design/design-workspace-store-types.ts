@@ -54,6 +54,12 @@ export type DesignWorkspaceState = {
   /** Open the in-page "implement in code" assistant for an artifact. */
   openImplementPanel: (title: string) => void
   closeImplementPanel: () => void
+  /**
+   * Ensure there's a target HTML artifact for a design turn and return its paths.
+   * If an HTML artifact is active, appends a new version (basePath = current);
+   * otherwise creates a fresh HTML artifact and makes it active.
+   */
+  prepareHtmlTurn: (brief: string) => { relativePath: string; basePath?: string }
   setAiRailCollapsed: (collapsed: boolean) => void
   setAssistantModel: (model: string, providerId?: string) => void
   updateDesignContext: (patch: Partial<DesignContext>) => void

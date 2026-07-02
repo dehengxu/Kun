@@ -19,10 +19,10 @@ import {
 import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../../store/chat-store'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { useDesignAssistantStore } from '../../design/design-assistant-store'
 import { DESIGN_VIEWPORT_WIDTHS, type DesignViewport } from '../../design/design-types'
 import { startWriteWorkspaceFileWatch } from '../../write/write-file-watch'
 import { highlightCodeHtml, renderFallbackCodeHtml } from '../../lib/code-highlighting'
-import { DesignAgentPanel } from './DesignAgentPanel'
 import { DesignContextPopover } from './DesignContextPopover'
 import { CanvasViewport } from './canvas/CanvasViewport'
 import { PropertiesPanel } from './canvas/PropertiesPanel'
@@ -46,28 +46,23 @@ function isCompleteHtml(content: string): boolean {
 type CanvasProps = {
   leftSidebarCollapsed: boolean
   onToggleLeftSidebar: () => void
-  input: string
-  setInput: (value: string) => void
-  onSubmitPrompt?: (prompt: string) => void
   onOpenAgentSettings?: () => void
 }
 
 /**
  * Live design canvas. The active artifact file is watched (write-file-watch),
  * so the agent's incremental writes refresh the canvas in place — the webview
- * is reloaded (not remounted) once a complete document exists. Preview/code/live
- * are the discriminated-union seam for P2/P3 surfaces.
+ * is reloaded (not remounted) once a complete document exists. All design input
+ * goes through the right-side Design AI Rail; this surface only renders output.
  */
 export function DesignCanvas({
   leftSidebarCollapsed,
   onToggleLeftSidebar,
-  input,
-  setInput,
-  onSubmitPrompt,
   onOpenAgentSettings
 }: CanvasProps): ReactElement {
   const { t } = useTranslation('common')
   const busy = useChatStore((s) => s.busy)
+  const designBusy = useDesignAssistantStore((s) => s.designBusy)
   const workspaceRoot = useDesignWorkspaceStore((s) => s.workspaceRoot)
   const artifacts = useDesignWorkspaceStore((s) => s.artifacts)
   const activeArtifactId = useDesignWorkspaceStore((s) => s.activeArtifactId)
@@ -206,10 +201,11 @@ export function DesignCanvas({
       .catch(() => setFileError(t('designExportFailed')))
   }
   const openDesignComposer = (): void => {
+    // The single design input lives in the right-side AI Rail — expand it if
+    // collapsed, then focus its textarea.
+    useDesignWorkspaceStore.getState().setAiRailCollapsed(false)
     requestAnimationFrame(() => {
-      document
-        .querySelector<HTMLTextAreaElement>('[data-design-composer-textarea]')
-        ?.focus()
+      document.querySelector<HTMLTextAreaElement>('[data-design-rail-textarea]')?.focus()
     })
   }
 
@@ -446,20 +442,10 @@ export function DesignCanvas({
           )
         ) : (
           <div className="flex h-full items-center justify-center px-6 text-center text-[13px] text-[#646e7c] dark:text-white/55">
-            {busy || !ready ? t('designCanvasGenerating') : t('designCanvasLoading')}
+            {busy || designBusy || !ready ? t('designCanvasGenerating') : t('designCanvasLoading')}
           </div>
         )}
       </div>
-      {implementOpen ? null : (
-        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center px-4">
-          <DesignAgentPanel
-            value={input}
-            onChange={setInput}
-            onSubmit={(value) => onSubmitPrompt?.(value)}
-            activeTitle={activeArtifact?.title}
-          />
-        </div>
-      )}
     </div>
   )
 }

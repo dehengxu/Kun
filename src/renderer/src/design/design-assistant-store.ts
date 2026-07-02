@@ -30,7 +30,12 @@ type DesignAssistantState = {
   setDesignTarget: (target: DesignTarget) => void
   clearDesignConversation: () => void
   ensureDesignThread: (workspaceRoot: string) => Promise<string>
-  sendDesignMessage: (text: string, prompt: string, workspaceRoot: string) => Promise<void>
+  sendDesignMessage: (
+    text: string,
+    prompt: string,
+    workspaceRoot: string,
+    opts?: { model?: string; reasoningEffort?: string }
+  ) => Promise<void>
   appendBlock: (block: DesignMessageBlock) => void
   /** Parse an assistant message for ```shapeops``` JSON blocks and execute them. */
   applyAiShapeOps: (text: string) => { affectedIds: string[]; errors: OpError[] }
@@ -182,7 +187,7 @@ export const useDesignAssistantStore = create<DesignAssistantState>((set, get) =
     return threadId
   },
 
-  sendDesignMessage: async (text, prompt, workspaceRoot) => {
+  sendDesignMessage: async (text, prompt, workspaceRoot, opts) => {
     const state = get()
     if (state.designBusy) return
 
@@ -197,9 +202,13 @@ export const useDesignAssistantStore = create<DesignAssistantState>((set, get) =
     try {
       const threadId = await get().ensureDesignThread(workspaceRoot)
       const provider = getProvider()
+      const model = opts?.model?.trim()
+      const reasoningEffort = opts?.reasoningEffort?.trim()
       const { turnId } = await provider.sendUserMessage(threadId, prompt, {
         displayText: text,
-        mode: 'agent'
+        mode: 'agent',
+        ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {})
       })
 
       const sseStreamId = `design-rail-${threadId}-${turnId}`

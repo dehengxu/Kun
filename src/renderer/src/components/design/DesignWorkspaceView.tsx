@@ -8,23 +8,17 @@ import { DesignCanvas } from './DesignCanvas'
 type Props = {
   leftSidebarCollapsed: boolean
   onToggleLeftSidebar: () => void
-  input: string
-  setInput: (value: string) => void
-  onSubmitPrompt?: (prompt: string) => void
   onOpenAgentSettings?: () => void
 }
 
 /**
- * Design-mode main surface: a single full-width canvas with the design
- * composer floating bottom-center (Stitch-style). The 设计上下文 form lives
- * in a popover triggered from the canvas toolbar.
+ * Design-mode center surface: the canvas/preview output. All design input goes
+ * through the right-side Design AI Rail (DesignAIRail). The 设计上下文 form
+ * lives in a popover triggered from the canvas toolbar.
  */
 export function DesignWorkspaceView({
   leftSidebarCollapsed,
   onToggleLeftSidebar,
-  input,
-  setInput,
-  onSubmitPrompt,
   onOpenAgentSettings
 }: Props): ReactElement {
   const { t } = useTranslation('common')
@@ -55,9 +49,6 @@ export function DesignWorkspaceView({
         <DesignCanvas
           leftSidebarCollapsed={leftSidebarCollapsed}
           onToggleLeftSidebar={onToggleLeftSidebar}
-          input={input}
-          setInput={setInput}
-          onSubmitPrompt={onSubmitPrompt}
           onOpenAgentSettings={onOpenAgentSettings}
         />
       </div>
