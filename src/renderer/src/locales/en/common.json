@@ -514,7 +514,7 @@
   "plugins": "Plugins",
   "claw": "Connect phone",
   "schedule": "Scheduled tasks",
-  "workflow": "Create Loop",
+  "workflow": "Loop",
   "workflowSubtitle": "Wire up a node-based flow: run it manually, fire it on a schedule / webhook, or let the code-mode agent call it. Each flow has an \"Enabled\" and an \"AI-callable\" switch below it.",
   "workflowSidebarHint": "Open a Create Loop to edit its nodes on the canvas.",
   "workflowNew": "New Create Loop",

@@ -514,7 +514,7 @@
   "plugins": "插件",
   "claw": "连接手机",
   "schedule": "定时任务",
-  "workflow": "创建loop",
+  "workflow": "Loop",
   "workflowSubtitle": "用节点搭好一条自动化流程：手动运行、按定时 / Webhook 自动触发，或让 code 模式的智能体直接调用。每条流程下方有「启用」和「AI 可调用」两个开关。",
   "workflowSidebarHint": "打开一个创建loop，在画布上编辑节点。",
   "workflowNew": "新建创建loop",
