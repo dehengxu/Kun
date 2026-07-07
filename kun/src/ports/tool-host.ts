@@ -2,6 +2,7 @@ import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
 import type { ApprovalRequest } from '../domain/approval.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
+import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type {
   UserInputRequest,
   UserInputResolution
@@ -63,6 +64,8 @@ export type ToolHostContext = {
   threadMode?: 'agent' | 'plan'
   /** Optional GUI plan context (see above). */
   guiPlan?: GuiPlanContext
+  /** True when the active GUI turn is allowed to mutate the design canvas. */
+  guiDesignCanvas?: boolean
   /** Active model capability metadata used by capability-aware providers. */
   model?: ModelCapabilityMetadata
   /** Skill ids activated for this turn, if the Skill runtime is enabled. */
@@ -93,6 +96,8 @@ export type ToolHostContext = {
   sandboxMode?: SandboxMode
   /** Kun runtime data root; used to allow sandbox-safe reads of background shell output files. */
   runtimeDataDir?: string
+  /** Store used to offload oversized tool results from model context. */
+  artifactStore?: ArtifactStore
   abortSignal: AbortSignal
   /** Resolves a pending approval with the user's decision. */
   awaitApproval: (approval: ApprovalRequest) => Promise<'allow' | 'deny'>

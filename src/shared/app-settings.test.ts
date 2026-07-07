@@ -7,10 +7,13 @@ import {
   DEFAULT_KUN_MODEL,
   DEFAULT_LOG_RETENTION_DAYS,
   DEFAULT_CURSOR_SPOTLIGHT_COLOR,
+  DEFAULT_GIT_BRANCH_PREFIX,
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_SANDBOX_MODE,
   DEFAULT_WEIXIN_BRIDGE_RPC_URL,
   DEFAULT_SCHEDULE_INTERNAL_PORT,
+  DEFAULT_TOOL_OUTPUT_MAX_BYTES,
+  DEFAULT_TOOL_OUTPUT_MAX_LINES,
   buildClawRuntimePrompt,
   defaultClawSettings,
   defaultModelProviderSettings,
@@ -21,6 +24,7 @@ import {
   defaultWorkflowSettings,
   defaultTerminalSettings,
   defaultWriteSelectionAssistSettings,
+  defaultDesignSettings,
   defaultWriteSettings,
   getModelProviderPreset,
   defaultKeyboardShortcuts,
@@ -33,6 +37,8 @@ import {
   migrateLegacyAppSettings,
   normalizeAppSettings,
   normalizeChatContentMaxWidth,
+  normalizeGitBranchPrefix,
+  applyGitBranchPrefix,
   parseClawUserPromptForDisplay,
   inferModelEndpointFormatFromUrl,
   kunToolPermissionModeFromSettings,
@@ -69,6 +75,7 @@ function settings(): AppSettingsV1 {
     claw: defaultClawSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
+    design: defaultDesignSettings(),
     terminal: defaultTerminalSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
@@ -87,6 +94,21 @@ describe('chat content max width', () => {
     expect(normalizeChatContentMaxWidth(896)).toBe(896)
     expect(normalizeChatContentMaxWidth(1300)).toBe(1200)
     expect(normalizeChatContentMaxWidth(905)).toBe(904)
+  })
+})
+
+describe('git branch prefix', () => {
+  it('normalizes separators and applies the default prefix once', () => {
+    expect(normalizeGitBranchPrefix(' feature ')).toBe('feature/')
+    expect(normalizeGitBranchPrefix('team\\')).toBe('team/')
+    expect(normalizeGitBranchPrefix(undefined)).toBe(DEFAULT_GIT_BRANCH_PREFIX)
+    expect(applyGitBranchPrefix('fix/workspace', 'codex/')).toBe('codex/fix/workspace')
+    expect(applyGitBranchPrefix('codex/fix/workspace', 'codex/')).toBe('codex/fix/workspace')
+  })
+
+  it('allows branch prefixes to be disabled', () => {
+    expect(normalizeGitBranchPrefix('')).toBe('')
+    expect(applyGitBranchPrefix('fix/workspace', '')).toBe('fix/workspace')
   })
 })
 
@@ -196,6 +218,15 @@ describe('kun defaults', () => {
     })
   })
 
+  it('defaults tool output limits to 500kb and 20000 lines', () => {
+    expect(defaultKunRuntimeSettings().toolOutputLimits).toEqual({
+      maxLines: DEFAULT_TOOL_OUTPUT_MAX_LINES,
+      maxBytes: DEFAULT_TOOL_OUTPUT_MAX_BYTES
+    })
+    expect(defaultKunRuntimeSettings().toolOutputLimits.maxLines).toBe(20_000)
+    expect(defaultKunRuntimeSettings().toolOutputLimits.maxBytes).toBe(500 * 1024)
+  })
+
   it('defaults MCP search discovery to off', () => {
     expect(defaultKunRuntimeSettings().mcpSearch).toMatchObject({
       enabled: false,
@@ -215,6 +246,7 @@ describe('kun defaults', () => {
       apiKey: '',
       model: '',
       defaultSize: '',
+      quality: 'auto',
       timeoutMs: 180000
     })
   })
@@ -270,7 +302,7 @@ describe('kun defaults', () => {
         summaryInputMaxBytes: 98304
       },
       runtimeTuning: {
-        streamIdleTimeoutMs: 45000,
+        streamIdleTimeoutMs: 450000,
         toolStorm: {
           enabled: true,
           windowSize: 8,
@@ -488,14 +520,14 @@ describe('claw settings', () => {
 })
 
 describe('isKunRuntimeInsecure', () => {
-  it('treats an empty runtime token as effectively insecure', () => {
+  it('keeps auth enabled even when the runtime token is empty', () => {
     expect(
       isKunRuntimeInsecure({
         ...defaultKunRuntimeSettings(),
         insecure: false,
         runtimeToken: ''
       })
-    ).toBe(true)
+    ).toBe(false)
   })
 
   it('keeps auth enabled when a token exists and insecure is false', () => {
@@ -506,6 +538,16 @@ describe('isKunRuntimeInsecure', () => {
         runtimeToken: 'tok-1'
       })
     ).toBe(false)
+  })
+
+  it('honors explicit insecure mode', () => {
+    expect(
+      isKunRuntimeInsecure({
+        ...defaultKunRuntimeSettings(),
+        insecure: true,
+        runtimeToken: 'tok-1'
+      })
+    ).toBe(true)
   })
 })
 
@@ -548,6 +590,27 @@ describe('mergeKunRuntimeSettings', () => {
     const legacySwitch = mergeKunRuntimeSettings(next, { tokenEconomyMode: false })
     expect(legacySwitch.tokenEconomyMode).toBe(false)
     expect(legacySwitch.tokenEconomy.enabled).toBe(false)
+  })
+
+  it('deep-merges tool output limits and normalizes out-of-range values', () => {
+    const current = defaultKunRuntimeSettings()
+    const next = mergeKunRuntimeSettings(current, {
+      toolOutputLimits: {
+        maxBytes: 2 * 1024 * 1024
+      }
+    })
+
+    expect(next.toolOutputLimits.maxLines).toBe(current.toolOutputLimits.maxLines)
+    expect(next.toolOutputLimits.maxBytes).toBe(2 * 1024 * 1024)
+
+    const clamped = mergeKunRuntimeSettings(next, {
+      toolOutputLimits: {
+        maxLines: 9_999_999,
+        maxBytes: 999 * 1024 * 1024
+      }
+    })
+    expect(clamped.toolOutputLimits.maxLines).toBe(1_000_000)
+    expect(clamped.toolOutputLimits.maxBytes).toBe(64 * 1024 * 1024)
   })
 
   it('deep-merges MCP search settings', () => {
@@ -628,7 +691,7 @@ describe('mergeKunRuntimeSettings', () => {
 
   it('normalizes the stream idle timeout (0 disables, out-of-range clamps)', () => {
     const current = defaultKunRuntimeSettings()
-    expect(current.runtimeTuning.streamIdleTimeoutMs).toBe(45000)
+    expect(current.runtimeTuning.streamIdleTimeoutMs).toBe(450000)
 
     const set = mergeKunRuntimeSettings(current, {
       runtimeTuning: { streamIdleTimeoutMs: 300000 }
@@ -647,7 +710,7 @@ describe('mergeKunRuntimeSettings', () => {
     expect(
       mergeKunRuntimeSettings(current, { runtimeTuning: { streamIdleTimeoutMs: -5 } })
         .runtimeTuning.streamIdleTimeoutMs
-    ).toBe(45000)
+    ).toBe(450000)
     expect(
       mergeKunRuntimeSettings(current, { runtimeTuning: { streamIdleTimeoutMs: 999_999_999 } })
         .runtimeTuning.streamIdleTimeoutMs
@@ -673,20 +736,23 @@ describe('mergeKunRuntimeSettings', () => {
       apiKey: 'sk-image',
       model: 'Kwai-Kolors/Kolors',
       defaultSize: '',
+      quality: 'auto',
       timeoutMs: 180000
     })
 
     const sized = mergeKunRuntimeSettings(next, {
-      imageGeneration: { defaultSize: '1536x1024', timeoutMs: 240000 }
+      imageGeneration: { defaultSize: '1536x1024', quality: 'high', timeoutMs: 240000 }
     })
     expect(sized.imageGeneration.defaultSize).toBe('1536x1024')
+    expect(sized.imageGeneration.quality).toBe('high')
     expect(sized.imageGeneration.timeoutMs).toBe(240000)
     expect(sized.imageGeneration.apiKey).toBe('sk-image')
 
     const invalidSize = mergeKunRuntimeSettings(sized, {
-      imageGeneration: { defaultSize: 'huge', timeoutMs: -5 }
+      imageGeneration: { defaultSize: 'huge', quality: 'maximum' as never, timeoutMs: -5 }
     })
     expect(invalidSize.imageGeneration.defaultSize).toBe('')
+    expect(invalidSize.imageGeneration.quality).toBe('auto')
     expect(invalidSize.imageGeneration.timeoutMs).toBe(180000)
   })
 
@@ -948,7 +1014,35 @@ describe('legacy Kun defaults migration', () => {
       apiKey: '',
       model: '',
       defaultSize: '',
+      quality: 'auto',
       timeoutMs: 180000
+    })
+  })
+
+  it('preserves the Codex responses image protocol during normalization', () => {
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      agents: {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          imageGeneration: {
+            ...defaultKunRuntimeSettings().imageGeneration,
+            enabled: true,
+            providerId: 'custom',
+            protocol: 'codex-responses-image',
+            baseUrl: 'https://chatgpt.com/backend-api/codex',
+            apiKey: 'codex-access',
+            model: 'gpt-image-2'
+          }
+        }
+      }
+    })
+
+    expect(normalized.agents.kun.imageGeneration).toMatchObject({
+      protocol: 'codex-responses-image',
+      baseUrl: 'https://chatgpt.com/backend-api/codex',
+      apiKey: 'codex-access',
+      model: 'gpt-image-2'
     })
   })
 
@@ -1162,6 +1256,7 @@ describe('claw runtime prompts', () => {
       apiKey: 'sk-image',
       model: 'test-image-model',
       defaultSize: '1024x1024',
+      quality: 'auto',
       timeoutMs: 180000
     }
 

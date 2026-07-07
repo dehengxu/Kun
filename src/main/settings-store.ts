@@ -9,11 +9,13 @@ import {
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
   DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
   DEFAULT_CURSOR_SPOTLIGHT_COLOR,
+  DEFAULT_GIT_BRANCH_PREFIX,
   DEFAULT_LOG_RETENTION_DAYS,
   DEFAULT_WRITE_WORKSPACE_ROOT,
   defaultClawSettings,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
+  defaultDesignSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   getKunRuntimeSettings,
@@ -22,6 +24,7 @@ import {
   defaultWriteSettings,
   mergeClawSettings,
   mergeAppBehaviorSettings,
+  mergeDesignSettings,
   mergeScheduleSettings,
   mergeWorkflowSettings,
   mergeWriteSettings,
@@ -31,6 +34,7 @@ import {
   DEFAULT_UI_FONT_SCALE,
   normalizeAppBehaviorSettings,
   normalizeCheckpointCleanupSettings,
+  normalizeGitBranchPrefix,
   normalizeKeyboardShortcuts,
   migrateLegacyAppSettings,
   normalizeAppSettings,
@@ -241,6 +245,7 @@ const defaultSettings = (): AppSettingsV1 => ({
     enabled: DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
     intervalDays: DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS
   },
+  gitBranchPrefix: DEFAULT_GIT_BRANCH_PREFIX,
   notifications: {
     turnComplete: true
   },
@@ -255,6 +260,7 @@ const defaultSettings = (): AppSettingsV1 => ({
   claw: defaultClawSettings(),
   schedule: defaultScheduleSettings(),
   workflow: defaultWorkflowSettings(),
+  design: defaultDesignSettings(),
   terminal: defaultTerminalSettings()
 })
 
@@ -273,6 +279,7 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
       ...defaults.checkpointCleanup,
       ...migrated.checkpointCleanup
     }),
+    gitBranchPrefix: normalizeGitBranchPrefix(migrated.gitBranchPrefix),
     notifications: { ...defaults.notifications, ...migrated.notifications },
     appBehavior: mergeAppBehaviorSettings(defaults.appBehavior, migrated.appBehavior),
     keyboardShortcuts: normalizeKeyboardShortcuts(migrated.keyboardShortcuts),
@@ -280,6 +287,7 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
     claw: mergeClawSettings(defaults.claw, migrated.claw),
     schedule: mergeScheduleSettings(defaults.schedule, migrated.schedule),
     workflow: mergeWorkflowSettings(defaults.workflow, migrated.workflow),
+    design: mergeDesignSettings(defaults.design, migrated.design),
     terminal: mergeTerminalSettings(defaults.terminal, migrated.terminal),
     guiUpdate: { ...defaults.guiUpdate, ...migrated.guiUpdate },
     codePromptPrefix: typeof migrated.codePromptPrefix === 'string' ? migrated.codePromptPrefix : '',
@@ -477,6 +485,7 @@ export class JsonSettingsStore {
       claw: mergeClawSettings(cur.claw, partial.claw),
       schedule: mergeScheduleSettings(cur.schedule, partial.schedule),
       workflow: mergeWorkflowSettings(cur.workflow, partial.workflow),
+      design: mergeDesignSettings(cur.design, partial.design),
       terminal: mergeTerminalSettings(cur.terminal, partial.terminal),
       guiUpdate: { ...cur.guiUpdate, ...(partial.guiUpdate ?? {}) }
     })

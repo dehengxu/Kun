@@ -14,6 +14,7 @@ import {
   KUN_ATTACHMENTS_PATH,
   KUN_MEMORY_DIAGNOSTICS_PATH,
   KUN_MEMORY_PATH,
+  KUN_MCP_OAUTH_PATH,
   KUN_RUNTIME_INFO_PATH,
   KUN_RUNTIME_TOOLS_PATH,
   KUN_SKILLS_PATH,
@@ -32,6 +33,7 @@ import {
   kunAttachmentContentPath,
   kunUserInputPath,
   kunMemoryRecordPath,
+  kunMcpOAuthServerPath,
   kunSessionResumePath,
   normalizeThreadMode,
   type KunThreadMode
@@ -46,6 +48,10 @@ import type {
   CoreMemoryDiagnosticsJson,
   CoreMemoryListResponseJson,
   CoreMemoryRecordJson,
+  CoreMcpOAuthClearResponseJson,
+  CoreMcpOAuthAuthorizeResponseJson,
+  CoreMcpOAuthDiagnosticJson,
+  CoreMcpOAuthDiagnosticsResponseJson,
   CoreResumeSessionResponseJson,
   CoreRuntimeInfoJson,
   CoreRuntimeEventJson,
@@ -219,6 +225,8 @@ export class KunRuntimeProvider implements AgentProvider {
         injectedMemoryIds: turn.injectedMemoryIds,
         injectedMemorySummaries: turn.injectedMemorySummaries,
         skillInjectionBytes: turn.skillInjectionBytes,
+        injectedInstructionSources: turn.injectedInstructionSources,
+        instructionInjectionBytes: turn.instructionInjectionBytes,
         workspaceCheckpointId: item.workspaceCheckpointId ?? turn.workspaceCheckpointId
       }))
     )
@@ -262,6 +270,7 @@ export class KunRuntimeProvider implements AgentProvider {
     options?: {
       mode?: KunThreadMode
       model?: string
+      providerId?: string
       reasoningEffort?: string
       displayText?: string
       guiPlan?: {
@@ -272,6 +281,7 @@ export class KunRuntimeProvider implements AgentProvider {
         sourceRequest?: string
         title?: string
       }
+      guiDesignCanvas?: boolean
       attachmentIds?: string[]
       workspaceCheckpointId?: string
       fileReferences?: Array<{ path: string; relativePath: string; name: string; kind?: 'file' | 'directory' }>
@@ -282,6 +292,7 @@ export class KunRuntimeProvider implements AgentProvider {
     const body: Record<string, unknown> = {
       prompt: text,
       model: options?.model,
+      providerId: options?.providerId,
       approvalPolicy: runtime.approvalPolicy,
       sandboxMode: runtime.sandboxMode
     }
@@ -304,6 +315,9 @@ export class KunRuntimeProvider implements AgentProvider {
         sourceRequest: options.guiPlan.sourceRequest,
         title: options.guiPlan.title
       }
+    }
+    if (options?.guiDesignCanvas) {
+      body.guiDesignCanvas = true
     }
     if (options?.attachmentIds?.length) {
       body.attachmentIds = options.attachmentIds
@@ -347,11 +361,14 @@ export class KunRuntimeProvider implements AgentProvider {
   async reviewThread(
     threadId: string,
     target: ReviewTarget,
-    options?: { model?: string }
+    options?: { model?: string; providerId?: string }
   ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string; reviewItemId?: string }> {
     const body: Record<string, unknown> = { target }
     if (options?.model?.trim()) {
       body.model = options.model.trim()
+    }
+    if (options?.providerId?.trim()) {
+      body.providerId = options.providerId.trim()
     }
     const response = await rendererRuntimeClient.runtimeRequest(
       kunThreadReviewPath(threadId),
@@ -640,6 +657,42 @@ export class KunRuntimeProvider implements AgentProvider {
     )
   }
 
+  async getMcpOAuthDiagnostics(): Promise<CoreMcpOAuthDiagnosticJson[]> {
+    const response = await rendererRuntimeClient.runtimeRequest(KUN_MCP_OAUTH_PATH, 'GET')
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to load MCP OAuth diagnostics'))
+    }
+    return readRuntimeJson<CoreMcpOAuthDiagnosticsResponseJson>(
+      response.body,
+      'runtime returned an invalid MCP OAuth diagnostics response'
+    ).servers
+  }
+
+  async clearMcpOAuthCredentials(serverId?: string): Promise<string[]> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      serverId ? kunMcpOAuthServerPath(serverId) : KUN_MCP_OAUTH_PATH,
+      'DELETE'
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to clear MCP OAuth credentials'))
+    }
+    return readRuntimeJson<CoreMcpOAuthClearResponseJson>(
+      response.body,
+      'runtime returned an invalid MCP OAuth reset response'
+    ).cleared
+  }
+
+  async authorizeMcpOAuthCredentials(serverId: string): Promise<CoreMcpOAuthAuthorizeResponseJson> {
+    const response = await rendererRuntimeClient.runtimeRequest(kunMcpOAuthServerPath(serverId), 'POST')
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to authorize MCP OAuth connector'))
+    }
+    return readRuntimeJson<CoreMcpOAuthAuthorizeResponseJson>(
+      response.body,
+      'runtime returned an invalid MCP OAuth authorize response'
+    )
+  }
+
   async listSkills(): Promise<CoreRuntimeSkillJson[]> {
     const response = await rendererRuntimeClient.runtimeRequest(KUN_SKILLS_PATH, 'GET')
     if (!response.ok) {
@@ -655,6 +708,8 @@ export class KunRuntimeProvider implements AgentProvider {
     name: string
     mimeType?: string
     dataBase64: string
+    documentText?: string
+    pageCount?: number
     localFilePath?: string
     textFallback?: CoreAttachmentTextFallbackJson
     threadId?: string

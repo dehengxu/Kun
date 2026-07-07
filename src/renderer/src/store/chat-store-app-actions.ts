@@ -56,6 +56,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   | 'openClaw'
   | 'openSchedule'
   | 'openWorkflow'
+  | 'openDesign'
   | 'openInitialSetup'
   | 'closeInitialSetup'
   | 'selectInspectorItem'
@@ -221,6 +222,9 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
 
     openWorkflow: () => {
       set({ route: 'workflow' })
+    },
+    openDesign: () => {
+      set({ route: 'design' })
     },
 
     openInitialSetup: (mode: InitialSetupMode = 'required') =>

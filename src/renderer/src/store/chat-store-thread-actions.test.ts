@@ -153,7 +153,7 @@ describe('chat-store-thread-actions queued messages', () => {
     })
   })
 
-  it('applies the selected composer provider before sending a turn', async () => {
+  it('sends the selected composer provider as a turn override without changing global settings', async () => {
     const provider = {
       connect: vi.fn(async () => undefined),
       sendUserMessage: vi.fn(async () => ({
@@ -164,7 +164,7 @@ describe('chat-store-thread-actions queued messages', () => {
       subscribeThreadEvents: vi.fn(async () => undefined)
     }
     registryMock.getProvider.mockReturnValue(provider)
-    const saveSettingsSilent = vi.fn(async () => ({
+    const setSettings = vi.fn(async () => ({
       agents: { kun: { providerId: 'xiaomi-token-plan', model: 'mimo-v2.5' } },
       codePromptPrefix: ''
     }))
@@ -175,7 +175,7 @@ describe('chat-store-thread-actions queued messages', () => {
           agents: { kun: { providerId: 'minimax-token-plan', model: 'MiniMax-M2' } },
           codePromptPrefix: ''
         })),
-        saveSettingsSilent,
+        setSettings,
         restartRuntime,
         logError: vi.fn(async () => undefined)
       }
@@ -187,19 +187,17 @@ describe('chat-store-thread-actions queued messages', () => {
 
     await expect(actions.sendMessage('hello', 'agent')).resolves.toBe(true)
 
-    expect(saveSettingsSilent).toHaveBeenCalledWith({
-      agents: { kun: { providerId: 'xiaomi-token-plan', model: 'mimo-v2.5' } }
-    })
-    expect(restartRuntime).toHaveBeenCalledTimes(1)
-    expect(provider.connect).toHaveBeenCalledTimes(1)
+    expect(setSettings).not.toHaveBeenCalled()
+    expect(restartRuntime).not.toHaveBeenCalled()
+    expect(provider.connect).not.toHaveBeenCalled()
     expect(provider.sendUserMessage).toHaveBeenCalledWith(
       'thr_existing',
       'hello',
-      expect.objectContaining({ model: 'mimo-v2.5' })
+      expect.objectContaining({ model: 'mimo-v2.5', providerId: 'xiaomi-token-plan' })
     )
   })
 
-  it('applies an override provider before sending from the write route', async () => {
+  it('forwards GUI design canvas turns to the runtime provider', async () => {
     const provider = {
       connect: vi.fn(async () => undefined),
       sendUserMessage: vi.fn(async () => ({
@@ -210,7 +208,41 @@ describe('chat-store-thread-actions queued messages', () => {
       subscribeThreadEvents: vi.fn(async () => undefined)
     }
     registryMock.getProvider.mockReturnValue(provider)
-    const saveSettingsSilent = vi.fn(async () => ({
+    vi.stubGlobal('window', {
+      kunGui: {
+        getSettings: vi.fn(async () => ({
+          agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
+          codePromptPrefix: ''
+        })),
+        logError: vi.fn(async () => undefined)
+      }
+    })
+    const { actions, state } = buildHarness()
+    state.busy = false
+
+    await expect(actions.sendMessage('draw an architecture map', 'agent', {
+      guiDesignCanvas: true
+    })).resolves.toBe(true)
+
+    expect(provider.sendUserMessage).toHaveBeenCalledWith(
+      'thr_existing',
+      'draw an architecture map',
+      expect.objectContaining({ guiDesignCanvas: true })
+    )
+  })
+
+  it('sends an override provider from the write route without changing global settings', async () => {
+    const provider = {
+      connect: vi.fn(async () => undefined),
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_existing',
+        turnId: 'turn_1',
+        userMessageItemId: 'user_1'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const setSettings = vi.fn(async () => ({
       agents: { kun: { providerId: 'minimax-token-plan', model: 'MiniMax-M3' } },
       codePromptPrefix: ''
     }))
@@ -221,7 +253,7 @@ describe('chat-store-thread-actions queued messages', () => {
           agents: { kun: { providerId: 'deepseek', model: 'deepseek-v4-pro' } },
           codePromptPrefix: ''
         })),
-        saveSettingsSilent,
+        setSettings,
         restartRuntime,
         logError: vi.fn(async () => undefined)
       }
@@ -236,15 +268,13 @@ describe('chat-store-thread-actions queued messages', () => {
       providerId: 'minimax-token-plan'
     })).resolves.toBe(true)
 
-    expect(saveSettingsSilent).toHaveBeenCalledWith({
-      agents: { kun: { providerId: 'minimax-token-plan', model: 'MiniMax-M3' } }
-    })
-    expect(restartRuntime).toHaveBeenCalledTimes(1)
-    expect(provider.connect).toHaveBeenCalledTimes(1)
+    expect(setSettings).not.toHaveBeenCalled()
+    expect(restartRuntime).not.toHaveBeenCalled()
+    expect(provider.connect).not.toHaveBeenCalled()
     expect(provider.sendUserMessage).toHaveBeenCalledWith(
       'thr_existing',
       'make a prototype',
-      expect.objectContaining({ model: 'MiniMax-M3' })
+      expect.objectContaining({ model: 'MiniMax-M3', providerId: 'minimax-token-plan' })
     )
   })
 })

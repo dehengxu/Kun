@@ -4,6 +4,7 @@ import type {
   CoreAttachmentTextFallbackJson,
   CoreMemoryDiagnosticsJson,
   CoreMemoryRecordJson,
+  CoreMcpOAuthDiagnosticJson,
   CoreRuntimeInfoJson,
   CoreRuntimeSkillJson,
   CoreRuntimeToolDiagnosticsJson
@@ -83,6 +84,8 @@ export type RuntimeDisclosureMetadata = {
   injectedMemoryIds?: string[]
   injectedMemorySummaries?: Array<{ id: string; content: string }>
   skillInjectionBytes?: number
+  injectedInstructionSources?: Array<{ scope: 'global' | 'workspace'; path: string; bytes: number; truncated?: boolean }>
+  instructionInjectionBytes?: number
   child?: RuntimeChildMetadata
   sources?: WebCitationSource[]
 }
@@ -477,6 +480,7 @@ export interface AgentProvider {
     options?: {
       mode?: string
       model?: string
+      providerId?: string
       reasoningEffort?: string
       displayText?: string
       guiPlan?: {
@@ -487,6 +491,7 @@ export interface AgentProvider {
         sourceRequest?: string
         title?: string
       }
+      guiDesignCanvas?: boolean
       attachmentIds?: string[]
       workspaceCheckpointId?: string
       fileReferences?: UserFileReference[]
@@ -496,15 +501,20 @@ export interface AgentProvider {
   reviewThread?(
     threadId: string,
     target: ReviewTarget,
-    options?: { model?: string }
+    options?: { model?: string; providerId?: string }
   ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string; reviewItemId?: string }>
   getRuntimeInfo?(): Promise<CoreRuntimeInfoJson>
   getToolDiagnostics?(): Promise<CoreRuntimeToolDiagnosticsJson>
+  getMcpOAuthDiagnostics?(): Promise<CoreMcpOAuthDiagnosticJson[]>
+  clearMcpOAuthCredentials?(serverId?: string): Promise<string[]>
+  authorizeMcpOAuthCredentials?(serverId: string): Promise<import('./kun-contract').CoreMcpOAuthAuthorizeResponseJson>
   listSkills?(): Promise<CoreRuntimeSkillJson[]>
   uploadAttachment?(input: {
     name: string
     mimeType?: string
     dataBase64: string
+    documentText?: string
+    pageCount?: number
     localFilePath?: string
     textFallback?: CoreAttachmentTextFallbackJson
     threadId?: string

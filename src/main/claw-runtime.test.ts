@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
   defaultClawSettings,
+  defaultDesignSettings,
   defaultKeyboardShortcuts,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
@@ -40,6 +41,7 @@ function buildSettings(): AppSettingsV1 {
     write: defaultWriteSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
+    design: defaultDesignSettings(),
     claw: {
       ...defaultClawSettings(),
       enabled: true,
@@ -2804,6 +2806,7 @@ describe('ClawRuntime', () => {
         apiKey: 'sk-image',
         model: 'test-image-model',
         defaultSize: '1024x1024',
+        quality: 'auto',
         timeoutMs: 180000
       }
       settings.claw.channels = [
@@ -2936,6 +2939,7 @@ describe('ClawRuntime', () => {
         apiKey: 'sk-image',
         model: 'test-image-model',
         defaultSize: '1024x1024',
+        quality: 'auto',
         timeoutMs: 180000
       }
       settings.claw.channels = [
@@ -3199,6 +3203,7 @@ describe('ClawRuntime', () => {
         apiKey: 'sk-image',
         model: 'test-image-model',
         defaultSize: '1024x1024',
+        quality: 'auto',
         timeoutMs: 180000
       }
       settings.claw.channels = [

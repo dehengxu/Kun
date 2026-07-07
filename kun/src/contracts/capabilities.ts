@@ -83,6 +83,19 @@ export type McpTrustScope = z.infer<typeof McpTrustScope>
 export const McpToolDiscoveryMode = z.enum(['direct', 'search', 'auto'])
 export type McpToolDiscoveryMode = z.infer<typeof McpToolDiscoveryMode>
 
+export const McpOAuthConfig = z
+  .object({
+    enabled: z.boolean().default(true),
+    clientName: z.string().min(1).optional(),
+    clientId: z.string().min(1).optional(),
+    clientSecret: z.string().min(1).optional(),
+    scopes: z.array(z.string().min(1)).default([]),
+    redirectPort: z.number().int().min(1024).max(65535).optional(),
+    callbackTimeoutMs: z.number().int().positive().default(120_000)
+  })
+  .strict()
+export type McpOAuthConfig = z.infer<typeof McpOAuthConfig>
+
 export const McpSearchConfig = z
   .object({
     enabled: z.boolean().default(false),
@@ -124,6 +137,7 @@ export const McpServerConfig = z
     // Visibility scope: empty means globally visible; otherwise the server is
     // advertised only when ToolHostContext.workspace is under one of these roots.
     workspaceRoots: z.array(z.string().min(1)).default([]),
+    oauth: McpOAuthConfig.optional(),
     trustScope: McpTrustScope.default('workspace'),
     trustedWorkspaceRoots: z.array(z.string().min(1)).default([]),
     timeoutMs: z.number().int().positive().default(30_000)
@@ -205,6 +219,12 @@ export const SkillsCapabilityConfig = CapabilityToggleConfig.extend({
 }).strict()
 export type SkillsCapabilityConfig = z.infer<typeof SkillsCapabilityConfig>
 
+export const InstructionsCapabilityConfig = CapabilityToggleConfig.extend({
+  maxFileBytes: z.number().int().positive().default(64 * 1024),
+  maxTotalBytes: z.number().int().positive().default(96 * 1024)
+}).strict()
+export type InstructionsCapabilityConfig = z.infer<typeof InstructionsCapabilityConfig>
+
 export const SubagentToolPolicy = z.enum(['readOnly', 'inherit'])
 export type SubagentToolPolicy = z.infer<typeof SubagentToolPolicy>
 
@@ -219,7 +239,7 @@ export type SubagentMode = z.infer<typeof SubagentMode>
  * to side-effect-free investigation tools — no bash/edit/write, and no
  * nested `delegate_task`.
  */
-export const SUBAGENT_READ_ONLY_TOOL_NAMES = ['read', 'grep', 'find', 'ls'] as const
+export const SUBAGENT_READ_ONLY_TOOL_NAMES = ['read', 'grep', 'find', 'ls', 'repo_map'] as const
 
 export const SubagentProfileConfig = z
   .object({
@@ -302,11 +322,23 @@ export type SubagentsCapabilityConfig = z.output<typeof SubagentsCapabilityConfi
 export const DEFAULT_ATTACHMENT_TEXT_FALLBACK_MAX_BASE64_BYTES = 512 * 1024
 export const DEFAULT_ATTACHMENT_TEXT_FALLBACK_MAX_IMAGE_DIMENSION = 1280
 export const DEFAULT_ATTACHMENT_TEXT_FALLBACK_PREFERRED_MIME_TYPE = 'image/webp'
+export const DEFAULT_ATTACHMENT_DOCUMENT_MIME_TYPES = [
+  'application/pdf',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/json'
+]
+export const DEFAULT_ATTACHMENT_MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
+export const DEFAULT_ATTACHMENT_MAX_DOCUMENT_TEXT_CHARS = 200_000
 
 export const AttachmentsCapabilityConfig = CapabilityToggleConfig.extend({
   maxImageBytes: z.number().int().positive().default(5 * 1024 * 1024),
   maxImageDimension: z.number().int().positive().default(4096),
   allowedMimeTypes: z.array(z.string().min(1)).default(['image/png', 'image/jpeg', 'image/webp']),
+  allowedDocumentMimeTypes: z.array(z.string().min(1)).default(DEFAULT_ATTACHMENT_DOCUMENT_MIME_TYPES),
+  maxDocumentBytes: z.number().int().positive().default(DEFAULT_ATTACHMENT_MAX_DOCUMENT_BYTES),
+  maxDocumentTextChars: z.number().int().positive().default(DEFAULT_ATTACHMENT_MAX_DOCUMENT_TEXT_CHARS),
   textFallbackMaxBase64Bytes: z.number().int().positive().default(DEFAULT_ATTACHMENT_TEXT_FALLBACK_MAX_BASE64_BYTES),
   textFallbackMaxImageDimension: z.number().int().positive().default(DEFAULT_ATTACHMENT_TEXT_FALLBACK_MAX_IMAGE_DIMENSION),
   textFallbackPreferredMimeType: z.string().min(1).default(DEFAULT_ATTACHMENT_TEXT_FALLBACK_PREFERRED_MIME_TYPE)
@@ -319,15 +351,19 @@ export const MemoryCapabilityConfig = CapabilityToggleConfig.extend({
 }).strict()
 export type MemoryCapabilityConfig = z.infer<typeof MemoryCapabilityConfig>
 
-export const ImageGenerationProtocol = z.enum(['openai-images', 'minimax-image'])
+export const ImageGenerationProtocol = z.enum(['openai-images', 'minimax-image', 'codex-responses-image'])
 export type ImageGenerationProtocol = z.infer<typeof ImageGenerationProtocol>
+export const ImageGenerationQuality = z.enum(['auto', 'low', 'medium', 'high'])
+export type ImageGenerationQuality = z.infer<typeof ImageGenerationQuality>
 
 export const ImageGenCapabilityConfig = CapabilityToggleConfig.extend({
   protocol: ImageGenerationProtocol.default('openai-images'),
   baseUrl: z.string().min(1).optional(),
   apiKey: z.string().min(1).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
   model: z.string().min(1).optional(),
   defaultSize: z.string().min(1).optional(),
+  quality: ImageGenerationQuality.default('auto'),
   timeoutMs: z.number().int().positive().default(180_000),
   maxReferenceImages: z.number().int().positive().max(8).default(4)
 }).strict()
@@ -397,6 +433,7 @@ export const KunCapabilitiesConfig = z
   .object({
     mcp: McpCapabilityConfig.default(() => McpCapabilityConfig.parse({})),
     web: WebCapabilityConfig.default(() => WebCapabilityConfig.parse({})),
+    instructions: InstructionsCapabilityConfig.default(() => InstructionsCapabilityConfig.parse({ enabled: true })),
     skills: SkillsCapabilityConfig.default(() => SkillsCapabilityConfig.parse({})),
     subagents: SubagentsCapabilityConfig.default(() => SubagentsCapabilityConfig.parse({})),
     attachments: AttachmentsCapabilityConfig.default(() => AttachmentsCapabilityConfig.parse({})),
@@ -447,6 +484,10 @@ export const RuntimeCapabilityManifest = z
       configuredRoots: z.number().int().nonnegative(),
       discoveredSkills: z.number().int().nonnegative()
     }).strict(),
+    instructions: RuntimeCapabilityState.extend({
+      lastSourceCount: z.number().int().nonnegative(),
+      lastInjectedBytes: z.number().int().nonnegative()
+    }).strict(),
     subagents: RuntimeCapabilityState.extend({
       maxParallel: z.number().int().nonnegative(),
       maxChildRuns: z.number().int().nonnegative(),
@@ -468,6 +509,9 @@ export const RuntimeCapabilityManifest = z
       maxImageBytes: z.number().int().positive(),
       maxImageDimension: z.number().int().positive(),
       allowedMimeTypes: z.array(z.string().min(1)),
+      allowedDocumentMimeTypes: z.array(z.string().min(1)),
+      maxDocumentBytes: z.number().int().positive(),
+      maxDocumentTextChars: z.number().int().positive(),
       textFallbackMaxBase64Bytes: z.number().int().positive(),
       textFallbackMaxImageDimension: z.number().int().positive(),
       textFallbackPreferredMimeType: z.string().min(1)
@@ -519,6 +563,12 @@ export function buildRuntimeCapabilityManifest(input: {
     configuredRoots?: number
     discoveredSkills?: number
     reason?: string
+  }
+  instructions?: {
+    available?: boolean
+    reason?: string
+    lastSourceCount?: number
+    lastInjectedBytes?: number
   }
   attachments?: {
     available?: boolean
@@ -574,6 +624,12 @@ export function buildRuntimeCapabilityManifest(input: {
   const configuredSkillRoots = input.skills?.configuredRoots ?? config.skills.roots.length
   const discoveredSkills = input.skills?.discoveredSkills ?? 0
   const skillsState = skillsCapabilityState(config.skills.enabled, discoveredSkills, input.skills?.reason)
+  const instructionsState = providerCapabilityState(
+    config.instructions.enabled,
+    'instructions are disabled by config',
+    input.instructions?.available !== false,
+    input.instructions?.reason ?? 'instructions runtime is unavailable'
+  )
   return RuntimeCapabilityManifest.parse({
     contractVersion: RUNTIME_CAPABILITY_CONTRACT_VERSION,
     model: input.model,
@@ -607,6 +663,11 @@ export function buildRuntimeCapabilityManifest(input: {
       configuredRoots: configuredSkillRoots,
       discoveredSkills
     },
+    instructions: {
+      ...instructionsState,
+      lastSourceCount: input.instructions?.lastSourceCount ?? 0,
+      lastInjectedBytes: input.instructions?.lastInjectedBytes ?? 0
+    },
     subagents: {
       ...providerCapabilityState(
         config.subagents.enabled,
@@ -634,6 +695,9 @@ export function buildRuntimeCapabilityManifest(input: {
       maxImageBytes: config.attachments.maxImageBytes,
       maxImageDimension: config.attachments.maxImageDimension,
       allowedMimeTypes: config.attachments.allowedMimeTypes,
+      allowedDocumentMimeTypes: config.attachments.allowedDocumentMimeTypes,
+      maxDocumentBytes: config.attachments.maxDocumentBytes,
+      maxDocumentTextChars: config.attachments.maxDocumentTextChars,
       textFallbackMaxBase64Bytes: config.attachments.textFallbackMaxBase64Bytes,
       textFallbackMaxImageDimension: config.attachments.textFallbackMaxImageDimension,
       textFallbackPreferredMimeType: config.attachments.textFallbackPreferredMimeType

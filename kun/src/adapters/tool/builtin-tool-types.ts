@@ -98,6 +98,7 @@ export type BuiltinToolName =
   | 'find'
   | 'ls'
   | 'lsp'
+  | 'repo_map'
   | 'verify_changes'
 export const allBuiltinToolNames: Set<BuiltinToolName> = new Set([
   'read',
@@ -108,6 +109,7 @@ export const allBuiltinToolNames: Set<BuiltinToolName> = new Set([
   'find',
   'ls',
   'lsp',
+  'repo_map',
   'verify_changes'
 ])
 export type ToolName = BuiltinToolName
@@ -147,6 +149,8 @@ export type BackgroundShellHooks = {
 
 export type BashLocalToolOptions = {
   defaultTimeoutSeconds?: number
+  maxLines?: number
+  maxBytes?: number
   operations?: BashLocalToolOperations
   backgroundShell?: BackgroundShellHooks
   backgroundShellDataDir?: string

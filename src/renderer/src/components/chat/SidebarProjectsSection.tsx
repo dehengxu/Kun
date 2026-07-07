@@ -298,7 +298,12 @@ export function buildSidebarWorkspaceGroups(options: {
     upsertWorkspace(key, [th])
   }
 
-  if (selectedWorkspace && !map.has(selectedWorkspaceKey)) {
+  if (
+    selectedWorkspace &&
+    !map.has(selectedWorkspaceKey) &&
+    isSidebarProjectWorkspacePath(selectedWorkspace) &&
+    !isConversationWorkspacePath(selectedWorkspace, conversationRoot)
+  ) {
     upsertWorkspace(selectedWorkspace)
   }
   if (!query && !options.showArchived) {
@@ -1634,7 +1639,7 @@ function WorkspaceContextMenu({
   )
 }
 
-function SidebarActionDialog({
+export function SidebarActionDialog({
   state,
   onClose,
   onConfirm,
@@ -1659,12 +1664,12 @@ function SidebarActionDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="sidebar-action-dialog-title"
-      className="ds-no-drag fixed inset-0 z-[90] flex items-end justify-center bg-slate-950/12 px-4 pb-10 backdrop-blur-[2px] dark:bg-black/30 sm:items-center sm:pb-0"
+      className="ds-no-drag fixed inset-0 z-[1000] flex items-end justify-center bg-slate-950/28 px-4 pb-10 backdrop-blur-[2px] dark:bg-black/45 sm:items-center sm:pb-0"
       onMouseDown={onClose}
     >
       <div
         onMouseDown={(event) => event.stopPropagation()}
-        className="w-full max-w-[520px] rounded-[26px] border border-ds-border bg-ds-elevated p-6 shadow-[0_26px_82px_rgba(20,47,95,0.24)] backdrop-blur-xl"
+        className="w-full max-w-[520px] rounded-[26px] border border-ds-border bg-[var(--surface-3)] p-6 shadow-[0_26px_82px_rgba(20,47,95,0.24)]"
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">

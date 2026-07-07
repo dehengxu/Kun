@@ -151,8 +151,15 @@ const labels: Record<string, string> = {
   kunToolStormLimitsDesc: 'Tool storm limits description',
   kunToolStormWindowSize: 'Tool storm window',
   kunToolStormThreshold: 'Tool storm threshold',
+  kunToolOutputLimits: 'Tool output limits',
+  kunToolOutputLimitsDesc: 'Tool output limits description',
+  kunToolOutputMaxLines: 'Tool output max lines',
+  kunToolOutputMaxBytes: 'Tool output max bytes',
   kunToolArgumentRepair: 'Tool argument repair',
   kunToolArgumentRepairDesc: 'Tool argument repair description',
+  kunInstructions: 'AGENTS.md instructions',
+  kunInstructionsDesc: 'AGENTS.md instructions description',
+  kunInstructionsDiagnostics: '1 source injected last turn',
   kunDiagnostics: 'Kun diagnostics',
   kunDiagnosticsAdvanced: 'Detailed diagnostics',
   kunDiagnosticsAdvancedDesc: 'Detailed diagnostics description',
@@ -622,6 +629,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           model: { id: 'deepseek-chat' },
           mcp: { status: 'available', configuredServers: 2, connectedServers: 2 },
           web: { status: 'available', provider: 'brave-search' },
+          instructions: { status: 'available', lastSourceCount: 1 },
           skills: { status: 'available' },
           subagents: { status: 'available' },
           attachments: { status: 'available' },
@@ -631,6 +639,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       toolDiagnostics: {
         providers: [{ id: 'builtin' }, { id: 'mcp' }, { id: 'web' }, { id: 'memory' }],
         mcpServers: [{ id: 'github' }],
+        instructions: { lastInjection: { sources: [{ scope: 'workspace', path: '/tmp/project/AGENTS.md' }] } },
         skills: { skills: [{ id: 'skill_docs' }] },
         attachments: { count: 1 }
       },
@@ -651,6 +660,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(html).toContain('available')
     expect(html).toContain('2/2')
     expect(html).toContain('brave-search')
+    expect(html).toContain('Instructions')
+    expect(html).toContain('AGENTS.md instructions')
     expect(html).toContain('Providers')
     expect(html).toContain('MCP servers')
     expect(html).toContain('Discovered Skills')

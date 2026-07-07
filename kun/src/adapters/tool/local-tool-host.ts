@@ -10,6 +10,7 @@ import { createApprovalRequest } from '../../domain/approval.js'
 import type { TurnItem } from '../../contracts/items.js'
 import { makeToolResultItem, makeApprovalItem } from '../../domain/item.js'
 import { buildBuiltinLocalTools } from './builtin-tools.js'
+import type { BuiltinLocalToolsOptions } from './builtin-tool-types.js'
 import { CapabilityRegistry } from './capability-registry.js'
 import {
   runPostToolUseHooks,
@@ -84,9 +85,9 @@ export type LocalToolHostOptions = {
  */
 export class LocalToolHost implements ToolHost {
   readonly id = 'local'
-  private readonly registry: CapabilityRegistry
+  private registry: CapabilityRegistry
   private readonly allowList: Set<string>
-  private readonly hooks: readonly ResolvedHook[]
+  private hooks: readonly ResolvedHook[]
   private readonly readTracker: ReadTracker
 
   constructor(options: LocalToolHostOptions) {
@@ -94,6 +95,14 @@ export class LocalToolHost implements ToolHost {
     this.allowList = new Set(options.allowList ?? [])
     this.hooks = options.hooks ?? []
     this.readTracker = new ReadTracker(normalizeReadTrackerOptions(options.readTracker))
+  }
+
+  replaceRuntimeComponents(input: {
+    registry?: CapabilityRegistry
+    hooks?: readonly ResolvedHook[]
+  }): void {
+    if (input.registry) this.registry = input.registry
+    if (input.hooks) this.hooks = input.hooks
   }
 
   listTools(context?: ToolHostContext) {
@@ -230,7 +239,7 @@ export class LocalToolHost implements ToolHost {
       }
     }
     const rateLimited = normalizeRateLimitedToolOutput(hookedResult.output)
-    const output = rateLimited.rateLimited ? rateLimited.output : hookedResult.output
+    let output = rateLimited.rateLimited ? rateLimited.output : hookedResult.output
     const isError = hookedResult.isError || rateLimited.isError
     this.readTracker.observeToolResult({
       context,
@@ -238,6 +247,7 @@ export class LocalToolHost implements ToolHost {
       output,
       isError
     })
+    if (!isError) output = await offloadLargeToolOutput(output, activeCall.toolName, context)
     const item = makeToolResultItem({
       id: `item_${activeCall.callId}`,
       turnId: context.turnId,
@@ -337,6 +347,35 @@ export class LocalToolHost implements ToolHost {
       execute: tool.execute,
       ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {})
     }
+  }
+}
+
+const ARTIFACT_OUTPUT_THRESHOLD_BYTES = 128 * 1024
+
+async function offloadLargeToolOutput(
+  output: unknown,
+  toolName: string,
+  context: ToolHostContext
+): Promise<unknown> {
+  if (!context.artifactStore) return output
+  let content: string
+  try {
+    content = typeof output === 'string' ? output : JSON.stringify(output)
+  } catch {
+    return output
+  }
+  if (Buffer.byteLength(content, 'utf8') <= ARTIFACT_OUTPUT_THRESHOLD_BYTES) return output
+  try {
+    const stored = await context.artifactStore.put({ content, source: 'tool', origin: toolName })
+    return {
+      artifactId: stored.meta.id,
+      byteSize: stored.meta.byteSize,
+      lineCount: stored.meta.lineCount,
+      truncated: stored.summary.truncated,
+      preview: stored.summary.inline
+    }
+  } catch {
+    return output
   }
 }
 
@@ -546,6 +585,12 @@ import { createCreatePlanTool, type CreatePlanAdapterOptions } from './create-pl
  * `shouldAdvertise` predicate, so it is safe to ship with the
  * default set: non-plan turns never see it in the model tool list.
  */
-export function buildDefaultLocalTools(planOptions: CreatePlanAdapterOptions = {}): LocalTool[] {
-  return [...defaultLocalTools, createCreatePlanTool(planOptions)]
+export function buildDefaultLocalTools(
+  planOptions: CreatePlanAdapterOptions = {},
+  builtinOptions: BuiltinLocalToolsOptions = {}
+): LocalTool[] {
+  const baseTools = Object.keys(builtinOptions).length
+    ? [...buildBuiltinLocalTools(builtinOptions), echoTool, userInputTool, requestUserInputTool]
+    : defaultLocalTools
+  return [...baseTools, createCreatePlanTool(planOptions)]
 }

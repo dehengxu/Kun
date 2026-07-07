@@ -4,6 +4,7 @@ import { LocalToolHost } from './local-tool-host.js'
 
 export function buildDelegationToolProviders(runtime: DelegationRuntime | undefined): CapabilityToolProvider[] {
   if (!runtime) return []
+  if (!runtime.enabled()) return []
   // Only subagent/all roles are delegation targets; primary-only personas
   // are for starting a session, not for delegate_task.
   const profiles = runtime.listProfiles().filter((profile) => profile.mode !== 'primary')
@@ -30,6 +31,21 @@ export function buildDelegationToolProviders(runtime: DelegationRuntime | undefi
             detach: {
               type: 'boolean',
               description: 'Fire-and-forget. The call returns immediately with a queued/running record; the child keeps executing in the background and can be checked via diagnostics or aborted from the GUI.'
+            },
+            tokenBudget: {
+              type: 'integer',
+              minimum: 1,
+              description: 'Optional hard cap for total child tokens.'
+            },
+            timeBudgetMs: {
+              type: 'integer',
+              minimum: 1,
+              description: 'Optional wall-clock timeout in milliseconds.'
+            },
+            returnFormat: {
+              type: 'string',
+              enum: ['summary', 'evidence'],
+              description: 'Require either a normal summary or explicit evidence items.'
             }
           },
           required: ['prompt'],
@@ -39,6 +55,12 @@ export function buildDelegationToolProviders(runtime: DelegationRuntime | undefi
         execute: async (args, context, onUpdate) => {
           const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : ''
           if (!prompt) return { output: { error: 'prompt is required' }, isError: true }
+          if (args.tokenBudget !== undefined && !isPositiveInteger(args.tokenBudget)) {
+            return { output: { error: 'tokenBudget must be a positive integer' }, isError: true }
+          }
+          if (args.timeBudgetMs !== undefined && !isPositiveInteger(args.timeBudgetMs)) {
+            return { output: { error: 'timeBudgetMs must be a positive integer' }, isError: true }
+          }
           const record = await runtime.runChild({
             parentThreadId: context.threadId,
             parentTurnId: context.turnId,
@@ -47,7 +69,11 @@ export function buildDelegationToolProviders(runtime: DelegationRuntime | undefi
             workspace: typeof args.workspace === 'string' ? args.workspace : context.workspace,
             ...(typeof args.model === 'string' ? { model: args.model } : {}),
             ...(typeof args.profile === 'string' ? { profile: args.profile } : {}),
+            ...(context.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
             ...(args.detach === true ? { detach: true } : {}),
+            ...(isPositiveInteger(args.tokenBudget) ? { tokenBudget: args.tokenBudget } : {}),
+            ...(isPositiveInteger(args.timeBudgetMs) ? { timeBudgetMs: args.timeBudgetMs } : {}),
+            ...(args.returnFormat === 'evidence' ? { returnFormat: 'evidence' as const } : {}),
             // Emit a partial result the moment the child id exists, so the GUI
             // can offer "open session" (and stream the child live) while the
             // child is still running — not only after it completes.
@@ -65,7 +91,12 @@ export function buildDelegationToolProviders(runtime: DelegationRuntime | undefi
               status: record.status,
               summary: record.summary,
               error: record.error,
+              evidence: record.evidence,
               usage: record.usage,
+              returnFormat: record.returnFormat,
+              ...(record.tokenBudget ? { tokenBudget: record.tokenBudget } : {}),
+              ...(record.timeBudgetMs ? { timeBudgetMs: record.timeBudgetMs } : {}),
+              ...(record.budgetExceeded ? { budgetExceeded: record.budgetExceeded } : {}),
               ...(record.profile ? { profile: record.profile } : {}),
               ...(record.toolPolicy ? { toolPolicy: record.toolPolicy } : {}),
               ...(record.toolInvocations !== undefined ? { toolInvocations: record.toolInvocations } : {}),
@@ -78,6 +109,10 @@ export function buildDelegationToolProviders(runtime: DelegationRuntime | undefi
       })
     ]
   }]
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
 }
 
 function buildDelegateTaskDescription(

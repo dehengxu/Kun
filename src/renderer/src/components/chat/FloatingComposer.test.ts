@@ -1257,6 +1257,43 @@ describe('FloatingComposer capability controls', () => {
     expect(html).not.toContain('aria-label="Send" disabled=""')
   })
 
+  it('renders design context chips without writing them into the textarea', () => {
+    const html = renderToStaticMarkup(
+      createElement(FloatingComposer, {
+        input: 'Make this more compact',
+        setInput: () => undefined,
+        mode: 'agent',
+        setMode: () => undefined,
+        busy: false,
+        runtimeReady: true,
+        hasActiveThread: true,
+        composerModel: '',
+        composerPickList: [],
+        onComposerModelChange: () => undefined,
+        queuedMessages: [],
+        onRemoveQueuedMessage: () => undefined,
+        onSend: () => undefined,
+        onInterrupt: () => undefined,
+        contextChips: [{
+          id: 'html-screen-frame:s1:login',
+          kind: 'html-screen-frame',
+          label: 'Login screen',
+          detail: '1280 x 800 - .kun-design/login/v1.html',
+          removable: true
+        }],
+        onRemoveContextChip: () => undefined,
+        attachmentUploadEnabled: false,
+        webAccessAvailable: false
+      })
+    )
+
+    expect(html).toContain('Login screen')
+    expect(html).toContain('1280 x 800')
+    expect(html).toContain('Remove context')
+    expect(html).toContain('>Make this more compact</textarea>')
+    expect(html).not.toContain('>Login screen</textarea>')
+  })
+
   it('shows execution access controls beside the composer menu', () => {
     useChatStore.setState({
       activeThreadId: 'thr_1',

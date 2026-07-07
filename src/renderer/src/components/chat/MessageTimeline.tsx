@@ -11,6 +11,7 @@ import { MessageTimelineEmptyHero, ThreadForkBanner, ThreadForkPoint } from './m
 import { GeneratedFilesPanel, MessageBubble } from './message-timeline-bubbles'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
 import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
+import type { OpenChildThreadHandler } from './SubagentCallCard'
 import {
   AnimatedWorkLogo,
   IKUN_WORK_LOGO_VARIANT_LABEL_KEYS,
@@ -31,6 +32,10 @@ import {
 import { extractPlanMetadataFromBlock } from '../../plan/plan-tool'
 import { InjectedMemoryLookupProvider } from './injected-memory-lookup'
 import { planDisplayNameFromRelativePath } from '../../plan/plan-path'
+import {
+  TimelineFilePreviewWorkspaceProvider,
+  timelineFilePreviewWorkspaceRoot
+} from './timeline-file-preview-workspace'
 
 export { summarizeToolBlock } from './message-timeline-process'
 
@@ -53,6 +58,7 @@ type Props = {
   /** Opens/focuses the Plan panel (Open button on the inline card). */
   onOpenPlan?: () => void
   compactCards?: boolean
+  onOpenChildThread?: OpenChildThreadHandler
 }
 
 type CompactionTimelineBlock = Extract<ChatBlock, { kind: 'compaction' }>
@@ -68,6 +74,19 @@ export function liveTurnProgressClass(hasActiveGoal: boolean): string {
   return hasActiveGoal
     ? 'flex w-fit max-w-full items-center gap-2 py-0.5 text-[14px] font-medium text-ds-muted mb-16 md:mb-20'
     : 'flex w-fit max-w-full items-center gap-2 py-0.5 text-[14px] font-medium text-ds-muted'
+}
+
+export function activeTimelineTurnKey(
+  positions: readonly { key: string; top: number }[],
+  threshold = 96
+): string | null {
+  if (positions.length === 0) return null
+  let active = positions[0].key
+  for (const position of positions) {
+    if (position.top > threshold) break
+    active = position.key
+  }
+  return active
 }
 
 function blockScrollStamp(block: ChatBlock | undefined): string {
@@ -161,7 +180,8 @@ export function MessageTimeline({
   planActionsBusy,
   onBuildPlan,
   onOpenPlan,
-  compactCards = false
+  compactCards = false,
+  onOpenChildThread
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const {
@@ -184,6 +204,7 @@ export function MessageTimeline({
   const endRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const turnRefMap = useRef(new Map<string, HTMLDivElement>())
+  const [activeTurnKey, setActiveTurnKey] = useState<string | null>(null)
 
   const turns = useMemo(() => groupTurns(blocks), [blocks])
   const latestBlock = blocks[blocks.length - 1]
@@ -246,6 +267,40 @@ export function MessageTimeline({
     typeof activeThread?.forkedFromTurnCount === 'number'
       ? Math.max(0, activeThread.forkedFromTurnCount)
       : undefined
+  const filePreviewWorkspaceRoot = timelineFilePreviewWorkspaceRoot(activeThread, workspaceRoot)
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || visibleTurnAnchors.length === 0) {
+      setActiveTurnKey(null)
+      return
+    }
+    let frame: number | null = null
+    const update = (): void => {
+      frame = null
+      if (container.scrollHeight - container.scrollTop - container.clientHeight <= 2) {
+        setActiveTurnKey(visibleTurnAnchors.at(-1)?.key ?? null)
+        return
+      }
+      const containerTop = container.getBoundingClientRect().top
+      const positions = visibleTurnAnchors.flatMap((anchor) => {
+        const node = turnRefMap.current.get(anchor.key)
+        return node ? [{ key: anchor.key, top: node.getBoundingClientRect().top - containerTop }] : []
+      })
+      setActiveTurnKey(activeTimelineTurnKey(positions))
+    }
+    const schedule = (): void => {
+      if (frame === null) frame = window.requestAnimationFrame(update)
+    }
+    container.addEventListener('scroll', schedule, { passive: true })
+    window.addEventListener('resize', schedule)
+    schedule()
+    return () => {
+      container.removeEventListener('scroll', schedule)
+      window.removeEventListener('resize', schedule)
+      if (frame !== null) window.cancelAnimationFrame(frame)
+    }
+  }, [visibleTurnAnchors])
 
   // Tick a clock while a turn is running so the live "Worked for Xs" updates.
   const [tickNow, setTickNow] = useState(() => Date.now())
@@ -259,10 +314,12 @@ export function MessageTimeline({
   const jumpToTurn = (key: string): void => {
     const target = turnRefMap.current.get(key)
     if (!target) return
+    setActiveTurnKey(key)
     target.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   return (
+    <TimelineFilePreviewWorkspaceProvider workspaceRoot={filePreviewWorkspaceRoot}>
     <InjectedMemoryLookupProvider workspaceRoot={workspaceRoot}>
     <div ref={containerRef} className="ds-no-drag relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
       {visibleTurnAnchors.length > 2 ? (
@@ -274,9 +331,10 @@ export function MessageTimeline({
             <button
               key={anchor.key}
               type="button"
-              className="timeline-jump-rail-button"
+              className={`timeline-jump-rail-button${activeTurnKey === anchor.key ? ' is-active' : ''}`}
               title={anchor.title}
               aria-label={anchor.title}
+              aria-current={activeTurnKey === anchor.key ? 'true' : undefined}
               onClick={() => jumpToTurn(anchor.key)}
             >
               {anchor.label}
@@ -365,6 +423,8 @@ export function MessageTimeline({
                 planActionsBusy={planActionsBusy}
                 onBuildPlan={onBuildPlan}
                 onOpenPlan={onOpenPlan}
+                onOpenChildThread={onOpenChildThread}
+                filePreviewWorkspaceRoot={filePreviewWorkspaceRoot}
                 viewportRef={containerRef}
                 compactCards={compactCards}
               />
@@ -399,7 +459,9 @@ export function MessageTimeline({
             liveReasoning={liveReasoning}
             live={live}
             devPreviewCard={devPreviewCard}
+            filePreviewWorkspaceRoot={filePreviewWorkspaceRoot}
             viewportRef={containerRef}
+            onOpenChildThread={onOpenChildThread}
             compactCards={compactCards}
             durationMs={
               currentTurnUserId && typeof turnStartedAtByUserId[currentTurnUserId] === 'number'
@@ -419,6 +481,7 @@ export function MessageTimeline({
       </div>
     </div>
     </InjectedMemoryLookupProvider>
+    </TimelineFilePreviewWorkspaceProvider>
   )
 }
 
@@ -433,6 +496,8 @@ function MessageTurn({
   planActionsBusy,
   onBuildPlan,
   onOpenPlan,
+  onOpenChildThread,
+  filePreviewWorkspaceRoot,
   viewportRef,
   compactCards = false
 }: {
@@ -446,10 +511,11 @@ function MessageTurn({
   planActionsBusy?: boolean
   onBuildPlan?: () => void
   onOpenPlan?: () => void
+  onOpenChildThread?: OpenChildThreadHandler
+  filePreviewWorkspaceRoot: string
   viewportRef: RefObject<HTMLDivElement | null>
   compactCards?: boolean
 }): ReactElement {
-  const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const activeThreadGoal = useChatStore((s) => s.activeThreadGoal)
   const forkThreadFromTurn = useChatStore((s) => s.forkThreadFromTurn)
   const rollbackWorkspaceToCheckpoint = useChatStore((s) => s.rollbackWorkspaceToCheckpoint)
@@ -479,9 +545,9 @@ function MessageTurn({
         isProcessing,
         liveProcessText,
         liveContent,
-        workspaceRoot
+        workspaceRoot: filePreviewWorkspaceRoot
       }),
-    [turn, isProcessing, liveProcessText, liveContent, workspaceRoot]
+    [turn, isProcessing, liveProcessText, liveContent, filePreviewWorkspaceRoot]
   )
   const compactionBlocks = useMemo(
     () => processBlocks.filter((block): block is CompactionTimelineBlock => block.kind === 'compaction'),
@@ -493,9 +559,8 @@ function MessageTurn({
   )
   const onlyCompactionProcess = processBlocks.length > 0 && workProcessBlocks.length === 0
   const hasProcessError = workProcessBlocks.some(processBlockHasError)
-  // Only force the work process open (and lock it open) while the turn is still
-  // running. Once the turn completes — even if a tool call failed mid-turn — the
-  // panel should auto-collapse like a normal completed turn and stay user-toggleable.
+  // Keep active failures visible while a turn is still running, but fold
+  // completed failures into the normal work summary until the user opens it.
   const forceExpandForError = isProcessing && hasProcessError
   const workExpanded = forceExpandForError || (workExpandedOverride ?? isProcessing)
   const reviewBlocks = useMemo(
@@ -585,7 +650,9 @@ function MessageTurn({
                   processing={isProcessing}
                   reasoningDurationMs={reasoningDurationMs}
                   singleReasoningSection={reasoningSectionCount === 1}
+                  workspaceRoot={filePreviewWorkspaceRoot}
                   viewportRef={viewportRef}
+                  onOpenChildThread={onOpenChildThread}
                 />
               ))}
             </div>
@@ -700,6 +767,7 @@ const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
   prev.planActionsBusy === next.planActionsBusy &&
   prev.onBuildPlan === next.onBuildPlan &&
   prev.onOpenPlan === next.onOpenPlan &&
+  prev.onOpenChildThread === next.onOpenChildThread &&
   prev.compactCards === next.compactCards &&
   prev.viewportRef === next.viewportRef
 ))

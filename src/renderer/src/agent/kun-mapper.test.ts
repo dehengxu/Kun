@@ -388,6 +388,60 @@ describe('create_plan tool mapping', () => {
     }
   })
 
+  it('does not treat generic tool_result files as generated files', () => {
+    const item: CoreTurnItemJson = {
+      id: 'item_read_1',
+      turnId: 'turn_1',
+      threadId: 'thr_1',
+      role: 'tool',
+      status: 'completed',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      kind: 'tool_result',
+      toolName: 'read',
+      callId: 'call_read_1',
+      output: {
+        files: [
+          { path: 'src/parser.js' },
+          { path: 'src/admin_system.md' }
+        ]
+      }
+    }
+    const block = chatBlockFromItem(item)
+    expect(block).not.toBeNull()
+    if (block && block.kind === 'tool') {
+      expect(block.meta?.generatedFiles).toBeUndefined()
+    } else {
+      throw new Error('expected tool block')
+    }
+  })
+
+  it('still trusts explicit generatedFiles from tool_result output', () => {
+    const item: CoreTurnItemJson = {
+      id: 'item_export_1',
+      turnId: 'turn_1',
+      threadId: 'thr_1',
+      role: 'tool',
+      status: 'completed',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      kind: 'tool_result',
+      toolName: 'export_report',
+      callId: 'call_export_1',
+      output: {
+        files: [{ path: 'src/parser.js' }],
+        generatedFiles: [{ relativePath: 'reports/summary.md', mimeType: 'text/markdown' }]
+      }
+    }
+    const block = chatBlockFromItem(item)
+    expect(block).not.toBeNull()
+    if (block && block.kind === 'tool') {
+      expect(block.meta?.generatedFiles).toEqual([
+        { relativePath: 'reports/summary.md', mimeType: 'text/markdown' }
+      ])
+    } else {
+      throw new Error('expected tool block')
+    }
+  })
+
   it('omits meta attachments when tool_result output has none worth showing', () => {
     const item: CoreTurnItemJson = {
       id: 'item_img_2',
@@ -625,7 +679,10 @@ describe('tool block merging', () => {
     expect(blocks[0]).toMatchObject({
       kind: 'tool',
       id: 'tool_call_1',
-      status: 'success'
+      status: 'success',
+      meta: {
+        sourceItemKind: 'tool_result'
+      }
     })
   })
 })

@@ -1,4 +1,6 @@
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { randomBytes } from 'node:crypto'
 import type { ModelClient, ModelRequest, ModelToolSpec } from '../ports/model-client.js'
 import type { AgentSdkRuntime } from '../runtime/agent-sdk/agent-sdk-runtime.js'
 import type {
@@ -60,9 +62,12 @@ import type { TurnItem } from '../contracts/items.js'
 import type { ThreadGoal, ThreadTodoList } from '../contracts/threads.js'
 import { modelCapabilitiesForModel, type ContextCompactionConfig } from './model-context-profile.js'
 import type { SkillRuntime } from '../skills/skill-runtime.js'
+import type { InstructionRuntime } from '../instructions/instruction-runtime.js'
 import type { AttachmentContent, AttachmentStore } from '../attachments/attachment-store.js'
-import type { ModelInputAttachment, ModelTextAttachmentFallback } from '../ports/model-client.js'
+import { detectImage } from '../attachments/attachment-store.js'
+import type { ModelDocumentAttachment, ModelInputAttachment, ModelTextAttachmentFallback } from '../ports/model-client.js'
 import type { MemoryStore } from '../memory/memory-store.js'
+import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import {
   hasHooksForPhase,
   runObserverHooks,
@@ -75,7 +80,12 @@ import {
   type TokenEconomyConfig
 } from './token-economy.js'
 import { applyRequestHistoryHygiene } from './request-history-hygiene.js'
-import { capToolResultImages } from './tool-result-image.js'
+import {
+  capToolResultImages,
+  rehydrateGeneratedImagesForForward,
+  MAX_FORWARDED_GENERATED_IMAGES,
+  type ToolResultImage
+} from './tool-result-image.js'
 import { estimateModelRequestInputTokens, estimateRequestOverheadTokens } from './model-request-estimator.js'
 import {
   recentAutoRouterContext,
@@ -91,6 +101,7 @@ import { GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME } from '../adapters/tool/goal
 import { TODO_LIST_TOOL_NAME, TODO_WRITE_TOOL_NAME } from '../adapters/tool/todo-tools.js'
 import { shellRuntimeInstruction } from '../adapters/tool/builtin-tool-utils.js'
 import { VERIFY_CHANGES_TOOL_NAME } from '../adapters/tool/builtin-verify-tool.js'
+import { buildToolPreferenceInstruction } from '../prompt/kun-system-prompt.js'
 import {
   GoalResumeCoordinator,
   DEFAULT_MAX_GOAL_RESUME_NO_PROGRESS_ATTEMPTS,
@@ -670,8 +681,10 @@ export type AgentLoopOptions = {
   nowMs?: () => number
   modelCapabilities?: (model: string) => ModelCapabilityMetadata
   skillRuntime?: SkillRuntime
+  instructionRuntime?: InstructionRuntime
   attachmentStore?: AttachmentStore
   memoryStore?: MemoryStore
+  artifactStore?: ArtifactStore
   /** Kun runtime data root for sandbox-safe background shell output reads. */
   runtimeDataDir?: string
   tokenEconomy?: TokenEconomyConfig
@@ -836,7 +849,9 @@ export class AgentLoop {
     // fall through to kun's native loop below.
     const sdkRuntime = this.opts.sdkRuntime
     if (sdkRuntime) {
-      const providerId = (await this.opts.threadStore.get(threadId))?.providerId
+      const thread = await this.opts.threadStore.get(threadId)
+      const turn = thread?.turns.find((candidate) => candidate.id === turnId)
+      const providerId = turn?.providerId?.trim() || thread?.providerId?.trim()
       if (sdkRuntime.handlesProvider(providerId)) {
         return sdkRuntime.runTurn(threadId, turnId, signal)
       }
@@ -1400,6 +1415,13 @@ export class AgentLoop {
       instructions: [],
       injectedBytes: 0
     }
+    const instructionResolution = await this.opts.instructionRuntime?.resolveTurn({
+      workspace: thread?.workspace ?? ''
+    }) ?? {
+      instruction: undefined,
+      sources: [],
+      injectedBytes: 0
+    }
     const memories = await this.retrieveMemories({
       prompt: turn?.prompt ?? '',
       workspace: thread?.workspace ?? ''
@@ -1431,6 +1453,7 @@ export class AgentLoop {
       workspace: thread?.workspace ?? '',
       threadMode: effectiveMode,
       ...(activePlanContext ? { guiPlan: activePlanContext } : {}),
+      ...(turn?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
       model: modelCapabilities,
       activeSkillIds: skillResolution.activeSkillIds,
       memoryPolicy: { enabled: Boolean(this.opts.memoryStore) },
@@ -1462,6 +1485,7 @@ export class AgentLoop {
       activeSkillIds: skillResolution.activeSkillIds,
       allowedToolNames,
       userInputDisabled,
+      guiDesignCanvas: turn?.guiDesignCanvas === true,
       fingerprint: toolCatalog.fingerprint,
       toolNames: toolCatalog.toolNames,
       toolHashes: toolCatalog.toolHashes
@@ -1489,6 +1513,8 @@ export class AgentLoop {
           id: memory.id,
           content: memoryPreview(memory.content)
         })),
+        injectedInstructionSources: instructionResolution.sources,
+        instructionInjectionBytes: instructionResolution.injectedBytes,
         toolCatalogFingerprint: toolCatalog.fingerprint,
         toolCatalogToolCount: toolCatalog.toolCount,
         toolCatalogDrift: toolCatalogDrift.kind !== 'none'
@@ -1524,6 +1550,15 @@ export class AgentLoop {
     await this.recordPipelineStage(threadId, turnId, 'input_compressed', {
       historyItems: history.length
     })
+    // Forward the just-generated image(s) back to a vision-capable model so it can
+    // self-review and regenerate if the result is off. Bytes come from the
+    // already-persisted attachment/file; the persisted tool output keeps NO base64
+    // (only this transient request copy carries it).
+    const forwardHistory = await rehydrateGeneratedImagesForForward(
+      history,
+      (output) => this.resolveGeneratedImageForForward(output, threadId, thread?.workspace),
+      MAX_FORWARDED_GENERATED_IMAGES
+    )
     const runtimeContextInstruction = shouldInjectInitialRuntimeContext({
       stepIndex,
       turnId,
@@ -1534,8 +1569,10 @@ export class AgentLoop {
           nowIso: this.opts.nowIso()
         })
       : null
+    const toolPreferenceInstruction = buildToolPreferenceInstruction(tools)
     const contextInstructions = [
       ...(runtimeContextInstruction ? [runtimeContextInstruction] : []),
+      ...(instructionResolution.instruction ? [instructionResolution.instruction] : []),
       ...(activeGoalInstruction ? [activeGoalInstruction] : []),
       ...(goalRecoveryInstruction && (this.goalNoToolRecoveryStepsByTurn.get(turnId) ?? 0) > 0
         ? [goalRecoveryInstruction]
@@ -1554,6 +1591,7 @@ export class AgentLoop {
       ...(skillResolution.catalogInstruction ? [skillResolution.catalogInstruction] : []),
       ...skillResolution.instructions,
       ...(userInputDisabled ? [userInputUnavailableInstruction()] : []),
+      ...(toolPreferenceInstruction ? [toolPreferenceInstruction] : []),
       ...(effectiveToolSpecs.some((tool) => tool.name === 'bash') ? [shellRuntimeInstruction()] : []),
       ...(suggestVerification ? [verificationSuggestionInstruction()] : []),
       ...(toolCatalogDriftMessage ? [toolCatalogDriftMessage] : [])
@@ -1563,11 +1601,12 @@ export class AgentLoop {
       contextInstructionCount: contextInstructions.length
     })
     const tokenEconomy = normalizeTokenEconomyConfig(this.opts.tokenEconomy)
+    const providerId = turn?.providerId?.trim() || thread?.providerId?.trim()
     const baseRequest: ModelRequest = {
       threadId,
       turnId,
       model,
-      ...(thread?.providerId?.trim() ? { providerId: thread.providerId.trim() } : {}),
+      ...(providerId ? { providerId } : {}),
       // Thread-level systemPrompt (primary-agent persona snapshot) is
       // appended to the runtime base — same augment strategy as child agents
       // (child-agent-executor) — so the agent keeps kun's tool/safety
@@ -1580,9 +1619,10 @@ export class AgentLoop {
       ...(planTurnActive ? { modeInstruction: PLAN_MODE_INSTRUCTION } : {}),
       ...(contextInstructions.length ? { contextInstructions } : {}),
       prefix: this.opts.prefix.fewShots,
-      history: capToolResultImages(history, MAX_FORWARDED_TOOL_IMAGES),
+      history: capToolResultImages(forwardHistory, MAX_FORWARDED_TOOL_IMAGES),
       ...(attachments.imageAttachments.length ? { attachments: attachments.imageAttachments } : {}),
       ...(attachments.textFallbacks.length ? { attachmentTextFallbacks: attachments.textFallbacks } : {}),
+      ...(attachments.documents.length ? { attachmentDocuments: attachments.documents } : {}),
       tools: effectiveToolSpecs,
       ...(requiredToolName ? { requiredToolName } : {}),
       ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {}),
@@ -1664,6 +1704,7 @@ export class AgentLoop {
         attachmentIds: turn?.attachmentIds ?? [],
         imageAttachments: attachments.imageAttachments,
         textFallbacks: attachments.textFallbacks,
+        documents: attachments.documents,
         modelCapabilities
       })
     })
@@ -1754,6 +1795,33 @@ export class AgentLoop {
             callId: chunk.callId,
             toolName: chunk.toolName,
             readyCount: completedToolCalls.length
+          })
+          break
+        }
+        case 'image_generation_complete': {
+          const imgDir = '.deepseekgui-images'
+          const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
+          const fileName = `img-${stamp}-${randomBytes(2).toString('hex')}.png`
+          const relativePath = `${imgDir}/${fileName}`
+          const workspace = thread?.workspace ?? ''
+          const absolutePath = join(workspace, imgDir, fileName)
+          await mkdir(join(workspace, imgDir), { recursive: true })
+          await writeFile(absolutePath, Buffer.from(chunk.imageBase64, 'base64'))
+          const imageMarkdown = `\n![generated image](${relativePath})\n`
+          textItemId ||= this.opts.ids.next('item_text')
+          textAccumulator.value += imageMarkdown
+          await this.opts.events.record({
+            kind: 'assistant_text_delta',
+            threadId,
+            turnId,
+            itemId: textItemId,
+            item: makeAssistantTextItem({
+              id: textItemId,
+              turnId,
+              threadId,
+              text: imageMarkdown,
+              status: 'running'
+            })
           })
           break
         }
@@ -1871,6 +1939,7 @@ export class AgentLoop {
             workspace: thread?.workspace ?? '',
             threadMode: effectiveMode,
             activePlanContext,
+            guiDesignCanvas: turn?.guiDesignCanvas === true,
             modelCapabilities,
             activeSkillIds: skillResolution.activeSkillIds,
             allowedToolNames,
@@ -2038,6 +2107,7 @@ export class AgentLoop {
       workspace: thread?.workspace ?? '',
       threadMode: effectiveMode,
       activePlanContext,
+      guiDesignCanvas: turn?.guiDesignCanvas === true,
       modelCapabilities,
       activeSkillIds: skillResolution.activeSkillIds,
       allowedToolNames,
@@ -2059,6 +2129,7 @@ export class AgentLoop {
     workspace: string
     threadMode?: 'agent' | 'plan'
     activePlanContext?: GuiPlanContext
+    guiDesignCanvas?: boolean
     modelCapabilities: ModelCapabilityMetadata
     activeSkillIds: readonly string[]
     allowedToolNames?: readonly string[]
@@ -2200,6 +2271,7 @@ export class AgentLoop {
     workspace: string
     threadMode?: 'agent' | 'plan'
     activePlanContext?: GuiPlanContext
+    guiDesignCanvas?: boolean
     modelCapabilities: ModelCapabilityMetadata
     activeSkillIds: readonly string[]
     allowedToolNames?: readonly string[]
@@ -2214,6 +2286,7 @@ export class AgentLoop {
       workspace: input.workspace,
       threadMode: input.threadMode,
       ...(input.activePlanContext ? { guiPlan: input.activePlanContext } : {}),
+      ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
       model: input.modelCapabilities,
       activeSkillIds: input.activeSkillIds,
       memoryPolicy: { enabled: Boolean(this.opts.memoryStore) },
@@ -2225,6 +2298,7 @@ export class AgentLoop {
       approvalPolicy: input.approvalPolicy,
       sandboxMode: input.sandboxMode,
       ...(this.opts.runtimeDataDir ? { runtimeDataDir: this.opts.runtimeDataDir } : {}),
+      ...(this.opts.artifactStore ? { artifactStore: this.opts.artifactStore } : {}),
       abortSignal: input.signal,
       awaitApproval: async (approval) => {
         await this.opts.events.record({
@@ -2823,6 +2897,7 @@ export class AgentLoop {
     activeSkillIds: readonly string[]
     allowedToolNames?: readonly string[]
     userInputDisabled?: boolean
+    guiDesignCanvas?: boolean
     fingerprint: string
     toolNames: string[]
     toolHashes: Record<string, string>
@@ -2834,7 +2909,8 @@ export class AgentLoop {
       model: input.model,
       activeSkillIds: [...input.activeSkillIds].sort(),
       allowedToolNames: input.allowedToolNames ? [...input.allowedToolNames].sort() : [],
-      userInputDisabled: input.userInputDisabled === true
+      userInputDisabled: input.userInputDisabled === true,
+      guiDesignCanvas: input.guiDesignCanvas === true
     })
     const current: ToolCatalogSnapshot = {
       fingerprint: input.fingerprint,
@@ -2968,8 +3044,8 @@ export class AgentLoop {
     threadId: string
     workspace: string
     modelCapabilities: ModelCapabilityMetadata
-  }): Promise<{ imageAttachments: ModelInputAttachment[]; textFallbacks: ModelTextAttachmentFallback[] }> {
-    if (input.attachmentIds.length === 0) return { imageAttachments: [], textFallbacks: [] }
+  }): Promise<{ imageAttachments: ModelInputAttachment[]; textFallbacks: ModelTextAttachmentFallback[]; documents: ModelDocumentAttachment[] }> {
+    if (input.attachmentIds.length === 0) return { imageAttachments: [], textFallbacks: [], documents: [] }
     if (!this.opts.attachmentStore) {
       throw new Error('attachment store is unavailable')
     }
@@ -2977,11 +3053,30 @@ export class AgentLoop {
     const textFallbackPolicy = this.opts.attachmentStore.textFallbackPolicy()
     const imageAttachments: ModelInputAttachment[] = []
     const textFallbacks: ModelTextAttachmentFallback[] = []
+    const documents: ModelDocumentAttachment[] = []
+    let remainingDocumentChars = 400_000
     for (const id of input.attachmentIds) {
       const attachment = await this.opts.attachmentStore.resolveContent(id, {
         threadId: input.threadId,
         workspace: input.workspace
       })
+      if (attachment.kind === 'document') {
+        const fullText = attachment.documentText ?? ''
+        const text = fullText.slice(0, Math.max(0, remainingDocumentChars))
+        remainingDocumentChars -= text.length
+        documents.push({
+          id: attachment.id,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          text,
+          byteSize: attachment.byteSize,
+          ...(attachment.pageCount ? { pageCount: attachment.pageCount } : {}),
+          ...(attachment.truncated || text.length < fullText.length ? { truncated: true } : {}),
+          ...(attachment.localFilePath ? { localFilePath: attachment.localFilePath } : {})
+        })
+        if (remainingDocumentChars <= 0) break
+        continue
+      }
       if (supportsImageInput) {
         imageAttachments.push({
           id: attachment.id,
@@ -2999,7 +3094,62 @@ export class AgentLoop {
         textFallbackPolicy.textFallbackMaxBase64Bytes
       ))
     }
-    return { imageAttachments, textFallbacks }
+    return { imageAttachments, textFallbacks, documents }
+  }
+
+  /**
+   * Resolve the bytes of a generate_image result for transient model forwarding:
+   * prefer the attachment the tool already created (authorized for this thread),
+   * fall back to reading the saved file. Returns null (no image forwarded) on any
+   * miss so a scope/auth error degrades gracefully rather than throwing.
+   */
+  private async resolveGeneratedImageForForward(
+    output: Record<string, unknown>,
+    threadId: string,
+    workspace: string | undefined
+  ): Promise<ToolResultImage | null> {
+    const fromBytes = (data: Buffer, fallbackMime?: string): ToolResultImage => {
+      const detected = detectImage(data)
+      return {
+        mimeType: detected?.mimeType ?? fallbackMime ?? 'image/png',
+        dataBase64: data.toString('base64'),
+        ...(detected?.width !== undefined ? { width: detected.width } : {}),
+        ...(detected?.height !== undefined ? { height: detected.height } : {})
+      }
+    }
+    const attachments = Array.isArray(output.attachments) ? output.attachments : []
+    const firstAttachment = attachments[0]
+    const attachmentId =
+      firstAttachment && typeof firstAttachment === 'object' &&
+      typeof (firstAttachment as { id?: unknown }).id === 'string'
+        ? (firstAttachment as { id: string }).id
+        : ''
+    if (attachmentId && this.opts.attachmentStore) {
+      try {
+        const content = await this.opts.attachmentStore.resolveContent(attachmentId, {
+          threadId,
+          ...(workspace ? { workspace } : {})
+        })
+        return fromBytes(content.data, content.mimeType)
+      } catch {
+        // fall through to reading the file on disk
+      }
+    }
+    const files = Array.isArray(output.files) ? output.files : []
+    const firstFile = files[0]
+    const absolutePath =
+      firstFile && typeof firstFile === 'object' &&
+      typeof (firstFile as { absolutePath?: unknown }).absolutePath === 'string'
+        ? (firstFile as { absolutePath: string }).absolutePath
+        : ''
+    if (absolutePath) {
+      try {
+        return fromBytes(await readFile(absolutePath))
+      } catch {
+        // no-op
+      }
+    }
+    return null
   }
 
   private async retrieveMemories(input: {
@@ -3071,12 +3221,15 @@ function attachmentRequestPipelineDetails(input: {
   attachmentIds: readonly string[]
   imageAttachments: readonly ModelInputAttachment[]
   textFallbacks: readonly ModelTextAttachmentFallback[]
+  documents?: readonly ModelDocumentAttachment[]
   modelCapabilities: ModelCapabilityMetadata
 }): Record<string, unknown> {
+  const documents = input.documents ?? []
   if (
     input.attachmentIds.length === 0 &&
     input.imageAttachments.length === 0 &&
-    input.textFallbacks.length === 0
+    input.textFallbacks.length === 0 &&
+    documents.length === 0
   ) {
     return {}
   }
@@ -3095,7 +3248,10 @@ function attachmentRequestPipelineDetails(input: {
       (total, attachment) => total + Buffer.byteLength(attachment.dataBase64, 'utf8'),
       0
     ),
-    textFallbackMimeTypes: [...new Set(input.textFallbacks.map((attachment) => attachment.mimeType))]
+    textFallbackMimeTypes: [...new Set(input.textFallbacks.map((attachment) => attachment.mimeType))],
+    documentCount: documents.length,
+    documentTextChars: documents.reduce((total, document) => total + document.text.length, 0),
+    documentMimeTypes: [...new Set(documents.map((document) => document.mimeType))]
   }
 }
 

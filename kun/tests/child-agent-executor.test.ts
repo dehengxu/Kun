@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { CapabilityRegistry } from '../src/adapters/tool/capability-registry.js'
+import { createDesignCanvasTool } from '../src/adapters/tool/design-canvas-tool.js'
 import { LocalToolHost, buildDefaultLocalTools } from '../src/adapters/tool/local-tool-host.js'
 import { InMemoryEventBus } from '../src/adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../src/adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../src/adapters/in-memory-thread-store.js'
 import { createImmutablePrefix } from '../src/cache/immutable-prefix.js'
+import { KunCapabilitiesConfig } from '../src/contracts/capabilities.js'
 import { createChildAgentExecutor } from '../src/delegation/child-agent-executor.js'
+import { InstructionRuntime } from '../src/instructions/instruction-runtime.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../src/ports/model-client.js'
 import { RuntimeEventRecorder } from '../src/services/runtime-event-recorder.js'
 
@@ -87,6 +93,96 @@ describe('child agent executor', () => {
     expect(seen[0]?.tools).toEqual([])
   })
 
+  it('injects AGENTS.md instructions into child AgentLoop requests', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-child-instructions-'))
+    try {
+      const home = join(root, 'home')
+      const workspace = join(root, 'workspace')
+      await mkdir(workspace, { recursive: true })
+      await writeFile(join(workspace, 'AGENTS.md'), 'Child workspace rule.', 'utf8')
+      const instructionRuntime = new InstructionRuntime(
+        KunCapabilitiesConfig.parse({ instructions: { enabled: true } }).instructions,
+        { homeDir: home }
+      )
+      const seen: ModelRequest[] = []
+      const executor = createChildAgentExecutor({
+        model: model([
+          { kind: 'assistant_text_delta', text: 'ok' },
+          { kind: 'completed', stopReason: 'stop' }
+        ], seen),
+        toolHost: new LocalToolHost({ registry: new CapabilityRegistry([]) }),
+        prefix: createImmutablePrefix({ systemPrompt: 'child system' }),
+        defaultModel: 'child-test',
+        instructionRuntime,
+        nowIso: () => '2026-06-03T00:00:00.000Z'
+      })
+
+      await executor({
+        childId: 'child_agents',
+        parentThreadId: 'thr_parent',
+        parentTurnId: 'turn_parent',
+        prompt: 'Check project rules',
+        workspace,
+        toolPolicy: 'inherit',
+        signal: new AbortController().signal
+      })
+
+      expect(seen[0]?.contextInstructions?.join('\n')).toContain('Child workspace rule.')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('returns bounded tool evidence when the contract requests it', async () => {
+    let step = 0
+    const evidenceModel: ModelClient = {
+      provider: 'evidence-test',
+      model: 'evidence-test',
+      async *stream(): AsyncIterable<ModelStreamChunk> {
+        step += 1
+        if (step === 1) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call_inspect',
+            toolName: 'inspect',
+            arguments: { path: 'src/index.ts' }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        yield { kind: 'assistant_text_delta', text: 'Inspection complete.' }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }
+    const inspect = LocalToolHost.defineTool({
+      name: 'inspect',
+      description: 'Inspect a source file.',
+      inputSchema: { type: 'object' },
+      policy: 'auto',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const executor = createChildAgentExecutor({
+      model: evidenceModel,
+      toolHost: new LocalToolHost({ tools: [inspect] }),
+      prefix: createImmutablePrefix({ systemPrompt: 'child system' }),
+      defaultModel: 'evidence-test',
+      nowIso: () => '2026-06-03T00:00:00.000Z'
+    })
+
+    const result = await executor({
+      childId: 'child_evidence',
+      parentThreadId: 'thr_parent',
+      parentTurnId: 'turn_parent',
+      prompt: 'Inspect the entry point',
+      toolPolicy: 'inherit',
+      returnFormat: 'evidence',
+      signal: new AbortController().signal
+    })
+
+    expect(result.summary).toBe('Inspection complete.')
+    expect(result.evidence).toEqual(['inspect src/index.ts: completed'])
+  })
+
   it('fails the child run when the child loop cannot produce a completed turn', async () => {
     const executor = createChildAgentExecutor({
       model: model([{ kind: 'error', message: 'model failed', code: 'bad_model' }]),
@@ -137,7 +233,7 @@ describe('child agent executor', () => {
     })
 
     const toolNames = (seen[0]?.tools ?? []).map((tool) => tool.name).sort()
-    expect(toolNames).toEqual(['find', 'grep', 'ls', 'read'])
+    expect(toolNames).toEqual(['find', 'grep', 'ls', 'read', 'repo_map'])
     expect(seen[0]?.history?.[0]).toMatchObject({
       kind: 'user_message',
       text: 'Read-only review.\n\nInvestigate the bug'
@@ -302,6 +398,40 @@ describe('child agent executor', () => {
     expect(toolNames.length).toBeGreaterThan(4)
     const restricted = new Set(['read', 'grep', 'find', 'ls'])
     expect(toolNames.some((name) => !restricted.has(name))).toBe(true)
+  })
+
+  it('advertises design_canvas to a guiDesignCanvas child turn', async () => {
+    const seen: ModelRequest[] = []
+    const registry = new CapabilityRegistry([{
+      id: 'design-canvas',
+      kind: 'gui',
+      enabled: true,
+      available: true,
+      tools: [createDesignCanvasTool()]
+    }])
+    const executor = createChildAgentExecutor({
+      model: model([
+        { kind: 'assistant_text_delta', text: 'done' },
+        { kind: 'completed', stopReason: 'stop' }
+      ], seen),
+      toolHost: new LocalToolHost({ registry }),
+      prefix: createImmutablePrefix({ systemPrompt: 'child system' }),
+      defaultModel: 'child-test',
+      nowIso: () => '2026-06-03T00:00:00.000Z'
+    })
+
+    await executor({
+      childId: 'child_canvas',
+      parentThreadId: 'thr_parent',
+      parentTurnId: 'turn_parent',
+      prompt: 'Add a screen',
+      toolPolicy: 'inherit',
+      guiDesignCanvas: true,
+      signal: new AbortController().signal
+    })
+
+    const toolNames = (seen[0]?.tools ?? []).map((tool) => tool.name)
+    expect(toolNames).toContain('design_canvas')
   })
 
   it('honors an explicit allowedTools list over the tool policy', async () => {

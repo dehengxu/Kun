@@ -4,6 +4,7 @@ import {
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
   DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
   DEFAULT_CURSOR_SPOTLIGHT_COLOR,
+  DEFAULT_GIT_BRANCH_PREFIX,
   DEFAULT_LOG_RETENTION_DAYS,
   normalizeGuiUpdateChannel,
   normalizeChatContentMaxWidth,
@@ -13,6 +14,7 @@ import {
   type CheckpointCleanupConfigV1,
   type CheckpointCleanupIntervalDays,
   type ClawSettingsPatchV1,
+  type DesignSettingsPatchV1,
   type GuiUpdateConfigV1,
   type NotificationConfigV1,
   type ScheduleSettingsPatchV1,
@@ -38,6 +40,7 @@ import { normalizeClawSettings } from './app-settings-claw'
 import { normalizeScheduleSettings } from './app-settings-schedule'
 import { normalizeWorkflowSettings } from './app-settings-workflow'
 import { normalizeWriteSettings } from './app-settings-write'
+import { normalizeDesignSettings } from './app-settings-design'
 import { normalizeTerminalSettings, type TerminalSettingsPatchV1 } from './app-settings-terminal'
 
 export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
@@ -54,6 +57,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     claw?: ClawSettingsPatchV1
     schedule?: ScheduleSettingsPatchV1
     workflow?: WorkflowSettingsPatchV1
+    design?: DesignSettingsPatchV1
     guiUpdate?: Partial<GuiUpdateConfigV1>
     terminal?: TerminalSettingsPatchV1
   }
@@ -100,6 +104,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
         : DEFAULT_LOG_RETENTION_DAYS
     },
     checkpointCleanup: normalizeCheckpointCleanupSettings(maybeSettings.checkpointCleanup),
+    gitBranchPrefix: normalizeGitBranchPrefix(maybeSettings.gitBranchPrefix),
     notifications: {
       turnComplete: maybeSettings.notifications?.turnComplete !== false
     },
@@ -109,6 +114,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     claw: normalizeClawSettings(maybeSettings.claw),
     schedule: normalizeScheduleSettings(maybeSettings.schedule),
     workflow: normalizeWorkflowSettings(maybeSettings.workflow),
+    design: normalizeDesignSettings(maybeSettings.design),
     terminal: normalizeTerminalSettings(maybeSettings.terminal),
     guiUpdate: {
       channel: normalizeGuiUpdateChannel(
@@ -118,6 +124,23 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     codePromptPrefix: typeof maybeSettings.codePromptPrefix === 'string' ? maybeSettings.codePromptPrefix : '',
     disabledSkillIds: normalizeDisabledSkillIds(maybeSettings.disabledSkillIds)
   }
+}
+
+export function normalizeGitBranchPrefix(value: unknown): string {
+  const normalized = typeof value === 'string'
+    ? value.trim().replace(/\\/g, '/').replace(/^\/+/, '')
+    : DEFAULT_GIT_BRANCH_PREFIX
+  if (!normalized) return ''
+  return normalized.endsWith('/') ? normalized : `${normalized}/`
+}
+
+export function applyGitBranchPrefix(branch: string, prefix: unknown): string {
+  const normalizedBranch = branch.trim().replace(/^\/+/, '')
+  const normalizedPrefix = normalizeGitBranchPrefix(prefix)
+  if (!normalizedBranch || !normalizedPrefix || normalizedBranch.startsWith(normalizedPrefix)) {
+    return normalizedBranch
+  }
+  return `${normalizedPrefix}${normalizedBranch}`
 }
 
 export function normalizeCheckpointCleanupIntervalDays(value: unknown): CheckpointCleanupIntervalDays {
@@ -134,11 +157,19 @@ export function normalizeCheckpointCleanupSettings(
   settings?: Partial<CheckpointCleanupConfigV1>
 ): CheckpointCleanupConfigV1 {
   const intervalDays = normalizeCheckpointCleanupIntervalDays(settings?.intervalDays)
+  const directory = typeof settings?.directory === 'string' ? settings.directory.trim() : ''
+  const maxPerThread = typeof settings?.maxPerThread === 'number' && Number.isFinite(settings.maxPerThread)
+    ? Math.max(1, Math.min(100, Math.floor(settings.maxPerThread)))
+    : undefined
   return {
     enabled: typeof settings?.enabled === 'boolean' ? settings.enabled : DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
     intervalDays: CHECKPOINT_CLEANUP_INTERVAL_DAYS.includes(intervalDays)
       ? intervalDays
-      : DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS
+      : DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
+    // Only include the optional storage overrides when explicitly set so
+    // existing settings snapshots (which omit them) stay byte-for-byte equal.
+    ...(directory ? { directory } : {}),
+    ...(maxPerThread !== undefined ? { maxPerThread } : {})
   }
 }
 

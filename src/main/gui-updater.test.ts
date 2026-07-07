@@ -293,9 +293,30 @@ describe('showPostUpdateReleaseNotes', () => {
         buttons: ['查看更新日志', '稍后']
       })
     )
-    expect(openExternal).toHaveBeenCalledWith('https://deepseek-gui.com/changelog')
+    expect(openExternal).toHaveBeenCalledWith(
+      'https://github.com/KunAgent/Kun/blob/master/release/release-v0.2.0.md'
+    )
     expect(JSON.parse(mockedFiles.get(versionStatePath) ?? '{}')).toEqual({
       lastSeenVersion: '0.2.0'
     })
+  })
+
+  it('substitutes the version in a configured changelog URL', async () => {
+    process.env.KUN_CHANGELOG_URL = 'https://example.com/release/release-{version}.md'
+    appVersion = '0.2.1'
+    mockedFiles.set(
+      versionStatePath,
+      JSON.stringify({
+        lastSeenVersion: '0.2.0',
+        pendingUpdate: { version: '0.2.1' }
+      })
+    )
+    showMessageBox.mockResolvedValue({ response: 0 })
+    const module = await import('./gui-updater')
+    module.initializeGuiUpdater(() => null, () => 'stable')
+
+    await module.showPostUpdateReleaseNotes()
+
+    expect(openExternal).toHaveBeenCalledWith('https://example.com/release/release-v0.2.1.md')
   })
 })

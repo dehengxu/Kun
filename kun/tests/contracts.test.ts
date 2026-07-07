@@ -18,6 +18,8 @@ import {
   KunErrorBody,
   KunCapabilitiesConfig,
   RuntimeCapabilityManifest,
+  DEFAULT_TOOL_OUTPUT_MAX_BYTES,
+  DEFAULT_TOOL_OUTPUT_MAX_LINES,
   buildRuntimeCapabilityManifest,
   emptyUsageSnapshot,
   type RuntimeEvent as RuntimeEventType
@@ -316,6 +318,10 @@ describe('cli', () => {
     expect(parsed.port).toBe(18787)
     expect(parsed.tokenEconomyMode).toBe(true)
     expect(parsed.tokenEconomy?.enabled).toBe(true)
+    expect(parsed.toolOutputLimits).toEqual({
+      maxLines: DEFAULT_TOOL_OUTPUT_MAX_LINES,
+      maxBytes: DEFAULT_TOOL_OUTPUT_MAX_BYTES
+    })
     expect(parsed.insecure).toBe(true)
   })
 
@@ -356,6 +362,10 @@ describe('cli', () => {
               maxToolArgumentStringTokens: 1000,
               maxArrayItems: 40
             }
+          },
+          toolOutputLimits: {
+            maxLines: 30000,
+            maxBytes: 1048576
           },
           storage: {
             backend: 'hybrid',
@@ -438,6 +448,10 @@ describe('cli', () => {
           maxToolArgumentStringTokens: 1000,
           maxArrayItems: 40
         }
+      })
+      expect(parsed.toolOutputLimits).toEqual({
+        maxLines: 30000,
+        maxBytes: 1048576
       })
       expect(parsed.storage).toEqual({
         backend: 'hybrid',

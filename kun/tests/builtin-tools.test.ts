@@ -53,7 +53,7 @@ import { createLsTool as createLsToolFromModule } from '../src/adapters/tool/ls.
 import { createWriteTool as createWriteToolFromModule } from '../src/adapters/tool/write.js'
 import { computeEditDiff } from '../src/adapters/tool/edit-diff.js'
 import { withFileMutationQueue } from '../src/adapters/tool/file-mutation-queue.js'
-import { DEFAULT_MAX_BYTES } from '../src/adapters/tool/truncate.js'
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from '../src/adapters/tool/truncate.js'
 import type { TurnItem } from '../src/contracts/items.js'
 import type { FsStats } from '../src/adapters/tool/builtin-tool-types.js'
 import type { ToolHostContext } from '../src/ports/tool-host.js'
@@ -120,6 +120,11 @@ describe('Kun built-in tools', () => {
     const tools = await host.listTools(buildContext(workspace))
     const toolNames = new Set(tools.map((tool) => tool.name))
     expect([...allBuiltinToolNames].every((name) => toolNames.has(name))).toBe(true)
+  })
+
+  it('uses 500kb and 20000 lines as the default tool output caps', () => {
+    expect(DEFAULT_MAX_BYTES).toBe(500 * 1024)
+    expect(DEFAULT_MAX_LINES).toBe(20_000)
   })
 
   it('converts a throwing tool execute into an error tool result instead of failing the turn', async () => {
@@ -341,7 +346,7 @@ describe('Kun built-in tools', () => {
 
   it('exposes pi-style coding and read-only tool groups', () => {
     expect(buildCodingBuiltinLocalTools().map((tool) => tool.name)).toEqual(['read', 'bash', 'edit', 'write'])
-    expect(buildReadOnlyBuiltinLocalTools().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls'])
+    expect(buildReadOnlyBuiltinLocalTools().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls', 'repo_map'])
   })
 
   it('supports pi-style configurable built-in tool factory APIs', async () => {
@@ -350,9 +355,20 @@ describe('Kun built-in tools', () => {
       grep: { defaultLimit: 1 },
       find: { defaultLimit: 1 },
       ls: { defaultLimit: 1 },
-      bash: { defaultTimeoutSeconds: 5 }
+      bash: { defaultTimeoutSeconds: 5, maxLines: 1, maxBytes: 64 }
     })
-    expect(Object.keys(toolRecord).sort()).toEqual(['bash', 'edit', 'find', 'grep', 'ls', 'lsp', 'read', 'write'])
+    expect(Object.keys(toolRecord).sort()).toEqual([
+      'bash',
+      'edit',
+      'find',
+      'grep',
+      'ls',
+      'lsp',
+      'read',
+      'repo_map',
+      'verify_changes',
+      'write'
+    ])
 
     await writeFile(join(workspace, 'limited.txt'), 'one\ntwo\nthree\n', 'utf8')
     const customHost = new LocalToolHost({ tools: [toolRecord.read, toolRecord.ls] })
@@ -369,13 +385,35 @@ describe('Kun built-in tools', () => {
     expect(defaultGrepLocalToolOperations).toEqual({})
     expect(defaultLsLocalToolOperations.readdir).toBeTypeOf('function')
     expect(createCodingTools().map((tool) => tool.name)).toEqual(['read', 'bash', 'edit', 'write'])
-    expect(createReadOnlyTools().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls'])
+    expect(createReadOnlyTools().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls', 'repo_map'])
     expect(createCodingToolDefinitions().map((tool) => tool.name)).toEqual(['read', 'bash', 'edit', 'write'])
-    expect(createReadOnlyToolDefinitions().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls'])
+    expect(createReadOnlyToolDefinitions().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls', 'repo_map'])
     const allTools = createAllTools()
     const allDefinitions = createAllToolDefinitions()
-    expect(Object.keys(allTools).sort()).toEqual(['bash', 'edit', 'find', 'grep', 'ls', 'lsp', 'read', 'write'])
-    expect(Object.keys(allDefinitions).sort()).toEqual(['bash', 'edit', 'find', 'grep', 'ls', 'lsp', 'read', 'write'])
+    expect(Object.keys(allTools).sort()).toEqual([
+      'bash',
+      'edit',
+      'find',
+      'grep',
+      'ls',
+      'lsp',
+      'read',
+      'repo_map',
+      'verify_changes',
+      'write'
+    ])
+    expect(Object.keys(allDefinitions).sort()).toEqual([
+      'bash',
+      'edit',
+      'find',
+      'grep',
+      'ls',
+      'lsp',
+      'read',
+      'repo_map',
+      'verify_changes',
+      'write'
+    ])
     expect(createReadTool).toBe(createReadLocalTool)
     expect(createReadToolDefinition).toBe(createReadLocalTool)
     expect(createWriteTool).toBeTypeOf('function')
@@ -438,9 +476,10 @@ describe('Kun built-in tools', () => {
       }
     })
     const customBash = createBashLocalTool({
+      maxLines: 1,
       operations: {
         exec: async (_command, _cwd, options) => {
-          options.onData?.(Buffer.from('streamed from custom bash\n'))
+          options.onData?.(Buffer.from('first custom bash line\nstreamed from custom bash\n'))
           return { exitCode: 0 }
         }
       }
@@ -456,6 +495,8 @@ describe('Kun built-in tools', () => {
     expect(grepOutput.backend).toBe('custom')
     const bashOutput = await executeTool(customHost, workspace, 'bash', { command: 'echo ignored' })
     expect(String(bashOutput.output)).toContain('streamed from custom bash')
+    expect(String(bashOutput.output)).not.toContain('first custom bash line')
+    expect(bashOutput.truncation).toMatchObject({ total_lines: 2, output_lines: 1 })
   })
 
   it('exposes a reusable local bash backend constructor like pi', async () => {

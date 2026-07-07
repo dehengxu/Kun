@@ -76,6 +76,8 @@ import {
   uiPluginIdPayloadSchema,
   workspaceDirectoryCreatePayloadSchema,
   workspaceClipboardImageSavePayloadSchema,
+  workspaceImageBytesSavePayloadSchema,
+  workspaceImagePickPayloadSchema,
   workspaceDirectoryTargetPayloadSchema,
   workspaceEntryDeletePayloadSchema,
   workspaceEntryRenamePayloadSchema,
@@ -89,6 +91,8 @@ import {
   localWhisperSourceStatusPayloadSchema,
   speechTranscribePayloadSchema,
   writeExportPayloadSchema,
+  memoryMarkdownExportPayloadSchema,
+  designExportPayloadSchema,
   writeRichClipboardPayloadSchema,
   writeInfographicPayloadSchema,
   writeInlineCompletionPayloadSchema,
@@ -116,6 +120,7 @@ import { probeModelProvider } from '../provider-connection'
 import type { ClawRuntime } from '../claw-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
 import { verifyTelegramBotToken } from '../telegram-runtime'
+import { startCodexDeviceAuth, pollCodexDeviceAuth, startCodexBrowserAuth } from '../codex-auth'
 import type { WorkflowRuntime } from '../workflow-runtime'
 import { checkWorkflowCode } from '../workflow-runtime'
 import {
@@ -127,7 +132,7 @@ import {
   removeGitBranchWorktree,
   switchGitBranch
 } from '../services/git-service'
-import { createGitCheckpoint, restoreGitCheckpoint } from '../services/git-checkpoint-service'
+import { createGitCheckpoint, restoreGitCheckpoint, type GitCheckpointStorageOptions } from '../services/git-checkpoint-service'
 import {
   abortMerge,
   abortRebase,
@@ -150,6 +155,7 @@ import {
   removeUiPlugin
 } from '../services/ui-plugin-service'
 import { ensureBundledUiPlugins } from '../ui-plugin-bundled'
+import { ensureBundledSkills } from '../skill-bundled'
 import {
   createWorkspaceDirectory,
   createWorkspaceFile,
@@ -166,7 +172,9 @@ import {
   renameWorkspaceEntry,
   resolveOpenTargetPath,
   resolveWorkspaceFile,
+  pickAndSaveWorkspaceImage,
   saveWorkspaceClipboardImage,
+  saveWorkspaceImageBytes,
   writeWorkspaceFile
 } from '../services/workspace-service'
 import {
@@ -190,7 +198,12 @@ import {
   getComputerUsePermissions,
   requestComputerUsePermission
 } from '../services/computer-use-permissions'
-import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
+import {
+  copyWriteDocumentAsRichText,
+  exportDesignPrototype,
+  exportWriteDocument
+} from '../services/write-export-service'
+import { exportMemoryMarkdown } from '../services/memory-export-service'
 import { importGithubSkillsToRoot } from '../services/github-skill-import-service'
 import { readLocalPdfText } from '../services/write-pdf-text-service'
 import { saveGuiSkillPackage } from '../services/skill-save-service'
@@ -397,6 +410,8 @@ function runDesktopCommand(
 }
 
 export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): void {
+  // Seed the built-in "design system & craft" skill into ~/.kun/skills/ once.
+  void ensureBundledSkills(join(homedir(), '.kun'))
   const {
     store,
     getMainWindow,
@@ -761,6 +776,25 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   )
 
+  ipcMain.handle('codex:auth:start', async () => {
+    return startCodexDeviceAuth()
+  })
+
+  ipcMain.handle('codex:auth:poll', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'codex:auth:poll',
+      z.object({ deviceCode: z.string().min(1), userCode: z.string().min(1) }).strict(),
+      payload
+    )
+    return pollCodexDeviceAuth(request.deviceCode, request.userCode)
+  })
+
+  ipcMain.handle('codex:auth:browser', async () => {
+    return startCodexBrowserAuth(async (url: string) => {
+      await shell.openExternal(url)
+    })
+  })
+
   ipcMain.handle('workspace:pick-directory', async (_, defaultPath: unknown): Promise<WorkspacePickResult> => {
     const normalizedDefaultPath = parseIpcPayload(
       'workspace:pick-directory',
@@ -1011,6 +1045,16 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     return expandHomePath(runtime.dataDir?.trim() || DEFAULT_KUN_DATA_DIR)
   }
 
+  // Map the user's checkpoint settings (issue #651) to the service storage
+  // options: an optional directory override (e.g. another drive) and the
+  // per-thread retention cap. Home-relative paths are expanded.
+  const resolveCheckpointStorageOptions = (
+    cfg: { directory?: string; maxPerThread?: number }
+  ): GitCheckpointStorageOptions => ({
+    ...(cfg.directory?.trim() ? { checkpointsRoot: expandHomePath(cfg.directory.trim()) } : {}),
+    ...(cfg.maxPerThread !== undefined ? { maxPerThread: cfg.maxPerThread } : {})
+  })
+
   ipcMain.handle('kun:sessions:detect-legacy', async () =>
     detectLegacySessions({ homeDir: homedir(), destDataDir: await resolveKunThreadsDataDir() })
   )
@@ -1071,17 +1115,22 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   )
   ipcMain.handle('git:checkpoint:create', async (_, payload: unknown) => {
     const request = parseIpcPayload('git:checkpoint:create', gitCheckpointCreatePayloadSchema, payload)
+    const settings = await store.load()
     return createGitCheckpoint({
       dataDir: await resolveKunThreadsDataDir(),
       workspaceRoot: request.workspaceRoot,
-      threadId: request.threadId
+      threadId: request.threadId,
+      storage: resolveCheckpointStorageOptions(settings.checkpointCleanup)
     })
   })
   ipcMain.handle('git:checkpoint:restore', async (_, payload: unknown) => {
     const request = parseIpcPayload('git:checkpoint:restore', gitCheckpointRestorePayloadSchema, payload)
+    const settings = await store.load()
     return restoreGitCheckpoint({
       dataDir: await resolveKunThreadsDataDir(),
       checkpointId: request.checkpointId,
+      ...(request.allowPartialRestore ? { allowPartialRestore: true } : {}),
+      storage: resolveCheckpointStorageOptions(settings.checkpointCleanup),
       // Bridge the main-process runtimeRequest into the shape restoreGitCheckpoint
       // expects ((path, {method, body}) => {ok,status,body}). On a transport-level
       // failure (runtime not up, connection refused) we return a non-ok result so
@@ -1264,6 +1313,17 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       )
     )
   )
+  ipcMain.handle('file:pick-workspace-image', async (_, payload: unknown) =>
+    pickAndSaveWorkspaceImage(
+      parseIpcPayload('file:pick-workspace-image', workspaceImagePickPayloadSchema, payload),
+      { parentWindow: getMainWindow() }
+    )
+  )
+  ipcMain.handle('file:save-workspace-image-bytes', async (_, payload: unknown) =>
+    saveWorkspaceImageBytes(
+      parseIpcPayload('file:save-workspace-image-bytes', workspaceImageBytesSavePayloadSchema, payload)
+    )
+  )
   ipcMain.handle('clipboard:read-image', async () => readClipboardImage())
   ipcMain.handle('file:rename-workspace-entry', async (_, payload: unknown) =>
     renameWorkspaceEntry(
@@ -1331,6 +1391,18 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   ipcMain.handle('write:export', async (_, payload: unknown) =>
     exportWriteDocument(
       parseIpcPayload('write:export', writeExportPayloadSchema, payload),
+      { parentWindow: getMainWindow() }
+    )
+  )
+  ipcMain.handle('memory:export-markdown', async (_, payload: unknown) =>
+    exportMemoryMarkdown(
+      parseIpcPayload('memory:export-markdown', memoryMarkdownExportPayloadSchema, payload),
+      { parentWindow: getMainWindow() }
+    )
+  )
+  ipcMain.handle('design:export-prototype', async (_, payload: unknown) =>
+    exportDesignPrototype(
+      parseIpcPayload('design:export-prototype', designExportPayloadSchema, payload),
       { parentWindow: getMainWindow() }
     )
   )

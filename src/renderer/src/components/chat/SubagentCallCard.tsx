@@ -18,6 +18,7 @@ import { AgentKun } from '../subagents/AgentKun'
  */
 
 type CardStatus = 'queued' | 'running' | 'done' | 'failed' | 'awaiting-permission'
+export type OpenChildThreadHandler = (threadId: string) => void
 
 const KNOWN_POSE_IDS = new Set([
   'general',
@@ -357,13 +358,15 @@ function MetaChip({ children, title }: { children: React.ReactNode; title?: stri
 export function SubagentCallCard({
   block,
   compact = false,
-  inGroup = false
+  inGroup = false,
+  onOpenChildThread
 }: {
   block: ChatBlock
   /** Smaller avatar variant used inside a swarm group. */
   compact?: boolean
   /** Inside a SwarmHeader group: suppress own shell, inline-toggle only. */
   inGroup?: boolean
+  onOpenChildThread?: OpenChildThreadHandler
 }): ReactElement | null {
   const { t } = useTranslation('common')
   const selectThread = useChatStore((s) => s.selectThread)
@@ -418,6 +421,10 @@ export function SubagentCallCard({
   const childId = child.childId || detail.childId
   const openChild = (): void => {
     if (!childId) return
+    if (onOpenChildThread) {
+      onOpenChildThread(childId)
+      return
+    }
     void selectThread(childId).catch(() => undefined)
   }
 
@@ -561,7 +568,13 @@ function splitTaskLine(block: ToolBlock): string | undefined {
  * full card for N=1 (no header); for N>=2 wraps them under a {@link SwarmHeader}
  * with a stacked-avatar cluster and an aggregate count line.
  */
-export function SubagentGroup({ blocks }: { blocks: ChatBlock[] }): ReactElement | null {
+export function SubagentGroup({
+  blocks,
+  onOpenChildThread
+}: {
+  blocks: ChatBlock[]
+  onOpenChildThread?: OpenChildThreadHandler
+}): ReactElement | null {
   const { t } = useTranslation('common')
   const [collapsed, setCollapsed] = useState(false)
   const reducedMotion = useReducedMotion()
@@ -569,7 +582,7 @@ export function SubagentGroup({ blocks }: { blocks: ChatBlock[] }): ReactElement
   if (blocks.length === 0) return null
   // N=1: single full card, no swarm header.
   if (blocks.length === 1) {
-    return <SubagentCallCard block={blocks[0]} />
+    return <SubagentCallCard block={blocks[0]} onOpenChildThread={onOpenChildThread} />
   }
 
   const sorted = [...blocks].sort((a, b) => {
@@ -653,7 +666,13 @@ export function SubagentGroup({ blocks }: { blocks: ChatBlock[] }): ReactElement
       {!collapsed ? (
         <div>
           {sorted.map((b) => (
-            <SubagentCallCard key={b.id} block={b} compact inGroup />
+            <SubagentCallCard
+              key={b.id}
+              block={b}
+              compact
+              inGroup
+              onOpenChildThread={onOpenChildThread}
+            />
           ))}
         </div>
       ) : null}

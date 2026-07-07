@@ -103,7 +103,7 @@
 
 :root[data-platform='darwin'] {
   --ds-window-controls-safe-block: 42px;
-  --ds-window-controls-safe-inset: 56px;
+  --ds-window-controls-safe-inset: 112px;
   --ds-collapsed-sidebar-titlebar-extra-inset: 3.5rem;
   --ds-write-titlebar-extra-inset: 20px;
 }
@@ -855,7 +855,8 @@ body {
   position: relative;
   isolation: isolate;
   font-family:
-    'SF Pro Text', 'PingFang SC', 'Noto Sans SC', 'Helvetica Neue', Arial, sans-serif;
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', Arial, 'Noto Sans',
+    'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
   background-color: var(--ds-bg-main);
   color: var(--ds-text);
   user-select: none;
@@ -2864,7 +2865,7 @@ pre {
   position: fixed;
   top: 7.6rem;
   right: 1.55rem;
-  z-index: 45;
+  z-index: 15;
   display: flex;
   box-sizing: border-box;
   width: 2.4rem;
@@ -2915,7 +2916,8 @@ pre {
 }
 
 .timeline-jump-rail-button:hover,
-.timeline-jump-rail-button:focus-visible {
+.timeline-jump-rail-button:focus-visible,
+.timeline-jump-rail-button.is-active {
   background: var(--ds-accent-soft);
   color: var(--ds-accent);
   transform: translateY(-1px);
@@ -3122,17 +3124,11 @@ pre {
     justify-content: flex-start;
   }
 
-  .chat-workbench-topbar {
-    flex: 1 1 auto;
-  }
-
-  .chat-agent-switcher-label,
-  .chat-gui-update-label {
+  .chat-agent-switcher-label {
     display: none;
   }
 
-  .chat-agent-switcher,
-  .chat-gui-update-button {
+  .chat-agent-switcher {
     padding-inline: 0.625rem;
   }
 }

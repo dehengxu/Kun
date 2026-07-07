@@ -53,11 +53,15 @@ export type CoreThreadJson = CoreThreadSummaryJson & {
 export type CoreAttachmentMetadataJson = {
   id: string
   name: string
+  kind?: 'image' | 'document'
   mimeType: string
   byteSize: number
   hash: string
   width?: number
   height?: number
+  documentText?: string
+  pageCount?: number
+  truncated?: boolean
   localFilePath?: string
   textFallback?: CoreAttachmentTextFallbackJson
   threadIds?: string[]
@@ -212,6 +216,11 @@ export type CoreRuntimeCapabilityManifestJson = {
     configuredRoots: number
     discoveredSkills: number
   }
+  /** Optional so the GUI keeps working against older Kun builds without the capability. */
+  instructions?: CoreRuntimeCapabilityStateJson & {
+    lastSourceCount?: number
+    lastInjectedBytes?: number
+  }
   subagents: CoreRuntimeCapabilityStateJson & {
     maxParallel: number
     maxChildRuns: number
@@ -223,6 +232,9 @@ export type CoreRuntimeCapabilityManifestJson = {
     maxImageBytes: number
     maxImageDimension: number
     allowedMimeTypes: string[]
+    allowedDocumentMimeTypes?: string[]
+    maxDocumentBytes?: number
+    maxDocumentTextChars?: number
     textFallbackMaxBase64Bytes?: number
     textFallbackMaxImageDimension?: number
     textFallbackPreferredMimeType?: string
@@ -274,6 +286,7 @@ export type CoreRuntimeInfoJson = {
 export type CoreRuntimeToolDiagnosticsJson = {
   providers?: Array<Record<string, unknown>>
   mcpServers?: Array<Record<string, unknown>>
+  mcpOAuth?: CoreMcpOAuthDiagnosticJson[]
   mcpSearch?: {
     enabled?: boolean
     mode?: 'direct' | 'search' | 'auto'
@@ -296,6 +309,19 @@ export type CoreRuntimeToolDiagnosticsJson = {
     validationErrors?: Array<Record<string, unknown> | string>
     lastActivations?: Array<Record<string, unknown>>
   }
+  instructions?: {
+    enabled?: boolean
+    globalPath?: string
+    workspaceFileName?: string
+    maxFileBytes?: number
+    maxTotalBytes?: number
+    readErrors?: Array<Record<string, unknown> | string>
+    lastInjection?: {
+      sources?: Array<Record<string, unknown>>
+      injectedBytes?: number
+      budgetBytes?: number
+    }
+  }
   attachments?: CoreAttachmentDiagnosticsJson
   memory?: CoreMemoryDiagnosticsJson
   subagents?: {
@@ -303,6 +329,38 @@ export type CoreRuntimeToolDiagnosticsJson = {
     active?: number
     childRuns?: Array<Record<string, unknown>>
   }
+}
+
+export type CoreMcpOAuthDiagnosticJson = {
+  serverId: string
+  enabled: boolean
+  configured: boolean
+  transport: string
+  url?: string
+  status: 'disabled' | 'empty' | 'partial' | 'authorized' | 'expired' | 'error'
+  hasClientInformation: boolean
+  hasTokens: boolean
+  hasRefreshToken: boolean
+  hasCodeVerifier: boolean
+  hasDiscoveryState: boolean
+  grantedScopes?: string[]
+  expiresAt?: string
+  lastError?: string
+  lastErrorAt?: string
+}
+
+export type CoreMcpOAuthDiagnosticsResponseJson = {
+  servers: CoreMcpOAuthDiagnosticJson[]
+}
+
+export type CoreMcpOAuthClearResponseJson = {
+  cleared: string[]
+}
+
+export type CoreMcpOAuthAuthorizeResponseJson = {
+  serverId: string
+  status: CoreMcpOAuthDiagnosticJson['status']
+  authorized: boolean
 }
 
 export type CoreRuntimeSkillJson = {
@@ -362,6 +420,7 @@ export type CoreTurnJson = {
   status: CoreTurnStatus
   prompt: string
   model?: string
+  providerId?: string
   createdAt: string
   startedAt?: string
   finishedAt?: string
@@ -371,6 +430,8 @@ export type CoreTurnJson = {
   injectedMemoryIds?: string[]
   injectedMemorySummaries?: Array<{ id: string; content: string }>
   skillInjectionBytes?: number
+  injectedInstructionSources?: Array<{ scope: 'global' | 'workspace'; path: string; bytes: number; truncated?: boolean }>
+  instructionInjectionBytes?: number
   workspaceCheckpointId?: string
   error?: string
 }
@@ -419,6 +480,8 @@ export type CoreTurnItemJson = {
   injectedMemoryIds?: string[]
   injectedMemorySummaries?: Array<{ id: string; content: string }>
   skillInjectionBytes?: number
+  injectedInstructionSources?: Array<{ scope: 'global' | 'workspace'; path: string; bytes: number; truncated?: boolean }>
+  instructionInjectionBytes?: number
   target?: CoreReviewTargetJson
   title?: string
   reviewText?: string

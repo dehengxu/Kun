@@ -29,6 +29,7 @@ const PLAN_MODE_ALLOWED_TOOL_NAMES = new Set([
   'grep',
   'find',
   'ls',
+  'repo_map',
   'create_plan',
   'user_input',
   'request_user_input'
@@ -51,9 +52,7 @@ export class CapabilityRegistry {
   }
 
   constructor(providers: readonly CapabilityToolProvider[] = []) {
-    for (const provider of providers) {
-      this.registerProvider(provider)
-    }
+    this.replaceProviders(providers)
   }
 
   registerProvider(provider: CapabilityToolProvider): void {
@@ -67,6 +66,27 @@ export class CapabilityRegistry {
       }
       this.tools.set(tool.name, { provider: providerPolicy(provider), tool })
     }
+  }
+
+  replaceProviders(providers: readonly CapabilityToolProvider[]): void {
+    const nextProviders = new Map<string, CapabilityToolProvider>()
+    const nextTools = new Map<string, CapabilityToolRecord>()
+    for (const provider of providers) {
+      if (nextProviders.has(provider.id)) {
+        throw new Error(`duplicate tool provider: ${provider.id}`)
+      }
+      nextProviders.set(provider.id, provider)
+      for (const tool of provider.tools) {
+        if (nextTools.has(tool.name)) {
+          throw new Error(`duplicate tool name: ${tool.name}`)
+        }
+        nextTools.set(tool.name, { provider: providerPolicy(provider), tool })
+      }
+    }
+    this.providers.clear()
+    this.tools.clear()
+    for (const [id, provider] of nextProviders) this.providers.set(id, provider)
+    for (const [name, record] of nextTools) this.tools.set(name, record)
   }
 
   listTools(context?: ToolHostContext): CapabilityToolSpec[] {

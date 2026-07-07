@@ -8,8 +8,11 @@ import { parseFileReferenceHref, rehypeFileReferences } from '../../lib/file-ref
 import { useValidatedFileReference } from '../../lib/file-reference-validation'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
 import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
-import { useChatStore } from '../../store/chat-store'
+import { sanitizeAssistantCanvasToolDisplay } from '../../design/canvas/strip-canvas-tool-display'
 import { StreamdownCode } from './StreamdownCode'
+import { useTimelineFilePreviewWorkspaceRoot } from './timeline-file-preview-workspace'
+import { createMathPlugin } from '@streamdown/math'
+import 'katex/dist/katex.min.css'
 
 /** Reveal ~1/8 of the outstanding backlog per frame… */
 const CATCHUP_DIVISOR = 8
@@ -17,6 +20,12 @@ const CATCHUP_DIVISOR = 8
  * thread, burst from a fast model) drains as fast typing instead of a
  * near-instant wall of text. */
 const MAX_STEP_PER_FRAME = 32
+const COMBINING_MARK_REGEX = /\p{Mark}/u
+const VARIATION_SELECTOR_REGEX = /\p{Variation_Selector}/u
+const graphemeSegmenter =
+  typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+    ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+    : null
 
 export function nextVisibleLength(current: number, target: number): number {
   if (current === target) return current
@@ -24,6 +33,52 @@ export function nextVisibleLength(current: number, target: number): number {
   if (current > target) return target
   const backlog = target - current
   return current + Math.min(MAX_STEP_PER_FRAME, Math.max(1, Math.ceil(backlog / CATCHUP_DIVISOR)))
+}
+
+function fallbackBoundary(text: string, length: number): number {
+  let boundary = length
+  const previousCode = text.charCodeAt(boundary - 1)
+  if (previousCode >= 0xd800 && previousCode <= 0xdbff && boundary < text.length) {
+    boundary += 1
+  }
+
+  while (boundary < text.length) {
+    const codePoint = text.codePointAt(boundary)
+    if (codePoint == null) break
+    const char = String.fromCodePoint(codePoint)
+    if (COMBINING_MARK_REGEX.test(char) || VARIATION_SELECTOR_REGEX.test(char)) {
+      boundary += char.length
+      continue
+    }
+    if (codePoint === 0x200d) {
+      boundary += 1
+      const joinedCodePoint = text.codePointAt(boundary)
+      if (joinedCodePoint == null) break
+      boundary += String.fromCodePoint(joinedCodePoint).length
+      continue
+    }
+    break
+  }
+
+  return boundary
+}
+
+function nextTextBoundary(text: string, visibleLength: number): number {
+  const length = Math.max(0, Math.min(visibleLength, text.length))
+  if (length === 0 || length === text.length) return length
+
+  if (graphemeSegmenter) {
+    for (const segment of graphemeSegmenter.segment(text)) {
+      const boundary = segment.index + segment.segment.length
+      if (boundary >= length) return boundary
+    }
+  }
+
+  return fallbackBoundary(text, length)
+}
+
+export function visibleTextForTypewriter(text: string, visibleLength: number): string {
+  return text.slice(0, nextTextBoundary(text, visibleLength))
 }
 
 /**
@@ -51,11 +106,7 @@ function useTypewriterText(text: string, streaming: boolean): string {
   }, [streaming])
 
   if (!streaming) return text
-  let length = Math.min(visibleLength, text.length)
-  // Don't cut a surrogate pair in half mid-reveal.
-  const code = text.charCodeAt(length - 1)
-  if (code >= 0xd800 && code <= 0xdbff) length += 1
-  return text.slice(0, length)
+  return visibleTextForTypewriter(text, visibleLength)
 }
 
 const rehypePlugins = [
@@ -67,6 +118,11 @@ const rehypePlugins = [
     }
   ]
 ] satisfies StreamdownProps['rehypePlugins']
+
+const math = createMathPlugin({
+  singleDollarTextMath: false,
+  errorColor: 'var(--ds-text-muted)'
+})
 
 const components = {
   code: StreamdownCode,
@@ -81,7 +137,7 @@ function StreamdownLink({
   className,
   title
 }: StreamdownLinkProps): ReactElement {
-  const workspaceRoot = useChatStore((s) => s.workspaceRoot)
+  const workspaceRoot = useTimelineFilePreviewWorkspaceRoot()
   const fileTarget = parseFileReferenceHref(href)
   const validation = useValidatedFileReference(fileTarget, workspaceRoot)
   const isExternal = href ? /^(https?:|mailto:)/i.test(href) : false
@@ -156,10 +212,20 @@ type Props = {
 }
 
 export function StreamdownAssistant({ text, streaming, className }: Props): ReactElement {
-  const pacedText = useTypewriterText(text, streaming)
+  const displayText = sanitizeAssistantCanvasToolDisplay(text)
+  const pacedText = useTypewriterText(displayText, streaming)
+
+  // While streaming, keep a stable key so the typewriter doesn't tear down
+  // mid-stroke. Once settled, key on `text.length` — any subsequent edit
+  // remounts Streamdown clean instead of relying on its block-diff to swap
+  // children in place, which has been observed to leave stale fragments
+  // (bullet tail spliced into the next paragraph) on bullet→paragraph
+  // transitions containing inline code.
+  const streamdownKey = streaming ? 'live' : `static:${displayText.length}`
 
   return (
     <Streamdown
+      key={streamdownKey}
       className={className}
       mode="static"
       parseIncompleteMarkdown={false}
@@ -173,6 +239,7 @@ export function StreamdownAssistant({ text, streaming, className }: Props): Reac
       remarkPlugins={[remarkGfm]}
       rehypePlugins={rehypePlugins}
       components={components}
+      plugins={{ math }}
     >
       {pacedText}
     </Streamdown>

@@ -19,6 +19,7 @@ import {
   type ModelEndpointFormat
 } from '../../contracts/model-endpoint-format.js'
 import { createProxyFetch } from './proxy-fetch.js'
+import { wrapUntrustedContent } from '../../security/untrusted-content.js'
 
 /**
  * Configuration for the compatible HTTP model client. Chat
@@ -440,7 +441,7 @@ export class CompatModelClient implements ModelClient {
   }
 
   private async classifyHttpError(status: number, text: string): Promise<{ message: string; code: string }> {
-    const body = text
+    const body = summarizeHttpErrorBody(text)
     if (status === 404) {
       const prefix = body ? `${body} ` : ''
       return {
@@ -563,13 +564,25 @@ export class CompatModelClient implements ModelClient {
     messages: ChatMessage[],
     stream: boolean
   ): Record<string, unknown> {
+    const isCodex = this.isCodexEndpoint()
+    // Codex requires system content in the top-level `instructions` field and
+    // will reject system-role items inside `input`. Split the message list so
+    // system messages go to instructions and the rest go to input.
+    const systemMessages = isCodex ? messages.filter((m) => m.role === 'system') : []
+    const nonSystemMessages = isCodex ? messages.filter((m) => m.role !== 'system') : messages
+    const inputMessages = splitToolImageMessagesForOpenAi(nonSystemMessages)
+    const instructions = systemMessages
+      .map((m) => chatContentToPlainText(m.content).trim())
+      .filter(Boolean)
+      .join('\n\n')
     const body: Record<string, unknown> = {
       model,
       stream,
-      input: messagesToResponsesInput(splitToolImageMessagesForOpenAi(messages))
+      input: messagesToResponsesInput(inputMessages),
+      ...(isCodex ? { instructions: instructions || ' ', store: false } : {})
     }
     const maxTokens = this.resolveMaxTokens(request, model)
-    if (maxTokens !== undefined) {
+    if (maxTokens !== undefined && !isCodex) {
       body.max_output_tokens = maxTokens
     }
     if (request.temperature !== undefined) {
@@ -583,9 +596,16 @@ export class CompatModelClient implements ModelClient {
     }
     const reasoning = responsesReasoningForEffort(
       request.reasoningEffort,
-      this.modelReasoningFor(model)
+      this.modelReasoningFor(model),
+      {
+        maxEffort: isCodex ? 'xhigh' : 'high',
+        includeSummary: isCodex
+      }
     )
-    if (reasoning) body.reasoning = reasoning
+    if (reasoning) {
+      body.reasoning = reasoning
+      if (isCodex) body.include = ['reasoning.encrypted_content']
+    }
     const tools = normalizeToolSpecs(request.tools)
     if (tools.length > 0) {
       body.tools = tools.map((tool) => ({
@@ -595,7 +615,16 @@ export class CompatModelClient implements ModelClient {
         parameters: tool.inputSchema
       }))
     }
+    if (this.isCodexEndpoint()) {
+      const toolsArray = (body.tools ?? []) as Record<string, unknown>[]
+      toolsArray.push({ type: 'image_generation' })
+      body.tools = toolsArray
+    }
     return body
+  }
+
+  private isCodexEndpoint(): boolean {
+    return this.config.baseUrl.includes('chatgpt.com/backend-api/codex')
   }
 
   private buildAnthropicMessagesRequestBody(
@@ -634,10 +663,11 @@ export class CompatModelClient implements ModelClient {
           .filter((item) => item.trim().length > 0)
           .join('\n\n')
       : converted.system
-    if (systemText) {
-      body.system = [
-        { type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }
-      ] satisfies AnthropicContentBlock[]
+    const systemBlocks: AnthropicContentBlock[] = systemText
+      ? [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }]
+      : []
+    if (systemBlocks.length > 0) {
+      body.system = systemBlocks
     }
     if (request.temperature !== undefined) {
       body.temperature = request.temperature
@@ -694,6 +724,9 @@ export class CompatModelClient implements ModelClient {
     }
     if (request.attachmentTextFallbacks?.length) {
       attachTextFallbacksToLatestUserMessage(out, request.attachmentTextFallbacks)
+    }
+    if (request.attachmentDocuments?.length) {
+      attachDocumentsToLatestUserMessage(out, request.attachmentDocuments)
     }
     return normalizeThinkingAssistantMessages(healToolMessagePairs(out), thinkingMode)
   }
@@ -1171,7 +1204,14 @@ export class CompatModelClient implements ModelClient {
     const item = recordValue(payload, 'item') ?? recordValue(payload, 'output_item')
     if (item) {
       const itemType = recordString(item, 'type')
-      if (itemType === 'function_call' || itemType === 'custom_tool_call') {
+      if (itemType === 'image_generation_call') {
+        if (type === 'response.output_item.done') {
+          const result = recordString(item, 'result')
+          if (result) {
+            chunks.push({ kind: 'image_generation_complete', imageBase64: result, mimeType: 'image/png' })
+          }
+        }
+      } else if (itemType === 'function_call' || itemType === 'custom_tool_call') {
         const callId = recordString(item, 'call_id') || recordString(item, 'id') || indexFallbackCallId(outputIndex, pendingArguments)
         const existing = pendingArguments.get(callId) ?? { index: outputIndex, name: undefined, arguments: '' }
         if (outputIndex !== undefined) {
@@ -1240,6 +1280,8 @@ export class CompatModelClient implements ModelClient {
       } else {
         pendingArguments.set(callId, existing)
       }
+    } else if (type === 'response.image_generation_call.partial_image') {
+      // Partial image data — accumulation is optional; we emit on output_item.done
     } else if (type === 'response.completed') {
       const response = recordValue(payload, 'response') as ResponsesApiResponse | null
       const materialized = this.materializeResponsesOutput(response ?? (payload as ResponsesApiResponse), {
@@ -1903,7 +1945,11 @@ type NormalizedReasoningEffort = ModelReasoningCapability['defaultEffort']
 
 function responsesReasoningForEffort(
   effort: string | undefined,
-  reasoning?: ModelReasoningCapability
+  reasoning?: ModelReasoningCapability,
+  options: {
+    maxEffort?: 'high' | 'xhigh'
+    includeSummary?: boolean
+  } = {}
 ): Record<string, unknown> | null {
   if (reasoning && reasoning.requestProtocol !== 'openai-responses') return null
   const resolved = reasoning
@@ -1911,14 +1957,19 @@ function responsesReasoningForEffort(
     : normalizeReasoningEffortValue(effort)
   if (resolved === 'auto' || resolved === 'off' || !resolved) return null
   const normalized = resolved
+  const payload = (wireEffort: string): Record<string, unknown> => ({
+    effort: wireEffort,
+    ...(options.includeSummary ? { summary: 'auto' } : {})
+  })
   switch (normalized) {
     case 'low':
-      return { effort: 'low' }
+      return payload('low')
     case 'medium':
-      return { effort: 'medium' }
+      return payload('medium')
     case 'high':
+      return payload('high')
     case 'max':
-      return { effort: 'high' }
+      return payload(options.maxEffort ?? 'high')
     default:
       return null
   }
@@ -1964,6 +2015,21 @@ function redactUrlForLog(url: string): string {
 
 function summarizeForLog(text: string): string {
   const normalized = text.replace(/\s+/g, ' ').trim()
+  return normalized.length > 1_000 ? `${normalized.slice(0, 1_000)}...` : normalized
+}
+
+function summarizeHttpErrorBody(text: string): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (!normalized) return ''
+  if (/<html[\s>]/i.test(normalized)) {
+    if (/Enable JavaScript and cookies to continue/i.test(normalized)) {
+      return 'provider returned an HTML challenge page (Enable JavaScript and cookies to continue). Check provider authentication/session and Endpoint format.'
+    }
+    const title = /<title[^>]*>(.*?)<\/title>/i.exec(normalized)?.[1]?.trim()
+    return title
+      ? `provider returned an HTML response (${title})`
+      : 'provider returned an HTML response'
+  }
   return normalized.length > 1_000 ? `${normalized.slice(0, 1_000)}...` : normalized
 }
 
@@ -2647,6 +2713,46 @@ function attachTextFallbacksToLatestUserMessage(
     message.content = text
     return
   }
+}
+
+function attachDocumentsToLatestUserMessage(
+  messages: ChatMessage[],
+  documents: NonNullable<ModelRequest['attachmentDocuments']>
+): void {
+  const text = documents.map(formatAttachmentDocument).join('\n\n')
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.role !== 'user') continue
+    if (typeof message.content === 'string') {
+      message.content = message.content ? `${message.content}\n\n${text}` : text
+      return
+    }
+    if (Array.isArray(message.content)) {
+      message.content.push({ type: 'text', text })
+      return
+    }
+    message.content = text
+    return
+  }
+}
+
+function formatAttachmentDocument(
+  document: NonNullable<ModelRequest['attachmentDocuments']>[number]
+): string {
+  return [
+    '[Attached document]',
+    `Name: ${document.name}`,
+    `FilePath: ${document.localFilePath ?? 'unknown'}`,
+    `MIME: ${document.mimeType}`,
+    ...(document.pageCount ? [`Pages: ${document.pageCount}`] : []),
+    ...(document.truncated ? ['Note: text truncated to fit the context limit'] : []),
+    'Content:',
+    wrapUntrustedContent({
+      content: document.text,
+      source: { kind: 'document', label: document.name }
+    }),
+    '[/Attached document]'
+  ].join('\n')
 }
 
 function formatAttachmentTextFallback(

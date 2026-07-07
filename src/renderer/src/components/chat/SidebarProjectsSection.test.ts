@@ -12,6 +12,7 @@ import {
   resolveThreadPreviewPosition,
   sortSidebarThreads,
   SddDraftHistoryRows,
+  SidebarActionDialog,
   ThreadRow,
   ThreadRenameDialog
 } from './SidebarProjectsSection'
@@ -241,6 +242,30 @@ describe('SidebarProjectsSection groups', () => {
     expect(groups[0]?.[1].map((item) => item.id)).toEqual(['project-thread'])
   })
 
+  it('excludes internal design workspaces from project groups and remembered roots', () => {
+    const groups = buildSidebarWorkspaceGroups({
+      threads: [
+        thread({ id: 'project-thread', workspace: '/Users/zxy/project-a' }),
+        thread({
+          id: 'design-assistant',
+          title: 'Design Assistant',
+          workspace: '/Users/zxy/.kun/design-workspace'
+        })
+      ],
+      searchQuery: '',
+      showArchived: false,
+      workspaceRoot: '/Users/zxy/.kun/design-workspace',
+      conversationRoot: '',
+      workspaceRoots: [
+        '/Users/zxy/project-a',
+        '/Users/zxy/.kun/design-workspace'
+      ]
+    })
+
+    expect(groups.map(([workspace]) => workspace)).toEqual(['/Users/zxy/project-a'])
+    expect(groups[0]?.[1].map((item) => item.id)).toEqual(['project-thread'])
+  })
+
   it('merges requirement-only search matches into displayed groups', () => {
     const groups = buildSidebarWorkspaceGroups({
       threads: [thread({ id: 'reasonix-current', workspace: '/Users/zxy/project-a' })],
@@ -360,6 +385,33 @@ describe('ThreadRenameDialog', () => {
     expect(html).toContain('sidebarThreadRename')
     expect(html).toContain('value="Build rename dialog"')
     expect(html).toContain('type="submit" disabled=""')
+  })
+})
+
+describe('SidebarActionDialog', () => {
+  it('uses an opaque card and stronger backdrop so sidebar controls cannot bleed through', () => {
+    const html = renderToStaticMarkup(
+      createElement(SidebarActionDialog, {
+        state: {
+          title: 'Remove AI training?',
+          description: 'This removes the project from Kun.',
+          detail: 'Files on disk will not be deleted.',
+          confirmLabel: 'Remove',
+          danger: true,
+          submitting: false,
+          onConfirm: async () => undefined
+        },
+        onClose: vi.fn(),
+        onConfirm: vi.fn(),
+        t: (key: string) => key
+      })
+    )
+
+    expect(html).toContain('bg-slate-950/28')
+    expect(html).toContain('dark:bg-black/45')
+    expect(html).toContain('bg-[var(--surface-3)]')
+    expect(html).not.toContain('bg-ds-elevated')
+    expect(html).not.toContain('bg-ds-card/96')
   })
 })
 
