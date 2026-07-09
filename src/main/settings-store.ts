@@ -67,6 +67,7 @@ const LEGACY_SETTINGS_FILE_NAME = 'deepseek-gui-settings.json'
 // 正常情况下迁移模块已把它们 rename 走,这里是迁移失败/被跳过时的
 // 跨目录兜底。
 const COMPATIBLE_USER_DATA_DIR_NAMES = ['deepseek-gui', 'DeepSeek GUI'] as const
+const RECOVERABLE_WORKSPACE_ROOT_ERROR_CODES = new Set(['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'])
 const WELCOME_MARKDOWN = `# Welcome to Write
 
 This is your default writing workspace.
@@ -184,10 +185,39 @@ function serializeSettingsForDisk(settings: AppSettingsV1): string {
   return JSON.stringify(normalizeStoredSettings(settings), null, 2)
 }
 
+function errnoCode(error: unknown): string {
+  return isErrnoException(error) && typeof error.code === 'string' ? error.code : ''
+}
+
+function isRecoverableWorkspaceRootError(error: unknown): boolean {
+  return RECOVERABLE_WORKSPACE_ROOT_ERROR_CODES.has(errnoCode(error))
+}
+
 export async function ensureWorkspaceRootExists(workspaceRoot: string): Promise<string> {
   const normalized = normalizeWorkspaceRoot(workspaceRoot)
   await mkdir(normalized, { recursive: true })
   return normalized
+}
+
+async function ensureSettingsWorkspaceRoot(settings: AppSettingsV1): Promise<AppSettingsV1> {
+  const workspaceRoot = normalizeWorkspaceRoot(settings.workspaceRoot)
+  try {
+    await ensureWorkspaceRootExists(workspaceRoot)
+    return settings.workspaceRoot === workspaceRoot ? settings : { ...settings, workspaceRoot }
+  } catch (error) {
+    const defaultWorkspaceRoot = normalizeWorkspaceRoot(DEFAULT_WORKSPACE_ROOT)
+    if (workspaceRoot === defaultWorkspaceRoot || !isRecoverableWorkspaceRootError(error)) throw error
+
+    console.warn('[kun-gui] Workspace root is unavailable; falling back to default workspace.', {
+      workspaceRoot,
+      defaultWorkspaceRoot,
+      code: errnoCode(error),
+      message: error instanceof Error ? error.message : String(error)
+    })
+
+    await ensureWorkspaceRootExists(defaultWorkspaceRoot)
+    return { ...settings, workspaceRoot: defaultWorkspaceRoot }
+  }
 }
 
 async function ensureWriteWorkspaceRootsExist(settings: AppSettingsV1): Promise<void> {
@@ -221,6 +251,14 @@ async function ensureClawChannelWorkspaceRootsExist(settings: AppSettingsV1): Pr
       await mkdir(conversationWorkspaceRoot, { recursive: true })
     }
   }
+}
+
+async function prepareSettingsDirectories(settings: AppSettingsV1): Promise<AppSettingsV1> {
+  const prepared = await ensureSettingsWorkspaceRoot(settings)
+  await ensureWriteWorkspaceRootsExist(prepared)
+  await ensureConversationWorkspaceRootExists(prepared)
+  await ensureClawChannelWorkspaceRootsExist(prepared)
+  return prepared
 }
 
 const defaultSettings = (): AppSettingsV1 => ({
@@ -313,11 +351,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function loadDefaultSettings(): Promise<AppSettingsV1> {
   const defaults = normalizeStoredSettings(defaultSettings())
-  await ensureWorkspaceRootExists(defaults.workspaceRoot)
-  await ensureWriteWorkspaceRootsExist(defaults)
-  await ensureConversationWorkspaceRootExists(defaults)
-  await ensureClawChannelWorkspaceRootsExist(defaults)
-  return defaults
+  return prepareSettingsDirectories(defaults)
 }
 
 async function writeInvalidSettingsBackup(path: string, raw: string): Promise<string | null> {
@@ -439,26 +473,20 @@ export class JsonSettingsStore {
     }
 
     const normalized = normalizeStoredSettings(buildMergedSettings(parsed as Partial<AppSettingsV1>))
-    await ensureWorkspaceRootExists(normalized.workspaceRoot)
-    await ensureWriteWorkspaceRootsExist(normalized)
-    await ensureConversationWorkspaceRootExists(normalized)
-    await ensureClawChannelWorkspaceRootsExist(normalized)
-    this.cache = normalized
-    if (sourcePath !== this.path) {
-      await this.save(normalized)
+    const prepared = await prepareSettingsDirectories(normalized)
+    this.cache = prepared
+    if (sourcePath !== this.path || prepared.workspaceRoot !== normalized.workspaceRoot) {
+      await this.save(prepared)
     }
     return this.cache
   }
 
   async save(data: AppSettingsV1): Promise<void> {
     const normalized = normalizeStoredSettings(data)
-    await ensureWorkspaceRootExists(normalized.workspaceRoot)
-    await ensureWriteWorkspaceRootsExist(normalized)
-    await ensureConversationWorkspaceRootExists(normalized)
-    await ensureClawChannelWorkspaceRootsExist(normalized)
-    this.cache = normalized
+    const prepared = await prepareSettingsDirectories(normalized)
+    this.cache = prepared
     await mkdir(dirname(this.path), { recursive: true })
-    await atomicWriteFile(this.path, serializeSettingsForDisk(normalized))
+    await atomicWriteFile(this.path, serializeSettingsForDisk(prepared))
   }
 
   async patch(partial: AppSettingsPatch): Promise<AppSettingsV1> {

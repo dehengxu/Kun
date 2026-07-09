@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
@@ -12,7 +12,27 @@ import {
 import { DEFAULT_GUI_UPDATE_CHANNEL } from '../shared/gui-update'
 import { JsonSettingsStore } from './settings-store'
 
+type SettingsStoreModule = typeof import('./settings-store')
+
+async function withMockedHome<T>(
+  homeDir: string,
+  run: (settingsStore: SettingsStoreModule) => Promise<T>
+): Promise<T> {
+  vi.resetModules()
+  vi.doMock('node:os', () => ({ homedir: () => homeDir }))
+  try {
+    return await run(await import('./settings-store'))
+  } finally {
+    vi.doUnmock('node:os')
+    vi.resetModules()
+  }
+}
+
 describe('JsonSettingsStore', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('defaults GUI updates to the stable channel for new settings', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
 
@@ -291,6 +311,58 @@ describe('JsonSettingsStore', () => {
 
     expect(loaded.workspaceRoot).toBe(workspaceRoot)
     expect((await stat(workspaceRoot)).isDirectory()).toBe(true)
+  })
+
+  it('falls back to the default code workspace when the configured workspace is unavailable on load', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
+    const homeDir = await mkdtemp(join(tmpdir(), 'ds-gui-home-'))
+    const blockedParent = join(userDataDir, 'disconnected-drive')
+    const unavailableWorkspaceRoot = join(blockedParent, 'project')
+    const settingsPath = join(userDataDir, 'kun-settings.json')
+    const defaultWorkspaceRoot = join(homeDir, '.kun', 'default_workspace')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    await writeFile(blockedParent, 'not a directory', 'utf8')
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 1,
+        workspaceRoot: unavailableWorkspaceRoot
+      }),
+      'utf8'
+    )
+
+    await withMockedHome(homeDir, async ({ JsonSettingsStore: Store }) => {
+      const store = new Store(userDataDir)
+      const loaded = await store.load()
+
+      expect(loaded.workspaceRoot).toBe(defaultWorkspaceRoot)
+      expect((await stat(defaultWorkspaceRoot)).isDirectory()).toBe(true)
+    })
+
+    const persisted = JSON.parse(await readFile(settingsPath, 'utf8')) as Record<string, unknown>
+    expect(persisted.workspaceRoot).toBe(defaultWorkspaceRoot)
+    expect(warn).toHaveBeenCalledWith(
+      '[kun-gui] Workspace root is unavailable; falling back to default workspace.',
+      expect.objectContaining({
+        workspaceRoot: unavailableWorkspaceRoot,
+        defaultWorkspaceRoot,
+        code: expect.stringMatching(/^(ENOENT|ENOTDIR|EACCES|EPERM)$/)
+      })
+    )
+  })
+
+  it('does not hide default code workspace creation failures', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-'))
+    const homeRoot = await mkdtemp(join(tmpdir(), 'ds-gui-home-parent-'))
+    const homeDir = join(homeRoot, 'home-is-a-file')
+
+    await writeFile(homeDir, 'not a directory', 'utf8')
+
+    await withMockedHome(homeDir, async ({ JsonSettingsStore: Store }) => {
+      const store = new Store(userDataDir)
+      await expect(store.load()).rejects.toThrow(/ENOTDIR|not a directory|mkdir/i)
+    })
   })
 
   it('migrates legacy deepseek-runtime agentProvider to Kun', async () => {

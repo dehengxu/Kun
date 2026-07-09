@@ -211,18 +211,31 @@ describe('installGuiUpdate', () => {
     const beforeInstall = vi.fn(() => new Promise<void>((resolve) => {
       finishCleanup = resolve
     }))
+    const setUpdateInstallQuitting = vi.fn()
 
-    module.initializeGuiUpdater(() => null, () => 'stable', beforeInstall)
+    module.initializeGuiUpdater(
+      () => null,
+      () => 'stable',
+      beforeInstall,
+      undefined,
+      setUpdateInstallQuitting
+    )
     updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
 
     const installing = module.installGuiUpdate()
     await Promise.resolve()
 
     expect(beforeInstall).toHaveBeenCalledTimes(1)
+    expect(setUpdateInstallQuitting).not.toHaveBeenCalled()
     expect(updater.quitAndInstall).not.toHaveBeenCalled()
 
     finishCleanup()
     await expect(installing).resolves.toEqual({ ok: true })
+    expect(setUpdateInstallQuitting).toHaveBeenCalledTimes(1)
+    expect(setUpdateInstallQuitting).toHaveBeenCalledWith(true)
+    expect(setUpdateInstallQuitting.mock.invocationCallOrder[0]).toBeLessThan(
+      updater.quitAndInstall.mock.invocationCallOrder[0]
+    )
     expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true)
   })
 
@@ -234,11 +247,22 @@ describe('installGuiUpdate', () => {
     const beforeInstall = vi.fn(() => new Promise<void>((resolve) => {
       finishCleanup = resolve
     }))
+    const setUpdateInstallQuitting = vi.fn()
 
-    module.initializeGuiUpdater(() => null, () => 'stable', beforeInstall)
+    module.initializeGuiUpdater(
+      () => null,
+      () => 'stable',
+      beforeInstall,
+      undefined,
+      setUpdateInstallQuitting
+    )
     updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
 
     nativeUpdater.emit('before-quit-for-update')
+    expect(setUpdateInstallQuitting).toHaveBeenCalledTimes(1)
+    expect(setUpdateInstallQuitting).toHaveBeenCalledWith(true)
+    expect(beforeInstall).not.toHaveBeenCalled()
+
     const installing = module.installGuiUpdate()
     await Promise.resolve()
 
@@ -247,7 +271,33 @@ describe('installGuiUpdate', () => {
 
     finishCleanup()
     await expect(installing).resolves.toEqual({ ok: true })
+    expect(setUpdateInstallQuitting).toHaveBeenCalledTimes(2)
+    expect(setUpdateInstallQuitting).toHaveBeenLastCalledWith(true)
     expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true)
+  })
+
+  it('clears the update quit marker when quitAndInstall throws synchronously', async () => {
+    const module = await import('./gui-updater')
+    const setUpdateInstallQuitting = vi.fn()
+    updater.quitAndInstall.mockImplementation(() => {
+      throw new Error('quit failed')
+    })
+
+    module.initializeGuiUpdater(
+      () => null,
+      () => 'stable',
+      undefined,
+      undefined,
+      setUpdateInstallQuitting
+    )
+    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+
+    await expect(module.installGuiUpdate()).resolves.toMatchObject({
+      ok: false,
+      code: 'install_failed',
+      message: 'quit failed'
+    })
+    expect(setUpdateInstallQuitting.mock.calls).toEqual([[true], [false]])
   })
 })
 

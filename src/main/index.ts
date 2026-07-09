@@ -81,6 +81,7 @@ import { expandHomePath } from './settings-store'
 import { RestartBudget, type KunRuntimeStatus } from './kun-runtime-supervisor'
 import { configureLogger, logError, logWarn, pruneOnStartup } from './logger'
 import { cleanupUnusedGitCheckpointsIfDue } from './services/git-checkpoint-service'
+import { resolveMainWindowCloseDecision } from './window-close-behavior'
 import { createClawRuntime, type ClawRuntime } from './claw-runtime'
 import { createScheduleRuntime, type ScheduleRuntime } from './schedule-runtime'
 import { createWorkflowRuntime, type WorkflowRuntime } from './workflow-runtime'
@@ -234,6 +235,7 @@ let tray: Tray | null = null
 let trayMenu: Menu | null = null
 let trayMenuOpenPromise: Promise<void> | null = null
 let isQuitting = false
+let isUpdateInstallQuitting = false
 let closeWindowPromptOpen = false
 let checkpointCleanupTimer: ReturnType<typeof setInterval> | null = null
 
@@ -252,6 +254,14 @@ function stopCheckpointCleanupTimer(): void {
     clearInterval(checkpointCleanupTimer)
     checkpointCleanupTimer = null
   }
+}
+
+function isAppQuitInProgress(): boolean {
+  return isQuitting || isUpdateInstallQuitting
+}
+
+function setUpdateInstallQuitting(active: boolean): void {
+  isUpdateInstallQuitting = active
 }
 
 async function runCheckpointCleanupIfDue(settings: AppSettingsV1): Promise<void> {
@@ -329,7 +339,8 @@ async function loadGuiUpdaterModule(): Promise<GuiUpdaterModule> {
             () => mainWindow,
             async () => (await store.load()).guiUpdate.channel,
             stopManagedRuntimesForQuit,
-            async () => (await store.load()).locale
+            async () => (await store.load()).locale,
+            setUpdateInstallQuitting
           )
           guiUpdaterInitialized = true
         }
@@ -609,11 +620,15 @@ async function promptWindowCloseAction(window: BrowserWindow): Promise<void> {
 }
 
 function handleMainWindowClose(window: BrowserWindow, event: Electron.Event): void {
-  if (isQuitting) return
-  if (appBehavior.closeAction === 'quit') return
+  const decision = resolveMainWindowCloseDecision({
+    closeAction: appBehavior.closeAction,
+    isQuitting,
+    isUpdateInstallQuitting
+  })
+  if (decision === 'allow') return
 
   event.preventDefault()
-  if (appBehavior.closeAction === 'tray') {
+  if (decision === 'hide-to-tray') {
     window.hide()
     return
   }
@@ -824,7 +839,7 @@ function handleUnexpectedKunExit(info: KunUnexpectedExitInfo): void {
 }
 
 async function superviseKunCrash(info: KunUnexpectedExitInfo): Promise<void> {
-  if (managedRuntimesStoppedForQuit || isQuitting) return
+  if (managedRuntimesStoppedForQuit || isAppQuitInProgress()) return
   const exitLabel = info.signal ? `signal ${info.signal}` : `code ${info.code ?? 'unknown'}`
   publishRuntimeStatus({
     state: 'crashed',
@@ -847,7 +862,7 @@ async function superviseKunCrash(info: KunUnexpectedExitInfo): Promise<void> {
     }
     let lastError = ''
     for (;;) {
-      if (managedRuntimesStoppedForQuit || isQuitting) return
+      if (managedRuntimesStoppedForQuit || isAppQuitInProgress()) return
       const verdict = runtimeRestartBudget.note()
       if (!verdict.allowed) {
         publishRuntimeStatus({
@@ -910,7 +925,7 @@ function stopRuntimeWatchdog(): void {
  */
 async function runtimeWatchdogTick(): Promise<void> {
   if (runtimeWatchdogTickInFlight) return
-  if (managedRuntimesStoppedForQuit || isQuitting) return
+  if (managedRuntimesStoppedForQuit || isAppQuitInProgress()) return
   if (
     supervisedRestartInFlight ||
     runtimeRestartPromise ||
