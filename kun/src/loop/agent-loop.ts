@@ -16,12 +16,11 @@ import { DEFAULT_APPROVAL_POLICY, DEFAULT_SANDBOX_MODE } from '../contracts/poli
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ApprovalGate } from '../ports/approval-gate.js'
-import type { UserInputGate, UserInputQuestion, UserInputResolution } from '../ports/user-input-gate.js'
+import type { UserInputGate } from '../ports/user-input-gate.js'
 import type { UsageService } from '../services/usage-service.js'
 import { TurnCapacityError, type TurnService } from '../services/turn-service.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { rewriteItemHistoryWithRetry } from '../services/history-commit-coordinator.js'
-import { awaitAbortableGate } from '../services/interactive-gate.js'
 import { withThreadStoreMutation } from '../services/thread-mutation-coordinator.js'
 import type { PipelineStage } from '../contracts/events.js'
 import type { RuntimeErrorSeverity } from '../contracts/errors.js'
@@ -66,7 +65,6 @@ import {
   makeAssistantReasoningItem,
   makeToolCallItem,
   makeToolResultItem,
-  makeUserInputItem,
   makeErrorItem
 } from '../domain/item.js'
 import { touchThread } from '../domain/thread.js'
@@ -111,6 +109,7 @@ import { healLoadedHistoryItems } from './history-healing.js'
 import { ModelStreamCollector } from './model-stream-collector.js'
 import { LoopTelemetry } from './loop-telemetry.js'
 import { collectParallelToolDispatchCandidates } from './tool-dispatch-policy.js'
+import { InteractiveToolBridge } from './interactive-tool-bridge.js'
 import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
 import {
   DESIGN_SVG_ANIMATE_TOOL_NAME,
@@ -451,6 +450,7 @@ export class AgentLoop {
   private readonly autoModelRoutes = new Map<string, AutoModelRouteSelection>()
   private readonly toolStormBreakers = new Map<string, ToolStormBreaker>()
   private readonly telemetry: LoopTelemetry
+  private readonly interactiveToolBridge: InteractiveToolBridge
   private readonly lastNoToolTextByTurn = new Map<string, string>()
   private readonly goalNoToolRecoveryStepsByTurn = new Map<string, number>()
   private readonly emptyPostToolRecoveryStepsByTurn = new Map<string, number>()
@@ -470,6 +470,14 @@ export class AgentLoop {
   constructor(opts: AgentLoopOptions) {
     this.opts = opts
     this.telemetry = new LoopTelemetry(opts.sessionStore)
+    this.interactiveToolBridge = new InteractiveToolBridge({
+      approvalGate: opts.approvalGate,
+      userInputGate: opts.userInputGate,
+      events: opts.events,
+      turns: opts.turns,
+      sessionStore: opts.sessionStore,
+      nowIso: opts.nowIso
+    })
     this.goalResume = new GoalResumeCoordinator({
       launch: (threadId) => this.launchGoalResumeTurn(threadId),
       getActiveGoalKey: async (threadId) => {
@@ -1265,7 +1273,14 @@ export class AgentLoop {
       awaitApproval: async () => 'allow',
       ...(userInputDisabled
         ? {}
-        : { awaitUserInput: (input) => this.awaitUserInput(threadId, turnId, input, signal) })
+        : {
+            awaitUserInput: (input) => this.interactiveToolBridge.awaitUserInput({
+              threadId,
+              turnId,
+              input,
+              signal
+            })
+          })
     }
     const tools = await this.opts.toolHost.listTools(toolContext)
     if (dedicatedSvgTurn) {
@@ -2176,47 +2191,22 @@ export class AgentLoop {
       ...(this.opts.runtimeDataDir ? { runtimeDataDir: this.opts.runtimeDataDir } : {}),
       ...(this.opts.artifactStore ? { artifactStore: this.opts.artifactStore } : {}),
       abortSignal: input.signal,
-      awaitApproval: async (approval) => {
-        // Arm the gate before publishing the event. Event subscribers can
-        // submit an approval synchronously, so publishing first can make the
-        // POST route observe an unknown id and return 404.
-        const pending = this.opts.approvalGate.request(approval)
-        const cancelPendingApproval = (reason: string): void => {
-          if (!this.opts.approvalGate.expire?.(approval.id, reason)) {
-            this.opts.approvalGate.decide(approval.id, 'deny', reason)
-          }
-        }
-        try {
-          await this.opts.events.record({
-            kind: 'approval_requested',
-            threadId: approval.threadId,
-            turnId: approval.turnId,
-            approvalId: approval.id,
-            toolName: approval.toolName,
-            status: 'pending',
-            approvalPolicy: input.approvalPolicy,
-            sandboxMode: input.sandboxMode,
-            summary: approval.summary
-          })
-        } catch (error) {
-          cancelPendingApproval('failed to publish approval request')
-          void pending.catch(() => undefined)
-          throw error
-        }
-        return awaitAbortableGate(
-          pending,
-          input.signal,
-          () => {
-            cancelPendingApproval('turn aborted while awaiting approval')
-          },
-          'approval wait aborted'
-        )
-      },
+      awaitApproval: (approval) => this.interactiveToolBridge.awaitApproval({
+        approval,
+        approvalPolicy: input.approvalPolicy,
+        sandboxMode: input.sandboxMode,
+        signal: input.signal
+      }),
       ...(input.userInputDisabled
         ? {}
         : {
             awaitUserInput: (inputRequest) =>
-              this.awaitUserInput(input.threadId, input.turnId, inputRequest, input.signal)
+              this.interactiveToolBridge.awaitUserInput({
+                threadId: input.threadId,
+                turnId: input.turnId,
+                input: inputRequest,
+                signal: input.signal
+              })
           })
     }
   }
@@ -2422,99 +2412,6 @@ export class AgentLoop {
       callId: input.call.callId,
       message
     })
-  }
-
-  private async awaitUserInput(
-    threadId: string,
-    turnId: string,
-    input: {
-      id: string
-      itemId: string
-      prompt: string
-      questions: UserInputQuestion[]
-    },
-    signal: AbortSignal
-  ): Promise<UserInputResolution> {
-    // Register before the item/event becomes observable. Otherwise a renderer
-    // that responds as soon as it receives `user_input_requested` races the
-    // gate registration and receives a false 404 from the input route.
-    const pending = this.opts.userInputGate.request({
-      id: input.id,
-      threadId,
-      turnId,
-      itemId: input.itemId,
-      prompt: input.prompt,
-      questions: input.questions
-    })
-    const item = makeUserInputItem({
-      id: input.itemId,
-      threadId,
-      turnId,
-      inputId: input.id,
-      prompt: input.prompt,
-      questions: input.questions
-    })
-    try {
-      await this.opts.turns.applyItem(threadId, item)
-      await this.opts.events.record({
-        kind: 'user_input_requested',
-        threadId,
-        turnId,
-        itemId: item.id,
-        inputId: input.id,
-        status: 'pending',
-        prompt: input.prompt,
-        questions: input.questions
-      })
-    } catch (error) {
-      this.opts.userInputGate.resolve(input.id, { status: 'cancelled' })
-      void pending.catch(() => undefined)
-      throw error
-    }
-
-    const resolution = await this.waitForUserInput(input, signal, pending)
-    await this.opts.turns.updateItem(threadId, item.id, {
-      status: resolution.status,
-      finishedAt: this.opts.nowIso(),
-      ...(resolution.status === 'submitted' ? { answers: resolution.answers } : {})
-    } as Partial<TurnItem>)
-    const alreadyRecorded = (await this.opts.sessionStore.loadEventsSince(threadId, 0)).some(
-      (event) => event.kind === 'user_input_resolved' && event.inputId === input.id
-    )
-    if (!alreadyRecorded) {
-      await this.opts.events.record({
-        kind: 'user_input_resolved',
-        threadId,
-        turnId,
-        itemId: item.id,
-        inputId: input.id,
-        status: resolution.status,
-        prompt: input.prompt,
-        questions: input.questions,
-        ...(resolution.status === 'submitted' ? { answers: resolution.answers } : {})
-      })
-    }
-    return resolution
-  }
-
-  private async waitForUserInput(
-    input: {
-      id: string
-      itemId: string
-      prompt: string
-      questions: UserInputQuestion[]
-    },
-    signal: AbortSignal,
-    pending: Promise<UserInputResolution>
-  ): Promise<UserInputResolution> {
-    return awaitAbortableGate(
-      pending,
-      signal,
-      () => {
-        this.opts.userInputGate.resolve(input.id, { status: 'cancelled' })
-      },
-      'cancelled while awaiting user input'
-    )
   }
 
   private async compactIfNeeded(

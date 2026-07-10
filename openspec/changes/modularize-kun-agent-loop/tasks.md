@@ -38,6 +38,8 @@
 
 - [x] 4.0 Extract pure tool-dispatch lane and homogeneous-batch policy without
   moving suppression, execution, result persistence, or event ordering.
+- [x] 4.0a Extract the interactive approval/user-input bridge while preserving
+  approval's event-only projection and user-input's item-plus-event lifecycle.
 - [ ] 4.1 Extract turn-context resolution while preserving model, policy,
   workspace, attachment, memory, skill, and tool-schema inputs.
 - [ ] 4.2 Extract tool execution service with existing approval, user-input,
