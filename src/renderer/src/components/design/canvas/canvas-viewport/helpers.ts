@@ -73,12 +73,19 @@ export function resolveSelectedImageAnnotationAction(
   if (viewport.containerWidth <= 0 || viewport.containerHeight <= 0) return null
 
   const bounds = shapeGeometry(shape).selrect
-  const scaleX = viewport.containerWidth / viewport.vbox.width
-  const scaleY = viewport.containerHeight / viewport.vbox.height
-  const shapeLeft = (bounds.x - viewport.vbox.x) * scaleX
-  const shapeTop = (bounds.y - viewport.vbox.y) * scaleY
-  const shapeRight = (bounds.x + bounds.width - viewport.vbox.x) * scaleX
-  const shapeBottom = (bounds.y + bounds.height - viewport.vbox.y) * scaleY
+  // The SVG uses its default preserveAspectRatio="xMidYMid meet" behavior.
+  // Mirror its uniform scale and centered letterboxing so this HTML overlay
+  // stays attached to the selected image in non-matching viewport ratios.
+  const scale = Math.min(
+    viewport.containerWidth / viewport.vbox.width,
+    viewport.containerHeight / viewport.vbox.height
+  )
+  const offsetX = (viewport.containerWidth - viewport.vbox.width * scale) / 2
+  const offsetY = (viewport.containerHeight - viewport.vbox.height * scale) / 2
+  const shapeLeft = offsetX + (bounds.x - viewport.vbox.x) * scale
+  const shapeTop = offsetY + (bounds.y - viewport.vbox.y) * scale
+  const shapeRight = offsetX + (bounds.x + bounds.width - viewport.vbox.x) * scale
+  const shapeBottom = offsetY + (bounds.y + bounds.height - viewport.vbox.y) * scale
   if (
     shapeRight < 0 ||
     shapeLeft > viewport.containerWidth ||

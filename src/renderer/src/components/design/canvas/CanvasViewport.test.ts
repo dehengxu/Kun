@@ -74,6 +74,31 @@ describe('CanvasViewport surface behavior', () => {
     })
   })
 
+  it('keeps the image annotation action attached when the SVG is vertically letterboxed', () => {
+    const doc = createEmptyDocument()
+    const image = createDefaultShape('image', 100, 100)
+    image.width = 200
+    image.height = 120
+    image.imageUrl = 'assets/image.png'
+    doc.objects[image.id] = { ...image, parentId: doc.rootId }
+    doc.objects[doc.rootId]!.children.push(image.id)
+
+    expect(
+      resolveSelectedImageAnnotationAction('design', doc, new Set([image.id]), {
+        vbox: { x: 0, y: 0, width: 500, height: 400 },
+        containerWidth: 500,
+        containerHeight: 700
+      })
+    ).toEqual({
+      shapeId: image.id,
+      left: 188,
+      top: 210,
+      width: 112,
+      height: 30,
+      placement: 'above'
+    })
+  })
+
   it('moves the selected image annotation action below when there is no room above', () => {
     const doc = createEmptyDocument()
     const image = createDefaultShape('image', 100, 20)

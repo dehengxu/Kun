@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
-  createImageAnnotationTextDraftAtCssPoint,
+  createImageAnnotationTextDraftAtRenderedPoint,
   createImageAnnotationTextOp,
   ImageAnnotationEditor,
   imageAnnotationTextNotes,
@@ -102,13 +102,15 @@ describe('ImageAnnotationEditor text annotations', () => {
 
   it('creates a text draft at the clicked canvas point', () => {
     expect(
-      createImageAnnotationTextDraftAtCssPoint({
+      createImageAnnotationTextDraftAtRenderedPoint({
         canvasWidth: 1000,
         canvasHeight: 800,
-        cssWidth: 500,
-        cssHeight: 400,
-        cssX: 60,
-        cssY: 48,
+        layoutWidth: 500,
+        layoutHeight: 400,
+        renderedWidth: 500,
+        renderedHeight: 400,
+        renderedX: 60,
+        renderedY: 48,
         canvasFontSize: 60
       })
     ).toEqual({
@@ -122,27 +124,55 @@ describe('ImageAnnotationEditor text annotations', () => {
     })
 
     expect(
-      createImageAnnotationTextDraftAtCssPoint({
+      createImageAnnotationTextDraftAtRenderedPoint({
         canvasWidth: 0,
         canvasHeight: 800,
-        cssWidth: 500,
-        cssHeight: 400,
-        cssX: 60,
-        cssY: 48,
+        layoutWidth: 500,
+        layoutHeight: 400,
+        renderedWidth: 500,
+        renderedHeight: 400,
+        renderedX: 60,
+        renderedY: 48,
         canvasFontSize: 60
       })
     ).toBeNull()
   })
 
+  it('keeps the input and canvas anchors aligned through the app UI zoom', () => {
+    const result = createImageAnnotationTextDraftAtRenderedPoint({
+      canvasWidth: 1000,
+      canvasHeight: 800,
+      layoutWidth: 500,
+      layoutHeight: 400,
+      renderedWidth: 410,
+      renderedHeight: 328,
+      renderedX: 49.2,
+      renderedY: 39.36,
+      canvasFontSize: 60
+    })
+
+    expect(result).toMatchObject({
+      cssX: 60,
+      cssY: 48,
+      x: 120,
+      y: 96,
+      cssFontSize: 30
+    })
+    expect((result?.cssX ?? 0) * (410 / 500)).toBeCloseTo(49.2)
+    expect((result?.cssY ?? 0) * (328 / 400)).toBeCloseTo(39.36)
+  })
+
   it('keeps the text anchor at the clicked point near canvas edges', () => {
     expect(
-      createImageAnnotationTextDraftAtCssPoint({
+      createImageAnnotationTextDraftAtRenderedPoint({
         canvasWidth: 1000,
         canvasHeight: 800,
-        cssWidth: 500,
-        cssHeight: 400,
-        cssX: 490,
-        cssY: 390,
+        layoutWidth: 500,
+        layoutHeight: 400,
+        renderedWidth: 500,
+        renderedHeight: 400,
+        renderedX: 490,
+        renderedY: 390,
         canvasFontSize: 60
       })
     ).toMatchObject({
@@ -156,13 +186,15 @@ describe('ImageAnnotationEditor text annotations', () => {
 
   it('only clamps text anchors that fall outside the canvas', () => {
     expect(
-      createImageAnnotationTextDraftAtCssPoint({
+      createImageAnnotationTextDraftAtRenderedPoint({
         canvasWidth: 1000,
         canvasHeight: 800,
-        cssWidth: 500,
-        cssHeight: 400,
-        cssX: -20,
-        cssY: 420,
+        layoutWidth: 500,
+        layoutHeight: 400,
+        renderedWidth: 500,
+        renderedHeight: 400,
+        renderedX: -20,
+        renderedY: 420,
         canvasFontSize: 60
       })
     ).toMatchObject({
