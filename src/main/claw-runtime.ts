@@ -45,7 +45,6 @@ import {
   extractSenderLabel,
   feishuSenderLabel,
   finalAssistantReplyText,
-  formatFeishuMirrorText,
   isRunningStatus,
   IM_COMPLETED_NO_TEXT_REPLY,
   IM_PROCESSING_ACK,
@@ -80,9 +79,10 @@ import {
   findClawConversation,
   setClawConversationModelSelection
 } from './claw-conversation-registry'
-import { authorizeImGeneratedFiles, deliverImGeneratedFiles } from './im-attachment-pipeline'
+import { authorizeImGeneratedFiles } from './im-attachment-pipeline'
 import { FeishuTransportAdapter } from './feishu-transport-adapter'
 import { WeixinTransportAdapter } from './weixin-transport-adapter'
+import { ImTransportRouter } from './im-transport-router'
 
 const CLAW_TELEGRAM_INBOUND_IMAGE_HEADING = '[Telegram inbound message]'
 
@@ -837,6 +837,7 @@ export class ClawRuntime {
   private serverKey = ''
   private readonly feishuTransport: FeishuTransportAdapter
   private readonly weixinTransport: WeixinTransportAdapter
+  private readonly imTransport: ImTransportRouter
   /** Channels with an in-flight first-message welcome delivery. */
   private readonly welcomeInFlight = new Set<string>()
   /** WeChat channels already greeted (or attempted) at connect time this run. */
@@ -858,6 +859,12 @@ export class ClawRuntime {
     this.weixinTransport = new WeixinTransportAdapter({
       send: deps.sendWeixinBridgeMessage,
       resolveAccountUserId: deps.resolveWeixinAccountUserId,
+      logError: deps.logError
+    })
+    this.imTransport = new ImTransportRouter({
+      feishu: this.feishuTransport,
+      weixin: this.weixinTransport,
+      telegram: deps.telegramRuntime,
       logError: deps.logError
     })
   }
@@ -1281,11 +1288,7 @@ export class ClawRuntime {
   ): void {
     const { channel, turnId } = input
     if (!channel || !turnId) return
-    const canPush =
-      (channel.provider === 'weixin' && this.weixinTransport.canSend(channel)) ||
-      (channel.provider === 'feishu' && this.feishuTransport.has(channel.id)) ||
-      (channel.provider === 'telegram' && Boolean(this.deps.telegramRuntime?.has(channel.id)))
-    if (!canPush) return
+    if (!this.imTransport.canPush(channel)) return
     const key = `${input.threadId}:${turnId}`
     if (this.pendingResultPushes.has(key)) return
     this.pendingResultPushes.add(key)
@@ -1348,88 +1351,20 @@ export class ClawRuntime {
     files: readonly ClawGeneratedFileV1[],
     context: Record<string, unknown>
   ): Promise<void> {
-    if (files.length === 0) return
-    const to = remoteSession?.chatId.trim() || channel.remoteSession?.chatId.trim() || ''
-    if (!to) return
-    if (channel.provider === 'weixin') {
-      await this.weixinTransport.sendFiles({
-        channel,
-        remoteSession,
-        files,
-        failureMessage: 'Failed to push delayed generated files over the WeChat bridge.',
-        context
-      })
-      return
-    }
-    if (channel.provider === 'feishu') {
-      const bridge = this.feishuTransport.get(channel.id)
-      if (!bridge) return
-      await this.sendFeishuGeneratedFiles(bridge, to, files, {}, {
-        ...context,
-        channelId: channel.id,
-        chatId: to,
-        purpose: 'agent-file-delayed'
-      })
-      return
-    }
-    if (channel.provider === 'telegram') {
-      if (!this.deps.telegramRuntime) return
-      for (const file of files) {
-        const result = await this.deps.telegramRuntime.sendFile(channel.id, to, file.path, file.fileName)
-        if (!result.ok) {
-          this.deps.logError('claw-telegram', 'Failed to push delayed generated file over Telegram.', {
-            ...context,
-            channelId: channel.id,
-            chatId: to,
-            filePath: file.path,
-            fileName: file.fileName,
-            message: result.message
-          })
-        }
-      }
-    }
+    await this.imTransport.sendFiles({ channel, remoteSession, files, context })
   }
-
   /** Pushes a standalone bridge message to the sender of an inbound IM. */
   private async pushImMessage(
     channel: ClawImChannelV1,
     remoteSession: Pick<ClawImRemoteSessionV1, 'chatId' | 'messageId' | 'threadId' | 'senderId' | 'senderName'> | undefined,
     text: string
   ): Promise<void> {
-    if (channel.provider === 'weixin') {
-      await this.weixinTransport.sendText({
-        channel,
-        remoteSession,
-        text,
-        failureMessage: 'Failed to push delayed result over the WeChat bridge.'
-      })
-      return
-    }
-    if (channel.provider === 'feishu') {
-      const bridge = this.feishuTransport.get(channel.id)
-      const to = remoteSession?.chatId.trim() || channel.remoteSession?.chatId.trim() || ''
-      if (!bridge || !to) return
-      await this.sendFeishuMessage(
-        bridge,
-        to,
-        { markdown: text },
-        {},
-        { purpose: 'agent-reply-delayed', channelId: channel.id, chatId: to }
-      )
-      return
-    }
-    if (channel.provider === 'telegram') {
-      const to = remoteSession?.chatId.trim() || channel.remoteSession?.chatId.trim() || ''
-      if (!to || !this.deps.telegramRuntime) return
-      const result = await this.deps.telegramRuntime.sendMessage(channel.id, to, text)
-      if (!result.ok) {
-        this.deps.logError('claw-telegram', 'Failed to push delayed result over Telegram.', {
-          channelId: channel.id,
-          chatId: to,
-          message: result.message
-        })
-      }
-    }
+    await this.imTransport.sendText({
+      channel,
+      remoteSession,
+      text,
+      context: { purpose: 'agent-reply-delayed', channelId: channel.id }
+    })
   }
 
   private resolveChannelWorkspaceRoot(settings: AppSettingsV1, channel?: ClawImChannelV1): string {
@@ -2079,31 +2014,7 @@ export class ClawRuntime {
     options: SendOptions,
     context: Record<string, unknown>
   ): Promise<{ sent: ClawGeneratedFileV1[]; failed: Array<{ file: ClawGeneratedFileV1; message: string }> }> {
-    return deliverImGeneratedFiles({
-      files,
-      upload: async (file) => {
-        await this.sendFeishuMessage(
-          bridge,
-          to,
-          { file: { source: file.path, fileName: file.fileName } },
-          options,
-          {
-            ...context,
-            purpose: 'agent-file',
-            filePath: file.path,
-            fileName: file.fileName
-          }
-        )
-      },
-      onFailure: (file, message) => {
-        this.deps.logError('claw-feishu', 'Failed to send Feishu / Lark file attachment', {
-          ...context,
-          filePath: file.path,
-          fileName: file.fileName,
-          message
-        })
-      }
-    })
+    return this.feishuTransport.sendFilesWithBridge(bridge, to, files, context, options)
   }
 
   private async recentGeneratedFilesForThread(
@@ -2162,16 +2073,6 @@ export class ClawRuntime {
     return null
   }
 
-  private async mirrorThreadMessageToWeixin(
-    channel: ClawImChannelV1,
-    conversation: ClawImConversationV1 | undefined,
-    threadId: string,
-    text: string,
-    direction: 'user' | 'assistant'
-  ): Promise<{ ok: true } | { ok: false; message: string }> {
-    return this.weixinTransport.mirror({ channel, conversation, threadId, text, direction })
-  }
-
   async mirrorThreadMessageToIm(
     threadId: string,
     text: string,
@@ -2182,55 +2083,14 @@ export class ClawRuntime {
     const settings = await this.deps.store.load()
     const target = this.findImChannelForThread(settings, threadId)
     if (!target) return { ok: false, message: 'Channel not found.' }
-    if (target.channel.provider === 'weixin') {
-      return this.mirrorThreadMessageToWeixin(
-        target.channel,
-        target.conversation,
-        threadId,
-        trimmed,
-        direction
-      )
-    }
-    if (target.channel.provider !== 'feishu') return { ok: false, message: 'Unsupported IM provider.' }
-    const channel = target.channel
-    const conversation =
-      target.conversation ??
-      [...channel.conversations]
-        .filter((item) => item.localThreadId.trim() === threadId.trim())
-        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0]
-    if (!conversation?.chatId.trim()) {
-      return { ok: false, message: 'No target Feishu / Lark conversation is available yet.' }
-    }
-    const bridge = this.feishuTransport.get(channel.id)
-    if (!bridge) {
-      return { ok: false, message: 'Feishu / Lark bridge is not connected.' }
-    }
-    try {
-      await this.sendFeishuMessage(
-        bridge,
-        conversation.chatId,
-        formatFeishuMirrorText(trimmed, direction),
-        {},
-        {
-          purpose: 'mirror',
-          threadId,
-          direction,
-          channelId: channel.id,
-          chatId: conversation.chatId
-        }
-      )
-      return { ok: true }
-    } catch (error) {
-      const message = errorMessage(error)
-      this.deps.logError('claw-feishu', 'Failed to mirror Claw message to Feishu / Lark', {
-        message,
-        threadId,
-        direction
-      })
-      return { ok: false, message }
-    }
+    return this.imTransport.mirror({
+      channel: target.channel,
+      conversation: target.conversation,
+      threadId,
+      text: trimmed,
+      direction
+    })
   }
-
   async mirrorThreadMessageToFeishu(
     threadId: string,
     text: string,

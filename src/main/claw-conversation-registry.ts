@@ -126,6 +126,12 @@ export function bindClawConversationToThread(input: {
     conversations = currentConversation
       ? conversations.map((entry) => entry.id === currentConversation.id ? nextConversation : entry)
       : [...conversations, nextConversation]
+  } else if (currentConversation) {
+    conversations = conversations.map((entry) =>
+      entry.id === currentConversation.id
+        ? { ...entry, localThreadId: input.threadId, updatedAt: input.now }
+        : entry
+    )
   }
   return {
     ...input.channel,

@@ -92,6 +92,28 @@ describe('Claw conversation registry', () => {
     })
   })
 
+  it('binds a directly selected conversation when no remote session accompanies a command', () => {
+    const existing = conversation()
+    const next = bindClawConversationToThread({
+      channel: channel([existing]),
+      conversation: existing,
+      threadId: 'thread_selected',
+      workspaceRoot: '',
+      providerId: 'provider_default',
+      model: 'model_default',
+      now: NOW,
+      createId: () => 'unused'
+    })
+    expect(next.threadId).toBe('thread_selected')
+    expect(next.conversations[0]).toMatchObject({
+      id: existing.id,
+      localThreadId: 'thread_selected',
+      providerId: 'provider_existing',
+      model: 'model_existing',
+      updatedAt: NOW
+    })
+  })
+
   it('creates and clears one binding without mutating another conversation', () => {
     const other = conversation({ id: 'conv_other', chatId: 'chat_other', remoteThreadId: '' })
     const bound = bindClawConversationToThread({

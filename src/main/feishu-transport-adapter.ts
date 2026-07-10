@@ -9,6 +9,8 @@ import {
   type SendResult
 } from '@larksuiteoapi/node-sdk'
 import type { AppSettingsV1, ClawImChannelV1 } from '../shared/app-settings'
+import type { ClawGeneratedFileV1 } from '../shared/app-settings'
+import { deliverImGeneratedFiles, type ImAttachmentDeliveryResult } from './im-attachment-pipeline'
 
 export type FeishuTransportAdapterDeps = {
   logError: (category: string, message: string, detail?: unknown) => void
@@ -81,6 +83,65 @@ export class FeishuTransportAdapter {
         throw fallbackError
       }
     }
+  }
+
+  async sendText(
+    channelId: string,
+    to: string,
+    text: string,
+    context: Record<string, unknown> = {}
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    const bridge = this.get(channelId)
+    if (!bridge) return { ok: false, message: 'Feishu / Lark bridge is not connected.' }
+    try {
+      await this.send(bridge, to, { markdown: text }, {}, context)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async sendFiles(
+    channelId: string,
+    to: string,
+    files: readonly ClawGeneratedFileV1[],
+    context: Record<string, unknown> = {},
+    options: SendOptions = {}
+  ): Promise<ImAttachmentDeliveryResult> {
+    const bridge = this.get(channelId)
+    if (!bridge) {
+      return {
+        sent: [],
+        failed: files.map((file) => ({ file, message: 'Feishu / Lark bridge is not connected.' }))
+      }
+    }
+    return this.sendFilesWithBridge(bridge, to, files, context, options)
+  }
+
+  async sendFilesWithBridge(
+    bridge: LarkChannel,
+    to: string,
+    files: readonly ClawGeneratedFileV1[],
+    context: Record<string, unknown> = {},
+    options: SendOptions = {}
+  ): Promise<ImAttachmentDeliveryResult> {
+    return deliverImGeneratedFiles({
+      files,
+      upload: async (file) => {
+        await this.send(
+          bridge,
+          to,
+          { file: { source: file.path, fileName: file.fileName } },
+          options,
+          { ...context, purpose: 'agent-file', filePath: file.path, fileName: file.fileName }
+        )
+      },
+      onFailure: (file, message) => this.deps.logError(
+        'claw-feishu',
+        'Failed to send Feishu / Lark file attachment',
+        { ...context, filePath: file.path, fileName: file.fileName, message }
+      )
+    })
   }
 
   async sync(settings: AppSettingsV1): Promise<void> {

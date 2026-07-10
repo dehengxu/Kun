@@ -43,7 +43,7 @@
 - [x] 4.4 Extract Feishu transport adapter.
 - [x] 4.5 Extract Telegram transport adapter.
 - [x] 4.6 Extract Weixin transport adapter and legacy session compatibility.
-- [ ] 4.7 Reduce `ClawRuntime` to channel coordination and remove platform branches
+- [x] 4.7 Reduce `ClawRuntime` to channel coordination and remove platform branches
   from common conversation logic.
 
 ## 5. Renderer event projection
