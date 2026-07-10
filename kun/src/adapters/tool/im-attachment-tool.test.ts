@@ -28,20 +28,28 @@ describe('send_im_attachment tool', () => {
     await writeFile(filePath, 'hello')
     try {
       const host = new LocalToolHost({ tools: [createSendImAttachmentLocalTool()] })
+      expect(createSendImAttachmentLocalTool()).toMatchObject({
+        policy: 'on-request',
+        toolKind: 'command_execution',
+        requiresExplicitApproval: true
+      })
 
       await expect(host.listTools(baseContext(workspaceRoot, true)))
         .resolves.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'send_im_attachment' })]))
       await expect(host.listTools(baseContext(workspaceRoot, false)))
         .resolves.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'send_im_attachment' })]))
 
+      const context = baseContext(workspaceRoot, true)
       const result = await host.execute(
         {
           callId: 'call_attachment',
           toolName: 'send_im_attachment',
           arguments: { path: 'out/hello.txt' }
         },
-        baseContext(workspaceRoot, true)
+        context
       )
+
+      expect(context.awaitApproval).toHaveBeenCalledTimes(1)
 
       expect(result.item).toMatchObject({
         kind: 'tool_result',
@@ -114,6 +122,35 @@ describe('send_im_attachment tool', () => {
     } finally {
       await rm(workspaceRoot, { recursive: true, force: true })
       await rm(outsideRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('requires an explicit approval even under the auto policy', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'kun-im-attachment-tool-'))
+    await writeFile(join(workspaceRoot, 'report.txt'), 'sensitive report')
+    try {
+      const host = new LocalToolHost({ tools: [createSendImAttachmentLocalTool()] })
+      const context = baseContext(workspaceRoot, true)
+      context.awaitApproval = vi.fn(async () => 'deny' as const)
+
+      const result = await host.execute(
+        {
+          callId: 'call_attachment_denied',
+          toolName: 'send_im_attachment',
+          arguments: { path: 'report.txt' }
+        },
+        context
+      )
+
+      expect(context.awaitApproval).toHaveBeenCalledTimes(1)
+      expect(result.item).toMatchObject({
+        kind: 'tool_result',
+        toolName: 'send_im_attachment',
+        isError: true,
+        output: { code: 'approval_denied' }
+      })
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true })
     }
   })
 })

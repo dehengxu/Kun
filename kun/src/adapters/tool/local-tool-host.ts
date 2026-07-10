@@ -50,6 +50,12 @@ export type LocalTool = {
    */
   policy: 'auto' | 'on-request' | 'suggest' | 'never' | 'untrusted'
   /**
+   * Require an interactive user decision even when the thread otherwise uses
+   * `approvalPolicy: 'auto'`. Reserve this for irreversible external effects
+   * such as sending workspace data to a third-party chat channel.
+   */
+  requiresExplicitApproval?: boolean
+  /**
    * Optional gating predicate. When present, the tool is only listed
    * and only executed when `shouldAdvertise` returns true for the
    * active turn context. Use this for mode/plan-only tools such as
@@ -183,7 +189,10 @@ export class LocalToolHost implements ToolHost {
         approved: false
       }
     }
-    const needsApproval = !preHooks.autoApproved && this.requiresApproval(tool, activeCall, context)
+    // A configured hook may auto-approve ordinary tool calls, but it must not
+    // bypass an explicit user decision for an external side effect.
+    const needsApproval = tool.requiresExplicitApproval ||
+      (!preHooks.autoApproved && this.requiresApproval(tool, activeCall, context))
     if (needsApproval) {
       const approvalId = `appr_${context.threadId}_${context.turnId}_${activeCall.callId}`
       const approval: ApprovalRequest = createApprovalRequest({
@@ -389,7 +398,8 @@ export class LocalToolHost implements ToolHost {
       inputSchema: tool.inputSchema,
       toolKind: tool.toolKind ?? 'tool_call',
       execute: tool.execute,
-      ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {})
+      ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {}),
+      ...(tool.requiresExplicitApproval ? { requiresExplicitApproval: true } : {})
     }
   }
 }

@@ -93,8 +93,12 @@ export function createSendImAttachmentLocalTool(): LocalTool {
       },
       additionalProperties: false
     },
-    policy: 'auto',
-    toolKind: 'tool_call',
+    // This result is consumed by the IM bridge and uploads workspace bytes to
+    // an external chat. It must never be silently allowed by a thread's
+    // general auto policy.
+    policy: 'on-request',
+    toolKind: 'command_execution',
+    requiresExplicitApproval: true,
     execute: async (args, context) => withToolBoundary(async () => {
       if (context.imContext !== true) {
         return {
