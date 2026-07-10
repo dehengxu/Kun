@@ -86,7 +86,6 @@ import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import {
   hasHooksForPhase,
   runObserverHooks,
-  runUserPromptSubmitHooks,
   type ResolvedHook
 } from '../hooks/hook-engine.js'
 import {
@@ -134,6 +133,12 @@ import {
   turnHasUnverifiedSourceChanges,
   verificationSuggestionInstruction
 } from './plan-mode.js'
+import {
+  recordLifecycleHookWarnings,
+  runTurnEndLifecycleHooks,
+  runTurnStartLifecycleHooks,
+  type TurnLifecycleHookDeps
+} from './turn-lifecycle-hooks.js'
 import {
   buildRuntimeContextInstruction,
   shouldInjectInitialRuntimeContext
@@ -621,7 +626,7 @@ export class AgentLoop {
         this.toolStormBreakers.set(turnId, new ToolStormBreaker(this.opts.toolStorm))
       }
       await this.recordPipelineStage(threadId, turnId, 'pre_start')
-      const denial = await this.runTurnStartLifecycleHooks(threadId, turnId)
+      const denial = await runTurnStartLifecycleHooks(this.lifecycleHookDeps(), { threadId, turnId })
       if (denial) {
         await this.opts.events.record({
           kind: 'error',
@@ -716,91 +721,23 @@ export class AgentLoop {
       this.svgCompletionRecoveryStepsByTurn.delete(turnId)
       this.turnFailures.delete(turnId)
       this.promptTokenPressure.delete(threadId)
-      await this.runTurnEndHooks(threadId, turnId, finalStatus ?? 'failed', finalError)
-    }
-  }
-
-  /**
-   * TurnStart (observe-only) then UserPromptSubmit hooks. Returns the
-   * denial message when a UserPromptSubmit hook blocks the turn.
-   * Accepted `additionalContext` is persisted as an extra user message
-   * so replays and the prompt cache see a stable history.
-   */
-  private async runTurnStartLifecycleHooks(threadId: string, turnId: string): Promise<string | undefined> {
-    const hooks = this.opts.hooks
-    const hasStart = hasHooksForPhase(hooks, 'TurnStart')
-    const hasSubmit = hasHooksForPhase(hooks, 'UserPromptSubmit')
-    if (!hasStart && !hasSubmit) return undefined
-    const turn = await this.opts.turns.getTurn(threadId, turnId)
-    const thread = await this.opts.threadStore.get(threadId)
-    const payload = {
-      threadId,
-      turnId,
-      prompt: turn?.prompt ?? '',
-      ...(thread?.workspace ? { workspace: thread.workspace } : {})
-    }
-    if (hasStart) {
-      const started = await runObserverHooks(hooks, { phase: 'TurnStart', ...payload })
-      await this.recordHookWarnings(threadId, turnId, started.warnings)
-    }
-    if (!hasSubmit) return undefined
-    const submit = await runUserPromptSubmitHooks(hooks, payload)
-    await this.recordHookWarnings(threadId, turnId, submit.warnings)
-    if (submit.denied) return submit.denied
-    if (submit.additionalContext.length > 0) {
-      const now = this.opts.nowIso()
-      const item: TurnItem = {
-        id: this.opts.ids.next('item_hook'),
-        turnId,
-        threadId,
-        role: 'user',
-        status: 'completed',
-        createdAt: now,
-        finishedAt: now,
-        kind: 'user_message',
-        text: `<hook-context>\n${submit.additionalContext.join('\n\n')}\n</hook-context>`
-      }
-      await this.opts.turns.applyItem(threadId, item)
-    }
-    return undefined
-  }
-
-  /** Observe-only TurnEnd hooks; run after the turn is finalized and must never throw. */
-  private async runTurnEndHooks(
-    threadId: string,
-    turnId: string,
-    status: 'completed' | 'failed' | 'aborted',
-    error?: string
-  ): Promise<void> {
-    if (!hasHooksForPhase(this.opts.hooks, 'TurnEnd')) return
-    try {
-      const outcome = await runObserverHooks(this.opts.hooks, {
-        phase: 'TurnEnd',
+      await runTurnEndLifecycleHooks(this.lifecycleHookDeps(), {
         threadId,
         turnId,
-        status,
-        ...(error ? { error } : {})
+        status: finalStatus ?? 'failed',
+        ...(finalError ? { error: finalError } : {})
       })
-      await this.recordHookWarnings(threadId, turnId, outcome.warnings)
-    } catch {
-      // Observe-only: a TurnEnd hook must never break turn cleanup.
     }
   }
 
-  private async recordHookWarnings(
-    threadId: string,
-    turnId: string,
-    warnings: readonly string[]
-  ): Promise<void> {
-    for (const message of warnings) {
-      await this.opts.events.record({
-        kind: 'error',
-        threadId,
-        turnId,
-        message,
-        code: 'hook_warning',
-        severity: 'warning'
-      })
+  private lifecycleHookDeps(): TurnLifecycleHookDeps {
+    return {
+      hooks: this.opts.hooks,
+      threadStore: this.opts.threadStore,
+      turns: this.opts.turns,
+      events: this.opts.events,
+      ids: this.opts.ids,
+      nowIso: this.opts.nowIso
     }
   }
 
@@ -2683,7 +2620,7 @@ export class AgentLoop {
         reason: String(plan.reason),
         mode: String(plan.mode)
       })
-      await this.recordHookWarnings(threadId, turnId, observed.warnings)
+      await recordLifecycleHookWarnings(this.opts.events, { threadId, turnId }, observed.warnings)
     }
     const summaryItemId = this.opts.ids.next('compaction')
     const committed = await rewriteItemHistoryWithRetry<{
