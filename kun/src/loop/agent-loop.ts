@@ -1,7 +1,4 @@
-import { dirname } from 'node:path'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { randomBytes } from 'node:crypto'
-import type { ModelClient, ModelToolSpec } from '../ports/model-client.js'
+import type { ModelClient } from '../ports/model-client.js'
 import type { AgentSdkRuntime } from '../runtime/agent-sdk/agent-sdk-runtime.js'
 import type {
   ToolHost,
@@ -17,13 +14,10 @@ import type { UserInputGate } from '../ports/user-input-gate.js'
 import type { UsageService } from '../services/usage-service.js'
 import type { TurnService, TurnSettlement } from '../services/turn-service.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
-import { rewriteItemHistoryWithRetry } from '../services/history-commit-coordinator.js'
 import { ThreadItemProjectionService } from '../services/thread-item-projection.js'
-import { withThreadStoreMutation } from '../services/thread-mutation-coordinator.js'
 import type { PipelineStage } from '../contracts/events.js'
 import type { IdGenerator } from '../ports/id-generator.js'
 import type { ImmutablePrefix } from '../cache/immutable-prefix.js'
-import type { CacheRequestSignature } from '../cache/cache-diagnostics.js'
 import type {
   ModelRoundOutcome,
   ToolDispatchInput,
@@ -32,35 +26,17 @@ import type {
   TurnExecutionStatus
 } from './turn-execution-types.js'
 import { ContextCompactor } from './context-compactor.js'
-import {
-  DESIGN_MODE_INSTRUCTION,
-  SVG_ARTIFACT_MODE_INSTRUCTION
-} from './design-mode.js'
-import { effectiveHistoryAfterLatestCompaction } from './compaction-history.js'
 import type { RolesConfig } from '../config/kun-config.js'
 import { InflightTracker } from './inflight-tracker.js'
 import { SteeringQueue } from './steering-queue.js'
 import {
-  createImmutablePrefix,
-  shouldVerifyImmutablePrefix,
-  verifyImmutablePrefix
+  createImmutablePrefix
 } from '../cache/immutable-prefix.js'
 import {
-  detectVolatilePrefixContent,
-  type PrefixVolatilityFinding
-} from '../cache/prefix-volatility.js'
-import { buildToolCatalogFingerprint } from '../cache/tool-catalog-fingerprint.js'
-import {
   makeUserItem,
-  makeAssistantTextItem,
-  makeAssistantReasoningItem,
   makeErrorItem
 } from '../domain/item.js'
-import { memoryPreview } from '../shared/memory-preview.js'
-import { repairModelHistoryItems } from '../domain/model-history-repair.js'
-import type { TurnItem } from '../contracts/items.js'
-import type { ThreadRecord } from '../contracts/threads.js'
-import { modelCapabilitiesForModel, type ContextCompactionConfig } from './model-context-profile.js'
+import type { ContextCompactionConfig } from './model-context-profile.js'
 import type { SkillRuntime } from '../skills/skill-runtime.js'
 import type { InstructionRuntime } from '../instructions/instruction-runtime.js'
 import type { AttachmentStore } from '../attachments/attachment-store.js'
@@ -68,72 +44,36 @@ import type { MemoryStore } from '../memory/memory-store.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { ResolvedHook } from '../hooks/hook-engine.js'
 import type { TokenEconomyConfig } from './token-economy.js'
-import {
-  rehydrateGeneratedImagesForForward,
-  MAX_FORWARDED_GENERATED_IMAGES
-} from './tool-result-image.js'
-import { composeModelRequest } from './model-request-composer.js'
+import { ModelStepService, type ModelStepServiceDeps } from './model-step-service.js'
 import { ModelRoutingService } from './model-routing-service.js'
 import { HistoryCompactionService } from './history-compaction-service.js'
 import { ToolStormBreaker, type ToolStormBreakerOptions } from './tool-storm-breaker.js'
-import { healLoadedHistoryItems } from './history-healing.js'
 import { LoopTelemetry } from './loop-telemetry.js'
 import { ModelRoundEngine } from './model-round-engine.js'
-import { modelClientDiagnostics, sanitizeProviderBaseUrl } from './model-client-diagnostics.js'
-import { memoryInstructions } from './memory-instructions.js'
+import { sanitizeProviderBaseUrl } from './model-client-diagnostics.js'
 import { InteractiveToolBridge } from './interactive-tool-bridge.js'
-import { TurnContextResolver, resolveTurnModeContext } from './turn-context-resolver.js'
+import { TurnContextResolver } from './turn-context-resolver.js'
 import { TurnFinalizer, type TurnFinalizationRequest } from './turn-finalizer.js'
 import { normalizeTurnLimits, type TurnLimitsConfig } from './turn-limits.js'
-import {
-  svgArtifactCompletionState
-} from './svg-artifact-completion.js'
 import { RoundOutcomeCoordinator } from './round-outcome-coordinator.js'
 import { ThreadTitleService } from './thread-title-service.js'
 import { TurnBudgetGate } from './turn-budget-gate.js'
 import {
-  TurnAttachmentService,
-  attachmentRequestPipelineDetails,
-  imageGenerationReferenceInstructions
+  TurnAttachmentService
 } from './turn-attachment-service.js'
 import { createToolExecutionContext } from './tool-context-factory.js'
 import { ToolExecutionService } from './tool-execution-service.js'
 import { ToolCallDispatcher } from './tool-call-dispatcher.js'
-import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
-import {
-  DESIGN_SVG_ANIMATE_TOOL_NAME,
-  DESIGN_SVG_EDIT_TOOL_NAME,
-  DESIGN_SVG_VALIDATE_TOOL_NAME
-} from '../adapters/tool/design-svg-tool.js'
-import { TODO_LIST_TOOL_NAME, TODO_WRITE_TOOL_NAME } from '../adapters/tool/todo-tools.js'
-import { resolveWorkspacePath, shellRuntimeInstruction } from '../adapters/tool/builtin-tool-utils.js'
-import { VERIFY_CHANGES_TOOL_NAME } from '../adapters/tool/builtin-verify-tool.js'
-import { buildToolPreferenceInstruction } from '../prompt/kun-system-prompt.js'
 import {
   GoalTurnCoordinator,
   type GoalElapsedTimer,
   type GoalTurnCoordinatorOptions
 } from './goal-turn-coordinator.js'
 import {
-  PLAN_MODE_INSTRUCTION,
-  resolvePlanModeToolSpecs,
-  turnHasUnverifiedSourceChanges,
-  verificationSuggestionInstruction
-} from './plan-mode.js'
-import {
   runTurnEndLifecycleHooks,
   runTurnStartLifecycleHooks,
   type TurnLifecycleHookDeps
 } from './turn-lifecycle-hooks.js'
-import {
-  buildRuntimeContextInstruction,
-  shouldInjectInitialRuntimeContext
-} from './runtime-context.js'
-import {
-  emptyPostToolRecoveryInstruction,
-  hasSuccessfulCreatePlanResult,
-  userInputUnavailableInstruction
-} from './continuation-instructions.js'
 export {
   PLAN_MODE_INSTRUCTION,
   isPlanClarifyingQuestion,
@@ -286,6 +226,7 @@ export class AgentLoop {
   private readonly threadItems: ThreadItemProjectionService
   private readonly historyCompaction: HistoryCompactionService
   private readonly modelRoundEngine: ModelRoundEngine
+  private readonly modelSteps: ModelStepService
   private readonly roundOutcome: RoundOutcomeCoordinator
   private readonly threadTitle: ThreadTitleService
   private readonly budgetGate: TurnBudgetGate
@@ -401,18 +342,38 @@ export class AgentLoop {
       ...(opts.blockedSkillIds ? { blockedSkillIds: opts.blockedSkillIds } : {}),
       ...(opts.runtimeDataDir ? { runtimeDataDir: opts.runtimeDataDir } : {})
     })
-  }
-
-  /** Atomically read and update one thread with the services that share this store. */
-  private async mutateThread<T>(
-    threadId: string,
-    operation: (thread: ThreadRecord) => T | Promise<T>
-  ): Promise<T | null> {
-    return withThreadStoreMutation<T | null>(this.opts.threadStore, threadId, async () => {
-      const current = await this.opts.threadStore.get(threadId)
-      if (!current) return null
-      return operation(current)
-    })
+    const modelStepDeps: ModelStepServiceDeps = {
+      threadStore: opts.threadStore,
+      sessionStore: opts.sessionStore,
+      turns: opts.turns,
+      events: opts.events,
+      model: opts.model,
+      compactor: opts.compactor,
+      prefix: opts.prefix,
+      ids: opts.ids,
+      nowIso: opts.nowIso,
+      get modelCapabilities() { return opts.modelCapabilities },
+      get activePlanContext() { return opts.activePlanContext },
+      get tokenEconomy() { return opts.tokenEconomy },
+      get toolArgumentRepair() { return opts.toolArgumentRepair },
+      get turnLimits() { return opts.turnLimits },
+      modelRouting: this.modelRouting,
+      budgetGate: this.budgetGate,
+      goalTurns: this.goalTurns,
+      threadItems: this.threadItems,
+      turnContextResolver: this.turnContextResolver,
+      telemetry: this.telemetry,
+      historyCompaction: this.historyCompaction,
+      turnAttachments: this.turnAttachments,
+      modelRoundEngine: this.modelRoundEngine,
+      roundOutcome: this.roundOutcome,
+      recordPipelineStage: (threadId, turnId, stage, details) =>
+        this.recordPipelineStage(threadId, turnId, stage, details),
+      recordToolCatalogDrift: (input) => this.recordToolCatalogDrift(input),
+      recordTokenEconomySavings: (input) => this.recordTokenEconomySavings(input),
+      rememberFailure: (turnId, failure) => this.rememberTurnFailure(turnId, failure)
+    }
+    this.modelSteps = new ModelStepService(modelStepDeps)
   }
 
   /** Cancel any pending goal auto-resume timers (called on runtime shutdown). */
@@ -717,439 +678,7 @@ export class AgentLoop {
     stepIndex = 0,
     maxToolCallsPerStep = normalizeTurnLimits(this.opts.turnLimits).maxToolCallsPerStep
   ): Promise<ModelRoundOutcome> {
-    if (shouldVerifyImmutablePrefix()) {
-      verifyImmutablePrefix(this.opts.prefix)
-    }
-    const [thread, turn] = await Promise.all([
-      this.opts.threadStore.get(threadId),
-      this.opts.turns.getTurn(threadId, turnId)
-    ])
-    // A delete/interrupt can win while a model step is waiting for its prior
-    // I/O. Do not fall back to empty workspace/default settings: that would
-    // let a stale continuation issue a new request or dispatch a tool after
-    // its owning thread/turn no longer exists.
-    if (signal.aborted || !thread || !turn) return 'aborted'
-    const modeContext = resolveTurnModeContext({
-      turn,
-      workspace: thread.workspace,
-      threadMode: thread.mode,
-      ...(this.opts.activePlanContext ? { fallbackPlanContext: this.opts.activePlanContext } : {})
-    })
-    const { dedicatedSvgTurn, activePlanContext } = modeContext
-    await this.recordPipelineStage(threadId, turnId, 'input_received', { stepIndex })
-    const budgetGate = await this.budgetGate.check(thread, threadId, turnId)
-    if (budgetGate === 'blocked') {
-      // A cost-budget stop is a deliberate cap, not an interrupted goal turn:
-      // suppress goal auto-resume so it isn't relaunched straight back into
-      // the same exhausted budget.
-      this.goalTurns.suppressResume(turnId)
-      if (dedicatedSvgTurn) {
-        const persistedCompletion = svgArtifactCompletionState(
-          await this.opts.sessionStore.loadItems(threadId),
-          turnId
-        )
-        if (persistedCompletion.validationAfterMutation) return 'stop'
-        this.rememberTurnFailure(turnId, {
-          error: 'Dedicated SVG artifact turn could not satisfy its completion gate before the budget was exhausted.',
-          code: 'svg_completion_budget_blocked',
-          severity: 'error'
-        })
-        return 'failed'
-      }
-      return 'stop'
-    }
-    const loadedItems = await this.opts.sessionStore.loadItems(threadId)
-    // Heal (and possibly rewrite) on-disk history once per turn: within a
-    // turn the loop only appends well-formed items, and healing's deep
-    // change detection costs two full-history stringifies per call.
-    let historyItems: TurnItem[] = loadedItems
-    if (stepIndex === 0) {
-      const healing = await rewriteItemHistoryWithRetry({
-        sessionStore: this.opts.sessionStore,
-        threadId,
-        maxAttempts: 2,
-        build: (snapshot) => {
-          const healed = healLoadedHistoryItems(snapshot.items)
-          return { changed: healed.changed, items: healed.items, value: undefined }
-        }
-      })
-      if (healing.status === 'applied') {
-        await this.threadItems.syncFromSession(threadId)
-        historyItems = healing.items
-      } else if (healing.status === 'unchanged') {
-        historyItems = healing.items
-      } else {
-        // A later step will retry persistence. Use a locally healed view now
-        // rather than letting one malformed legacy record poison this request.
-        historyItems = healLoadedHistoryItems(
-          await this.opts.sessionStore.loadItems(threadId)
-        ).items
-      }
-    }
-    await this.recordPipelineStage(
-      threadId,
-      turnId,
-      'input_cached',
-      prefixVolatilityStageDetails(detectVolatilePrefixContent(this.opts.prefix))
-    )
-    if (stepIndex > 0) {
-      const toolResultCount = historyItems.filter(
-        (item) => item.turnId === turnId && item.kind === 'tool_result'
-      ).length
-      await this.opts.events.record({
-        kind: 'tool_result_upload_wait',
-        threadId,
-        turnId,
-        status: 'waiting',
-        toolResultCount
-      })
-    }
-    const items = repairModelHistoryItems(
-      effectiveHistoryAfterLatestCompaction(historyItems)
-    )
-    const providerId = turn?.providerId?.trim() || thread?.providerId?.trim()
-    const modelRoute = await this.modelRouting.resolve({
-      threadId,
-      turnId,
-      latestRequest: turn?.prompt ?? '',
-      items,
-      signal,
-      ...(providerId ? { providerId } : {}),
-      reasoningEffort: turn?.reasoningEffort,
-      candidates: [turn?.model, thread?.model, this.opts.model.model]
-    })
-    await this.recordPipelineStage(threadId, turnId, 'input_routed', {
-      model: modelRoute.model,
-      ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {})
-    })
-    const model = modelRoute.model
-    const modelCapabilities = this.opts.modelCapabilities?.(model) ?? modelCapabilitiesForModel(model)
-    const prepared = await this.turnContextResolver.resolve({
-      threadId,
-      turnId,
-      thread,
-      turn,
-      history: historyItems,
-      model,
-      modelCapabilities,
-      signal,
-      mode: modeContext,
-      goalNoToolRecoverySteps: this.roundOutcome.goalNoToolRecoverySteps(turnId)
-    })
-    const {
-      mode: effectiveMode,
-      approvalPolicy,
-      sandboxMode,
-      attachments,
-      skillResolution,
-      instructionResolution,
-      memories,
-      activeGoalInstruction,
-      goalRecoveryInstruction,
-      activeTodoInstruction,
-      planTurnActive,
-      allowedToolNames,
-      userInputDisabled,
-      toolDiscoveryContext: toolContext,
-      tools
-    } = prepared
-    if (dedicatedSvgTurn) {
-      const toolNames = new Set(tools.map((tool) => tool.name))
-      const hasMutationTool = toolNames.has(DESIGN_SVG_EDIT_TOOL_NAME) || toolNames.has(DESIGN_SVG_ANIMATE_TOOL_NAME)
-      const hasValidationTool = toolNames.has(DESIGN_SVG_VALIDATE_TOOL_NAME)
-      const completionAlreadySatisfied = svgArtifactCompletionState(historyItems, turnId).validationAfterMutation
-      if (!completionAlreadySatisfied && (approvalPolicy === 'never' || !hasMutationTool || !hasValidationTool)) {
-        const message = approvalPolicy === 'never'
-          ? 'Dedicated SVG artifact turns require tool execution, but the current approval policy disables tools.'
-          : 'Dedicated SVG artifact tools are unavailable under the current plan, skill, or sandbox policy.'
-        this.rememberTurnFailure(turnId, { error: message, code: 'svg_tools_unavailable', severity: 'error' })
-        await this.opts.events.record({
-          kind: 'error', threadId, turnId, message, code: 'svg_tools_unavailable', severity: 'error'
-        })
-        await this.opts.turns.applyItem(threadId, makeErrorItem({
-          id: this.opts.ids.next('item_error'), turnId, threadId, message,
-          code: 'svg_tools_unavailable', severity: 'error'
-        }))
-        return 'failed'
-      }
-    }
-    const toolSpecs: ModelToolSpec[] = [...tools]
-    const toolProviderMetadata = new Map(
-      tools.map((tool) => [tool.name, { providerId: tool.providerId, providerKind: tool.providerKind }])
-    )
-    const streamToolMetadata = new Map(
-      tools.map((tool) => [tool.name, { providerId: tool.providerId, toolKind: tool.toolKind }])
-    )
-    const toolProviderKinds = new Map(
-      tools.map((tool) => [tool.name, tool.providerKind])
-    )
-    const toolCatalog = buildToolCatalogFingerprint(toolSpecs)
-    const toolCatalogDrift = this.telemetry.recordToolCatalogFingerprint({
-      threadId,
-      workspace: thread?.workspace ?? '',
-      mode: effectiveMode ?? 'agent',
-      model: modelCapabilities.id,
-      activeSkillIds: skillResolution.activeSkillIds,
-      allowedToolNames,
-      userInputDisabled,
-      guiDesignCanvas: turn?.guiDesignCanvas === true,
-      guiDesignMode: turn?.guiDesignMode === true,
-      guiDesignArtifact: turn?.guiDesignArtifact,
-      fingerprint: toolCatalog.fingerprint,
-      toolNames: toolCatalog.toolNames,
-      toolHashes: toolCatalog.toolHashes
-    })
-    const toolCatalogDriftMessage = toolCatalogDrift.kind !== 'none'
-      ? buildToolCatalogDriftMessage(toolCatalog, toolCatalogDrift.kind)
-      : undefined
-    if (toolCatalogDrift.kind !== 'none' && toolCatalogDriftMessage) {
-      await this.recordToolCatalogDrift({
-        threadId,
-        turnId,
-        fingerprint: toolCatalog.fingerprint,
-        toolCount: toolCatalog.toolCount,
-        toolNames: toolCatalog.toolNames,
-        changeKind: toolCatalogDrift.kind,
-        message: toolCatalogDriftMessage
-      })
-    }
-    if (turn) {
-      await this.opts.turns.updateTurnMetadata(threadId, turnId, {
-        activeSkillIds: skillResolution.activeSkillIds,
-        skillInjectionBytes: skillResolution.injectedBytes,
-        injectedMemoryIds: memories.map((memory) => memory.id),
-        injectedMemorySummaries: memories.map((memory) => ({
-          id: memory.id,
-          content: memoryPreview(memory.content)
-        })),
-        injectedInstructionSources: instructionResolution.sources,
-        instructionInjectionBytes: instructionResolution.injectedBytes,
-        toolCatalogFingerprint: toolCatalog.fingerprint,
-        toolCatalogToolCount: toolCatalog.toolCount,
-        toolCatalogDrift: toolCatalogDrift.kind !== 'none'
-      })
-    }
-    if (toolCatalogDrift.kind === 'breaking') {
-      if (dedicatedSvgTurn && !svgArtifactCompletionState(historyItems, turnId).validationAfterMutation) {
-        this.rememberTurnFailure(turnId, {
-          error: 'The SVG tool catalog changed before the required mutation and validation completed.',
-          code: 'svg_tool_catalog_changed',
-          severity: 'error'
-        })
-        return 'failed'
-      }
-      return 'stop'
-    }
-    const toolKinds = new Map(toolSpecs.map((tool) => [tool.name, tool.toolKind]))
-    const createPlanSatisfied = planTurnActive
-      ? hasSuccessfulCreatePlanResult(historyItems, turnId)
-      : false
-    const svgCompletion = turn?.guiDesignArtifact?.kind === 'svg'
-      ? svgArtifactCompletionState(historyItems, turnId)
-      : null
-    const requiredToolName =
-      planTurnActive &&
-      !createPlanSatisfied &&
-      toolSpecs.some((tool) => tool.name === CREATE_PLAN_TOOL_NAME)
-        ? CREATE_PLAN_TOOL_NAME
-        : svgCompletion?.mutationSucceeded &&
-            !svgCompletion.validationAfterMutation &&
-            toolSpecs.some((tool) => tool.name === DESIGN_SVG_VALIDATE_TOOL_NAME)
-          ? DESIGN_SVG_VALIDATE_TOOL_NAME
-          : undefined
-    const suggestVerification =
-      !planTurnActive &&
-      toolSpecs.some((tool) => tool.name === VERIFY_CHANGES_TOOL_NAME) &&
-      turnHasUnverifiedSourceChanges(historyItems, turnId)
-    const effectiveToolSpecs = resolvePlanModeToolSpecs(toolSpecs, {
-      planTurnActive,
-      createPlanSatisfied,
-      stepIndex
-    })
-    const history = await this.historyCompaction.compactIfNeeded({
-      items,
-      model,
-      signal,
-      threadId,
-      turnId,
-      toolSpecs: effectiveToolSpecs
-    })
-    if (signal.aborted) return 'aborted'
-    await this.recordPipelineStage(threadId, turnId, 'input_compressed', {
-      historyItems: history.length
-    })
-    // Forward the just-generated image(s) back to a vision-capable model so it can
-    // self-review and regenerate if the result is off. Bytes come from the
-    // already-persisted attachment/file; the persisted tool output keeps NO base64
-    // (only this transient request copy carries it).
-    const forwardHistory = await rehydrateGeneratedImagesForForward(
-      history,
-      (output) => this.turnAttachments.resolveGeneratedImageForForward(output, threadId, thread?.workspace),
-      MAX_FORWARDED_GENERATED_IMAGES
-    )
-    const runtimeContextInstruction = shouldInjectInitialRuntimeContext({
-      stepIndex,
-      turnId,
-      historyItems
-    })
-      ? buildRuntimeContextInstruction({
-          workspace: thread?.workspace,
-          nowIso: this.opts.nowIso()
-        })
-      : null
-    const toolPreferenceInstruction = buildToolPreferenceInstruction(tools)
-    const contextInstructions = [
-      ...(runtimeContextInstruction ? [runtimeContextInstruction] : []),
-      ...(instructionResolution.instruction ? [instructionResolution.instruction] : []),
-      ...(activeGoalInstruction ? [activeGoalInstruction] : []),
-      ...(goalRecoveryInstruction && this.roundOutcome.goalNoToolRecoverySteps(turnId) > 0
-        ? [goalRecoveryInstruction]
-        : []),
-      ...(activeTodoInstruction ? [activeTodoInstruction] : []),
-      ...(this.roundOutcome.hasEmptyPostToolRecovery(turnId)
-        ? [emptyPostToolRecoveryInstruction()]
-        : []),
-      ...imageGenerationReferenceInstructions({
-        imageAttachments: attachments.imageAttachments,
-        textFallbacks: attachments.textFallbacks,
-        workspace: thread?.workspace ?? '',
-        tools: effectiveToolSpecs
-      }),
-      ...memoryInstructions(memories),
-      ...(skillResolution.catalogInstruction ? [skillResolution.catalogInstruction] : []),
-      ...skillResolution.instructions,
-      ...(userInputDisabled ? [userInputUnavailableInstruction()] : []),
-      ...(toolPreferenceInstruction ? [toolPreferenceInstruction] : []),
-      ...(effectiveToolSpecs.some((tool) => tool.name === 'bash') ? [shellRuntimeInstruction()] : []),
-      ...(suggestVerification ? [verificationSuggestionInstruction()] : []),
-      ...(toolCatalogDriftMessage ? [toolCatalogDriftMessage] : [])
-    ]
-    await this.recordPipelineStage(threadId, turnId, 'input_remembered', {
-      memoryCount: memories.length,
-      contextInstructionCount: contextInstructions.length
-    })
-    const modeInstruction = [
-      ...(planTurnActive ? [PLAN_MODE_INSTRUCTION] : []),
-      ...(turn.guiDesignArtifact?.kind === 'svg'
-        ? [SVG_ARTIFACT_MODE_INSTRUCTION]
-        : turn.guiDesignMode
-          ? [DESIGN_MODE_INSTRUCTION]
-          : [])
-    ].join('\n\n')
-    const composedRequest = composeModelRequest({
-      threadId,
-      turnId,
-      model,
-      ...(providerId ? { providerId } : {}),
-      ...(modelRoute.reasoningEffort ? { reasoningEffort: modelRoute.reasoningEffort } : {}),
-      immutablePrefix: this.opts.prefix,
-      ...(thread.systemPrompt !== undefined ? { threadSystemPrompt: thread.systemPrompt } : {}),
-      ...(modeInstruction ? { modeInstruction } : {}),
-      contextInstructions,
-      history: forwardHistory,
-      attachments,
-      tools: effectiveToolSpecs,
-      ...(requiredToolName ? { requiredToolName } : {}),
-      ...(this.opts.tokenEconomy ? { tokenEconomy: this.opts.tokenEconomy } : {}),
-      signal
-    })
-    const { request, rawInputTokens, sentInputTokens, tokenEconomy } = composedRequest
-    const inputTokens = sentInputTokens
-    const outputTokens = modelCapabilities.maxOutputTokens ?? 0
-    // A configured model context window is authoritative. ContextCompactor's
-    // test/embedding thresholds can intentionally be much smaller than a real
-    // model window to exercise compaction, so use its cap only when capability
-    // metadata is unavailable.
-    const hardCap = modelCapabilities.contextWindowTokens
-      ? Math.floor(modelCapabilities.contextWindowTokens * 0.85)
-      : this.opts.compactor.hardCap(model)
-    if (inputTokens + outputTokens > hardCap) {
-      await this.opts.events.record({
-        kind: 'error',
-        threadId,
-        turnId,
-        message: `request exceeds the ${hardCap}-token context cap (${inputTokens} input + ${outputTokens} output budget)`,
-        code: 'context_window_exceeded',
-        severity: 'warning'
-      })
-      return 'failed'
-    }
-    if (tokenEconomy.enabled) {
-      await this.recordTokenEconomySavings({
-        threadId,
-        turnId,
-        model,
-        rawInputTokens,
-        sentInputTokens
-      })
-    }
-    const clientDiagnostics = modelClientDiagnostics(this.opts.model, request.providerId)
-    const cacheSignature: CacheRequestSignature = {
-      model: request.model,
-      providerId: request.providerId?.trim() || clientDiagnostics.provider || 'default',
-      endpointFormat: clientDiagnostics.endpointFormat || 'unknown',
-      prefixFingerprint: this.opts.prefix.fingerprint,
-      toolCatalogFingerprint: toolCatalog.fingerprint,
-      activeSkillIds: skillResolution.activeSkillIds
-    }
-    const streamed = await this.modelRoundEngine.run({
-      threadId,
-      turnId,
-      signal,
-      request,
-      maxToolCallsPerStep,
-      streamToolMetadata,
-      ...(this.opts.toolArgumentRepair?.maxStringBytes !== undefined
-        ? { maxToolArgumentStringBytes: this.opts.toolArgumentRepair.maxStringBytes }
-        : {}),
-      cacheSignature,
-      preSendDetails: {
-        model: request.model,
-        ...clientDiagnostics,
-        historyItems: request.history.length,
-        toolCount: request.tools.length,
-        ...(request.requiredToolName ? { requiredToolName: request.requiredToolName } : {}),
-        ...attachmentRequestPipelineDetails({
-          attachmentIds: turn?.attachmentIds ?? [],
-          imageAttachments: attachments.imageAttachments,
-          textFallbacks: attachments.textFallbacks,
-          documents: attachments.documents,
-          modelCapabilities
-        })
-      },
-      postSendDetails: {
-        model: request.model,
-        ...clientDiagnostics
-      },
-      writeGeneratedImage: async ({ imageBase64 }) => {
-        const imgDir = '.deepseekgui-images'
-        const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
-        const fileName = `img-${stamp}-${randomBytes(2).toString('hex')}.png`
-        const relativePath = `${imgDir}/${fileName}`
-        const target = await resolveWorkspacePath(relativePath, toolContext, {
-          enforceWorkspaceBoundary: true
-        })
-        await mkdir(dirname(target.absolutePath), { recursive: true })
-        const absolutePath = (await resolveWorkspacePath(relativePath, toolContext, {
-          enforceWorkspaceBoundary: true
-        })).absolutePath
-        await writeFile(absolutePath, Buffer.from(imageBase64, 'base64'))
-        return { markdown: `\n![generated image](${relativePath})\n` }
-      }
-    })
-    return this.roundOutcome.resolve({
-      threadId,
-      turnId,
-      streamed,
-      ...(request.requiredToolName ? { requiredToolName: request.requiredToolName } : {}),
-      turn,
-      prepared,
-      ...(providerId ? { modelProviderId: providerId } : {}),
-      toolProviderMetadata,
-      toolKinds,
-      toolProviderKinds,
-      svgCompletion
-    })
+    return this.modelSteps.run(threadId, turnId, signal, stepIndex, maxToolCallsPerStep)
   }
 
   private async dispatchToolCalls(input: ToolDispatchInput): Promise<ToolDispatchOutcome> {
@@ -1249,37 +778,6 @@ export class AgentLoop {
   }
 }
 
-function buildToolCatalogDriftMessage(toolCatalog: {
-  fingerprint: string
-  toolCount: number
-  toolNames: string[]
-}, changeKind: 'additive' | 'breaking'): string {
-  const sample = toolCatalog.toolNames.slice(0, 12).join(', ')
-  const suffix = toolCatalog.toolNames.length > 12 ? `, +${toolCatalog.toolNames.length - 12} more` : ''
-  const policy = changeKind === 'additive'
-    ? 'Only additive tool changes are allowed in-place; Kun will continue with the refreshed tool list.'
-    : 'Non-additive tool changes can invalidate prompt-cache assumptions; Kun stopped this turn. Start a new thread after editing, removing, or reordering tool schemas.'
-  return [
-    `Tool catalog changed for this thread (${toolCatalog.toolCount} tools, fingerprint ${toolCatalog.fingerprint}).`,
-    policy,
-    sample ? `Current tools: ${sample}${suffix}.` : ''
-  ].filter(Boolean).join(' ')
-}
-
 function activeTurnRunKey(threadId: string, turnId: string): string {
   return `${threadId}\u0000${turnId}`
-}
-
-function prefixVolatilityStageDetails(
-  findings: PrefixVolatilityFinding[]
-): Record<string, unknown> | undefined {
-  if (findings.length === 0) return undefined
-  const kinds = [...new Set(findings.map((finding) => finding.kind))].sort()
-  const fields = [...new Set(findings.map((finding) => finding.field))].sort()
-  return {
-    prefixVolatileTokenCount: findings.length,
-    prefixVolatileTokenKinds: kinds,
-    prefixVolatileFields: fields,
-    noRegexDetector: true
-  }
 }
