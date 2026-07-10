@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
+import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
 import type { AgentSession } from '../../domain/session.js'
 import { readJsonl } from './file-thread-store.js'
 import { atomicWriteFile } from './atomic-write.js'
@@ -35,6 +36,7 @@ export class FileSessionStore implements SessionStore {
   }
   private readonly itemsCache = new Map<string, TurnItem[]>()
   private readonly itemsCacheVersion = new Map<string, number>()
+  private readonly writeQueues = new Map<string, Promise<unknown>>()
 
   constructor(options: {
     dataDir: string
@@ -59,45 +61,58 @@ export class FileSessionStore implements SessionStore {
   }
 
   async appendEvent(threadId: string, event: RuntimeEvent): Promise<void> {
-    await this.ensureDir(this.threadDir(threadId))
-    const path = this.eventsPath(threadId)
-    await appendFile(path, `${JSON.stringify(event)}\n`, 'utf-8')
-    if (event.kind === 'usage') {
-      await this.compactUsageEventsIfLarge(threadId).catch((error) => {
-        warnUsageCompaction(threadId, error)
-      })
-    }
+    assertSafeThreadId(threadId)
+    await this.withThreadWrite(threadId, async () => {
+      await this.ensureDir(this.threadDir(threadId))
+      const path = this.eventsPath(threadId)
+      await appendFile(path, `${JSON.stringify(event)}\n`, 'utf-8')
+      if (event.kind === 'usage') {
+        await this.compactUsageEventsIfLarge(threadId).catch((error) => {
+          warnUsageCompaction(threadId, error)
+        })
+      }
+    })
   }
 
   async appendItem(threadId: string, item: TurnItem): Promise<void> {
-    await this.ensureDir(this.threadDir(threadId))
-    const path = this.messagesPath(threadId)
-    await appendFile(path, `${JSON.stringify(item)}\n`, 'utf-8')
-    this.bumpItemsVersion(threadId)
-    this.applyItemToCache(threadId, item)
+    assertSafeThreadId(threadId)
+    await this.withThreadWrite(threadId, async () => {
+      await this.ensureDir(this.threadDir(threadId))
+      const path = this.messagesPath(threadId)
+      await appendFile(path, `${JSON.stringify(item)}\n`, 'utf-8')
+      this.bumpItemsVersion(threadId)
+      this.applyItemToCache(threadId, item)
+    })
   }
 
   async rewriteItems(threadId: string, items: TurnItem[]): Promise<void> {
-    await this.ensureDir(this.threadDir(threadId))
-    const contents = items.map((item) => JSON.stringify(item)).join('\n')
-    await this.atomicWrite(this.messagesPath(threadId), contents ? `${contents}\n` : '')
-    this.bumpItemsVersion(threadId)
-    this.cacheItems(threadId, [...items])
+    assertSafeThreadId(threadId)
+    await this.withThreadWrite(threadId, async () => {
+      await this.ensureDir(this.threadDir(threadId))
+      const contents = items.map((item) => JSON.stringify(item)).join('\n')
+      await this.atomicWrite(this.messagesPath(threadId), contents ? `${contents}\n` : '')
+      this.bumpItemsVersion(threadId)
+      this.cacheItems(threadId, [...items])
+    })
   }
 
   async updateItem(threadId: string, itemId: string, patch: Partial<TurnItem>): Promise<TurnItem | null> {
-    const items = await this.loadItems(threadId)
-    const current = items.find((item) => item.id === itemId)
-    if (!current) return null
-    const updated = { ...current, ...patch } as TurnItem
-    await this.ensureDir(this.threadDir(threadId))
-    await appendFile(this.messagesPath(threadId), `${JSON.stringify(updated)}\n`, 'utf-8')
-    this.bumpItemsVersion(threadId)
-    this.applyItemToCache(threadId, updated)
-    return updated
+    assertSafeThreadId(threadId)
+    return this.withThreadWrite(threadId, async () => {
+      const items = await this.loadItems(threadId)
+      const current = items.find((item) => item.id === itemId)
+      if (!current) return null
+      const updated = { ...current, ...patch } as TurnItem
+      await this.ensureDir(this.threadDir(threadId))
+      await appendFile(this.messagesPath(threadId), `${JSON.stringify(updated)}\n`, 'utf-8')
+      this.bumpItemsVersion(threadId)
+      this.applyItemToCache(threadId, updated)
+      return updated
+    })
   }
 
   async loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]> {
+    if (!isSafeThreadId(threadId)) return []
     const all = await readJsonl<RuntimeEvent>(this.eventsPath(threadId))
     return all
       .filter((event) => event.seq > sinceSeq)
@@ -105,6 +120,7 @@ export class FileSessionStore implements SessionStore {
   }
 
   async loadItems(threadId: string): Promise<TurnItem[]> {
+    if (!isSafeThreadId(threadId)) return []
     const cached = this.itemsCache.get(threadId)
     if (cached) {
       this.cacheItems(threadId, cached)
@@ -144,7 +160,7 @@ export class FileSessionStore implements SessionStore {
       this.cacheItems(threadId, ordered)
       return [...ordered]
     }
-    return ordered
+    return this.loadItems(threadId)
   }
 
   async loadSession(threadId: string): Promise<AgentSession | null> {
@@ -157,11 +173,15 @@ export class FileSessionStore implements SessionStore {
   }
 
   async upsertSession(session: AgentSession): Promise<void> {
-    await this.ensureDir(this.threadDir(session.threadId))
-    await this.atomicWrite(this.sessionPath(session.threadId), JSON.stringify(session))
+    assertSafeThreadId(session.threadId)
+    await this.withThreadWrite(session.threadId, async () => {
+      await this.ensureDir(this.threadDir(session.threadId))
+      await this.atomicWrite(this.sessionPath(session.threadId), JSON.stringify(session))
+    })
   }
 
   async highestSeq(threadId: string): Promise<number> {
+    if (!isSafeThreadId(threadId)) return 0
     const events = await readJsonl<RuntimeEvent>(this.eventsPath(threadId))
     return events.reduce((max, event) => Math.max(max, event.seq), 0)
   }
@@ -203,7 +223,22 @@ export class FileSessionStore implements SessionStore {
   }
 
   private threadDir(threadId: string): string {
-    return join(this.dataDir, threadId)
+    assertSafeThreadId(threadId)
+    const path = resolve(this.dataDir, threadId)
+    if (!path.startsWith(`${this.dataDir}/`)) throw new Error(`thread path escapes data directory: ${threadId}`)
+    return path
+  }
+
+  private async withThreadWrite<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.writeQueues.get(threadId) ?? Promise.resolve()
+    const run = previous.catch(() => undefined).then(operation)
+    const guard = run.then(() => undefined, () => undefined)
+    this.writeQueues.set(threadId, guard)
+    try {
+      return await run
+    } finally {
+      if (this.writeQueues.get(threadId) === guard) this.writeQueues.delete(threadId)
+    }
   }
 
   private eventsPath(threadId: string): string {
