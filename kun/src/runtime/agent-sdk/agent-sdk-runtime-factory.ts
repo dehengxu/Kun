@@ -87,6 +87,8 @@ export interface AgentSdkRuntimeFactoryDeps {
   pathToClaudeCodeExecutable?: string
 }
 
+const MAX_DIAGNOSTIC_SESSION_IDS = 256
+
 /** Lazily load the real SDK without a static import (so kun typechecks without it). */
 let sdkPromise: Promise<SdkApi> | undefined
 function loadAgentSdk(): Promise<SdkApi> {
@@ -494,7 +496,12 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
     },
 
     async saveSessionId(threadId, sessionId): Promise<void> {
+      sessionIds.delete(threadId)
       sessionIds.set(threadId, sessionId)
+      if (sessionIds.size > MAX_DIAGNOSTIC_SESSION_IDS) {
+        const oldest = sessionIds.keys().next().value
+        if (oldest !== undefined) sessionIds.delete(oldest)
+      }
     },
 
     loadSdk: loadAgentSdk,

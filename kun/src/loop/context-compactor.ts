@@ -263,6 +263,7 @@ function aggressiveCompactionThreshold(thresholds: ModelContextThresholds): numb
 
 const inflationWarnedAt = new Map<string, number>()
 const INFLATION_WARN_INTERVAL_MS = 60_000
+const MAX_INFLATION_WARNING_MODELS = 256
 
 /**
  * Returns the provider `prompt_tokens` when it is consistent with our local
@@ -287,7 +288,12 @@ function warnInflatedPromptTokens(reported: number, estimate: number, model?: st
   const key = model || 'unknown'
   const now = Date.now()
   if (now - (inflationWarnedAt.get(key) ?? 0) < INFLATION_WARN_INTERVAL_MS) return
+  inflationWarnedAt.delete(key)
   inflationWarnedAt.set(key, now)
+  if (inflationWarnedAt.size > MAX_INFLATION_WARNING_MODELS) {
+    const oldest = inflationWarnedAt.keys().next().value
+    if (oldest !== undefined) inflationWarnedAt.delete(oldest)
+  }
   console.warn(
     `[kun] ignoring inflated prompt_tokens for model "${key}": reported ${reported} vs local estimate ${estimate} ` +
       `(>${PROMPT_TOKEN_TRUST_FACTOR}x). Falling back to the estimate for context/compaction; the provider is likely ` +
