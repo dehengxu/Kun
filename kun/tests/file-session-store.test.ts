@@ -82,6 +82,19 @@ describe('FileSessionStore', () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('usage event compaction failed'))
   })
 
+  it('caches the event high-water mark after append', async () => {
+    const sessionStore = new FileSessionStore({ dataDir })
+    await sessionStore.appendEvent('thr_high_water', {
+      kind: 'heartbeat', seq: 42, timestamp: '2026-01-01T00:00:00.000Z', threadId: 'thr_high_water'
+    })
+
+    expect(await sessionStore.highestSeq('thr_high_water')).toBe(42)
+    await rm(join(dataDir, 'threads', 'thr_high_water', 'events.jsonl'))
+    expect(await sessionStore.highestSeq('thr_high_water')).toBe(42)
+    sessionStore.clearThreadMemory('thr_high_water')
+    expect(await sessionStore.highestSeq('thr_high_water')).toBe(0)
+  })
+
   it('loadItems reads from disk and dedups by id, keeping the latest write', async () => {
     const item = (id: string, text: string): TurnItem => ({
       id,

@@ -21,6 +21,7 @@ const SLOW_LOAD_ITEMS_LOG_MS = 1_000
  * of re-reading and re-parsing messages.jsonl each time.
  */
 const ITEMS_CACHE_MAX_THREADS = 4
+const HIGHEST_SEQ_CACHE_MAX_THREADS = 256
 
 /**
  * File-backed session store. Appends events and items to per-thread
@@ -36,6 +37,7 @@ export class FileSessionStore implements SessionStore {
   }
   private readonly itemsCache = new Map<string, TurnItem[]>()
   private readonly itemsCacheVersion = new Map<string, number>()
+  private readonly highestSeqCache = new Map<string, number>()
   private readonly writeQueues = new Map<string, Promise<unknown>>()
 
   constructor(options: {
@@ -66,6 +68,7 @@ export class FileSessionStore implements SessionStore {
       await this.ensureDir(this.threadDir(threadId))
       const path = this.eventsPath(threadId)
       await appendFile(path, `${JSON.stringify(event)}\n`, { encoding: 'utf-8', mode: 0o600 })
+      this.cacheHighestSeq(threadId, event.seq)
       if (event.kind === 'usage') {
         await this.compactUsageEventsIfLarge(threadId).catch((error) => {
           warnUsageCompaction(threadId, error)
@@ -182,18 +185,27 @@ export class FileSessionStore implements SessionStore {
 
   async highestSeq(threadId: string): Promise<number> {
     if (!isSafeThreadId(threadId)) return 0
+    const cached = this.highestSeqCache.get(threadId)
+    if (cached !== undefined) {
+      this.cacheHighestSeq(threadId, cached)
+      return cached
+    }
     const events = await readJsonl<RuntimeEvent>(this.eventsPath(threadId))
-    return events.reduce((max, event) => Math.max(max, event.seq), 0)
+    const highest = events.reduce((max, event) => Math.max(max, event.seq), 0)
+    this.cacheHighestSeq(threadId, highest)
+    return highest
   }
 
   async resetMemory(): Promise<void> {
     this.itemsCache.clear()
     this.itemsCacheVersion.clear()
+    this.highestSeqCache.clear()
   }
 
   clearThreadMemory(threadId: string): void {
     this.itemsCache.delete(threadId)
     this.itemsCacheVersion.delete(threadId)
+    this.highestSeqCache.delete(threadId)
   }
 
   private itemsVersionOf(threadId: string): number {
@@ -211,6 +223,17 @@ export class FileSessionStore implements SessionStore {
       const oldest = this.itemsCache.keys().next().value
       if (oldest === undefined) break
       this.itemsCache.delete(oldest)
+    }
+  }
+
+  private cacheHighestSeq(threadId: string, seq: number): void {
+    const current = this.highestSeqCache.get(threadId) ?? 0
+    this.highestSeqCache.delete(threadId)
+    this.highestSeqCache.set(threadId, Math.max(current, seq))
+    while (this.highestSeqCache.size > HIGHEST_SEQ_CACHE_MAX_THREADS) {
+      const oldest = this.highestSeqCache.keys().next().value
+      if (oldest === undefined) return
+      this.highestSeqCache.delete(oldest)
     }
   }
 
