@@ -63,6 +63,7 @@ interface LspSession {
  * Promise.
  */
 const sessions = new Map<string, Promise<LspSession>>()
+const activeSessions = new Set<LspSession>()
 const brokenServers = new Map<string, number>()
 
 function sessionKey(workspaceRoot: string, serverKey: string): string {
@@ -90,6 +91,7 @@ function remainingCooldownMs(workspaceRoot: string, serverKey: string): number {
 }
 
 function disposeSession(session: LspSession, terminateProcess: boolean): void {
+  activeSessions.delete(session)
   if (session.closed) return
   session.closed = true
   if (session.cleanupTimer) {
@@ -109,9 +111,10 @@ function disposeSession(session: LspSession, terminateProcess: boolean): void {
     // already dead
   }
   // Force-kill after grace period.
-  setTimeout(() => {
+  const forceKillTimer = setTimeout(() => {
     try { session.process.kill('SIGKILL') } catch { /* ignore */ }
   }, 2_000)
+  forceKillTimer.unref?.()
 }
 
 function killSession(session: LspSession): void {
@@ -436,6 +439,7 @@ async function createSession(workspaceRoot: string, serverKey: string): Promise<
     closing: false,
     closed: false
   }
+  activeSessions.add(session)
 
   proc.stdout?.on('data', (chunk: Buffer) => {
     session.stdoutBuffer = Buffer.concat([session.stdoutBuffer, chunk])
@@ -498,12 +502,8 @@ async function createSession(workspaceRoot: string, serverKey: string): Promise<
  * to prevent orphaned language-server processes.
  */
 export function shutdownAllLspSessions(): void {
-  for (const [key, sessionPromise] of sessions) {
-    sessions.delete(key)
-    sessionPromise
-      .then((session) => killSession(session))
-      .catch(() => { /* session failed to init — nothing to kill */ })
-  }
+  sessions.clear()
+  for (const session of [...activeSessions]) killSession(session)
 }
 
 export function releaseLspSession(workspaceRoot: string, serverKey: string): void {
@@ -703,13 +703,10 @@ export async function lspGetDiagnostics(
  * host process (Electron / kun serve) terminates.
  */
 function syncKillAll(): void {
-  for (const [, sessionPromise] of sessions) {
-    sessionPromise
-      .then((session) => {
-        try { session.process.kill('SIGKILL') } catch { /* already dead */ }
-      })
-      .catch(() => { /* init failed — no process to kill */ })
+  for (const session of activeSessions) {
+    try { session.process.kill('SIGKILL') } catch { /* already dead */ }
   }
+  activeSessions.clear()
   sessions.clear()
 }
 

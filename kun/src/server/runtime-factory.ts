@@ -24,6 +24,7 @@ import { buildDesignCanvasLocalTools } from '../adapters/tool/design-canvas-tool
 import { buildDesignSvgLocalTools } from '../adapters/tool/design-svg-tool.js'
 import { buildPptMasterLocalTools } from '../adapters/tool/ppt-master-tool.js'
 import { LocalToolHost, buildDefaultLocalTools } from '../adapters/tool/local-tool-host.js'
+import { shutdownAllLspSessions } from '../adapters/tool/lsp-client.js'
 import { createReadArtifactTool } from '../adapters/tool/artifact-tool.js'
 import { FileArtifactStore } from '../artifacts/artifact-store.js'
 import { createTaskGraphTool } from '../adapters/tool/task-graph-tool.js'
@@ -1084,6 +1085,7 @@ export async function createKunServeRuntime(
         await backgroundShellRuntime.shutdown()
         await turnService.interruptActiveTurns()
         await waitForActiveRuns(activeRuntimeRuns)
+        shutdownAllLspSessions()
         await mcpProviders.close()
       } finally {
         await stores.shutdown?.()

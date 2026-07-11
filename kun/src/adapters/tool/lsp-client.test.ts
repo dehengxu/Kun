@@ -154,6 +154,38 @@ describe('LSP session cooldown', () => {
   })
 })
 
+describe('LSP shutdown', () => {
+  it('terminates a language server even while initialization is pending', async () => {
+    accessMock.mockRejectedValue(new Error('missing local install'))
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    let serverProcess: MockProcess | undefined
+
+    spawnMock.mockImplementation((command: string) => {
+      if (command === 'which') {
+        const proc = createMockProcess()
+        queueMicrotask(() => {
+          proc.stdout.emit('data', Buffer.from('/usr/local/bin/typescript-language-server\n', 'utf8'))
+          proc.emit('close', 0)
+        })
+        return proc
+      }
+      if (command === 'typescript-language-server') {
+        serverProcess = createMockProcess()
+        return serverProcess
+      }
+      throw new Error(`Unexpected spawn: ${command}`)
+    })
+
+    const acquiring = acquireLspSession('/workspace/shutdown', 'typescript')
+    await vi.waitFor(() => expect(serverProcess?.stdin.write).toHaveBeenCalledTimes(1))
+
+    shutdownAllLspSessions()
+
+    expect(serverProcess?.kill).toHaveBeenCalledWith('SIGTERM')
+    await expect(acquiring).rejects.toThrow('LSP session closed')
+  })
+})
+
 describe('LSP stderr logging', () => {
   it('logs the tail of buffered stderr when the server exits unexpectedly', async () => {
     accessMock.mockRejectedValue(new Error('missing local install'))
