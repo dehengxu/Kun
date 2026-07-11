@@ -53,6 +53,7 @@ import {
 } from './workflow-graph-executor'
 
 export { checkWorkflowCode } from './workflow-code-node-adapter'
+export type { InterpScope } from './workflow-expression'
 
 const LIVE_STATUS_LINGER_MS = 8_000
 
