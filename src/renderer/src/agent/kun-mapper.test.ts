@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { chatBlockFromItem, dispatchKunRuntimeEvent, mergeChatBlocks } from './kun-mapper'
+import {
+  chatBlockFromItem,
+  dispatchKunRuntimeEvent,
+  mergeChatBlocks,
+  runtimeProjectionActionsFromEvent
+} from './kun-mapper'
 import type { CoreRuntimeEventJson, CoreTurnItemJson } from './kun-contract'
 import type { ThreadErrorOptions, ThreadEventSink } from './types'
 
@@ -19,6 +24,58 @@ function makeSink(): ThreadEventSink {
     onError: () => undefined
   }
 }
+
+describe('runtime projection action normalization', () => {
+  it('normalizes the same goal event to a stable action transcript', () => {
+    const event: CoreRuntimeEventJson = {
+      kind: 'goal_updated',
+      seq: 9,
+      timestamp: '2026-07-11T00:00:00.000Z',
+      threadId: 'thread_1',
+      goal: {
+        id: 'goal_1',
+        threadId: 'thread_1',
+        objective: 'Finish projection extraction',
+        status: 'active',
+        createdAt: '2026-07-11T00:00:00.000Z',
+        updatedAt: '2026-07-11T00:00:00.000Z'
+      }
+    }
+
+    const first = runtimeProjectionActionsFromEvent(event)
+    const replay = runtimeProjectionActionsFromEvent(structuredClone(event))
+
+    expect(replay).toEqual(first)
+    expect(first).toEqual([{
+      type: 'goal_changed',
+      payload: {
+        threadId: 'thread_1',
+        goal: {
+          threadId: 'thread_1',
+          objective: 'Finish projection extraction',
+          status: 'active',
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: '2026-07-11T00:00:00.000Z',
+          updatedAt: '2026-07-11T00:00:00.000Z'
+        },
+        createdAt: '2026-07-11T00:00:00.000Z'
+      }
+    }])
+  })
+
+  it('uses a deterministic fallback identity for legacy user-input events', () => {
+    const actions = runtimeProjectionActionsFromEvent({
+      kind: 'user_input_resolved',
+      status: 'cancelled'
+    })
+    expect(actions).toEqual([{
+      type: 'user_input_status_changed',
+      payload: { itemId: 'input_unknown', status: 'cancelled' }
+    }])
+  })
+})
 
 describe('assistant stream mapping', () => {
   it('does not append completed assistant snapshots after streaming deltas', async () => {

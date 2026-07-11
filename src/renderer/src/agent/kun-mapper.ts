@@ -21,6 +21,8 @@ import type {
   UserInputAnswer,
   UserInputQuestion
 } from './types'
+import { normalizeKunRuntimeEvent, type KunEventNormalizerDeps } from './kun-event-normalizer'
+import type { RuntimeProjectionAction } from './runtime-projection-actions'
 import { redactSecrets, redactSecretText } from '@shared/secret-redaction'
 import { applyClientUserMessageSourceMeta } from '@shared/background-shell-notice'
 import type {
@@ -1139,50 +1141,7 @@ function reviewFromItem(item: CoreTurnItemJson): ReviewEventPayload {
  * `chatBlockFromItem` directly; this function maps item snapshots onto
  * the `ThreadEventSink` callbacks that the chat store understands.
  */
-function emitItem(
-  item: CoreTurnItemJson,
-  sink: ThreadEventSink,
-  child?: CoreChildRuntimeMetadataJson
-): void {
-  switch (item.kind) {
-    case 'user_message':
-      sink.onUserMessage(userMessageEventFromItem(item))
-      return
-    case 'assistant_text':
-    case 'assistant_reasoning':
-      // Live text/reasoning arrives through *_delta events. Item events are
-      // snapshots for replay/load paths and would duplicate streamed content.
-      return
-    case 'tool_call':
-    case 'tool_result':
-      sink.onTool(toolEventFromItem(item, child))
-      return
-    // Approval and user_input have dedicated runtime events; the
-    // generic item path would otherwise double-emit them.
-    case 'approval':
-    case 'user_input':
-      return
-    case 'compaction':
-      sink.onCompaction(compactionFromItem(item))
-      return
-    case 'review':
-      sink.onReview?.(reviewFromItem(item))
-      return
-    case 'error':
-      sink.onRuntimeError?.(runtimeErrorFromItem(item))
-      return
-  }
-}
 
-function emitDelta(
-  event: CoreRuntimeEventJson,
-  sink: ThreadEventSink,
-  kind: ThreadDeltaEvent['kind']
-): void {
-  const text = event.item?.text ?? ''
-  if (!text) return
-  sink.onDeltas([{ text, kind, seq: event.seq }])
-}
 
 function compactionFromEvent(
   event: CoreRuntimeEventJson,
@@ -1280,6 +1239,85 @@ function runtimeStatusFromEvent(event: CoreRuntimeEventJson): RuntimeStatusEvent
   return null
 }
 
+const kunEventNormalizerDeps: KunEventNormalizerDeps = {
+  userMessage: userMessageEventFromItem,
+  tool: toolEventFromItem,
+  compaction: compactionFromItem,
+  review: reviewFromItem,
+  itemRuntimeError: runtimeErrorFromItem,
+  childTool: childLifecycleToolEventFromRuntimeEvent,
+  readyTool: toolReadyFromEvent,
+  runtimeStatus: runtimeStatusFromEvent,
+  approvalAction: (event) => ({ type: 'approval_requested', event }),
+  userInputRequest: (event) => userInputRequestFromCore({
+    itemId: event.itemId,
+    inputId: event.inputId,
+    prompt: event.prompt,
+    questions: event.questions,
+    seq: event.seq
+  }),
+  userInputAnswers: userInputAnswersFromCore,
+  compactionAction: (event, status) => ({
+    type: 'compaction_updated',
+    payload: compactionFromEvent(event, status)
+  }),
+  goalAction: (event, cleared) => ({
+    type: 'goal_changed',
+    payload: cleared
+      ? { threadId: event.threadId ?? '', goal: null, cleared: true, createdAt: event.timestamp }
+      : {
+          threadId: event.threadId ?? event.goal?.threadId ?? '',
+          goal: event.goal ? goalFromCore(event.goal) : null,
+          createdAt: event.timestamp
+        }
+  }),
+  todosAction: (event, cleared) => ({
+    type: 'todos_changed',
+    payload: cleared
+      ? { threadId: event.threadId ?? '', todos: null, cleared: true, createdAt: event.timestamp }
+      : {
+          threadId: event.threadId ?? event.todos?.threadId ?? '',
+          todos: event.todos ? todosFromCore(event.todos) : null,
+          createdAt: event.timestamp
+        }
+  }),
+  usage: (event) => event.usage ? usageFromCore(event.usage) : null,
+  runtimeError: runtimeErrorFromEvent,
+  errorFromRuntime: errorForRuntimeEvent
+}
+
+export function runtimeProjectionActionsFromEvent(
+  event: CoreRuntimeEventJson
+): RuntimeProjectionAction[] {
+  return normalizeKunRuntimeEvent(event, kunEventNormalizerDeps)
+}
+
+async function applyRuntimeProjectionAction(
+  action: RuntimeProjectionAction,
+  sink: ThreadEventSink,
+  handleApprovalRequest: (event: CoreRuntimeEventJson, sink: ThreadEventSink) => Promise<void>
+): Promise<void> {
+  switch (action.type) {
+    case 'seq_observed': sink.onSeq(action.seq); return
+    case 'deltas_received': sink.onDeltas(action.deltas); return
+    case 'user_message_received': sink.onUserMessage(action.payload); return
+    case 'tool_updated': sink.onTool(action.payload); return
+    case 'compaction_updated': sink.onCompaction(action.payload); return
+    case 'review_updated': sink.onReview?.(action.payload); return
+    case 'approval_requested': await handleApprovalRequest(action.event, sink); return
+    case 'user_input_requested': sink.onUserInput(action.payload); return
+    case 'user_input_status_changed': sink.onUserInputStatus(action.payload); return
+    case 'runtime_status_received': sink.onRuntimeStatus?.(action.payload); return
+    case 'runtime_error_received': sink.onRuntimeError?.(action.payload); return
+    case 'goal_changed': sink.onGoal(action.payload); return
+    case 'todos_changed': sink.onTodos?.(action.payload); return
+    case 'thread_metadata_changed': sink.onThreadUpdated?.(action.payload); return
+    case 'usage_received': sink.onUsage?.(action.payload); return
+    case 'turn_completed': sink.onTurnComplete(); return
+    case 'turn_failed': sink.onError(action.error, action.options); return
+  }
+}
+
 /**
  * Dispatches a batch of runtime events, coalescing consecutive text and
  * reasoning deltas into a single sink.onDeltas call so one network chunk
@@ -1291,10 +1329,15 @@ export async function dispatchKunRuntimeEvents(
   handleApprovalRequest: (event: CoreRuntimeEventJson, sink: ThreadEventSink) => Promise<void>
 ): Promise<void> {
   let pendingDeltas: ThreadDeltaEvent[] = []
-  const flushDeltas = (): void => {
+  const flushDeltas = async (): Promise<void> => {
     if (pendingDeltas.length === 0) return
-    sink.onDeltas(pendingDeltas)
+    const deltas = pendingDeltas
     pendingDeltas = []
+    await applyRuntimeProjectionAction(
+      { type: 'deltas_received', deltas },
+      sink,
+      handleApprovalRequest
+    )
   }
   for (const event of events) {
     if (event.kind === 'assistant_text_delta' || event.kind === 'assistant_reasoning_delta') {
@@ -1308,10 +1351,10 @@ export async function dispatchKunRuntimeEvents(
       }
       continue
     }
-    flushDeltas()
+    await flushDeltas()
     await dispatchKunRuntimeEvent(event, sink, handleApprovalRequest)
   }
-  flushDeltas()
+  await flushDeltas()
 }
 
 export async function dispatchKunRuntimeEvent(
@@ -1319,142 +1362,8 @@ export async function dispatchKunRuntimeEvent(
   sink: ThreadEventSink,
   handleApprovalRequest: (event: CoreRuntimeEventJson, sink: ThreadEventSink) => Promise<void>
 ): Promise<void> {
-  switch (event.kind) {
-    case 'assistant_text_delta':
-      emitDelta(event, sink, 'agent_message')
-      return
-    case 'assistant_reasoning_delta':
-      emitDelta(event, sink, 'agent_reasoning')
-      return
-    case 'item_created':
-    case 'item_updated':
-    case 'item_completed':
-    case 'tool_call_started':
-    case 'tool_call_finished':
-      if (event.item) emitItem(event.item, sink, event.child)
-      return
-    case 'turn_started':
-      if (event.child) {
-        const tool = childLifecycleToolEventFromRuntimeEvent(event)
-        if (tool) sink.onTool(tool)
-      }
-      return
-    case 'tool_call_ready': {
-      const tool = toolReadyFromEvent(event)
-      if (tool) sink.onTool(tool)
-      return
-    }
-    case 'tool_result_upload_wait': {
-      const status = runtimeStatusFromEvent(event)
-      if (status) sink.onRuntimeStatus?.(status)
-      return
-    }
-    case 'model_request_retry':
-    case 'tool_catalog_changed':
-    case 'tool_storm_suppressed': {
-      const status = runtimeStatusFromEvent(event)
-      if (status) sink.onRuntimeStatus?.(status)
-      return
-    }
-    case 'approval_requested':
-      await handleApprovalRequest(event, sink)
-      return
-    case 'user_input_requested':
-      sink.onUserInput(
-        userInputRequestFromCore({
-          itemId: event.itemId,
-          inputId: event.inputId,
-          prompt: event.prompt,
-          questions: event.questions,
-          seq: event.seq
-        })
-      )
-      return
-    case 'user_input_resolved': {
-      const answers = userInputAnswersFromCore(event.answers)
-      sink.onUserInputStatus({
-        itemId: event.itemId ?? event.inputId ?? `input_${event.seq ?? Date.now()}`,
-        status: event.status === 'cancelled' ? 'cancelled' : 'submitted',
-        ...(answers ? { answers } : {})
-      })
-      return
-    }
-    case 'compaction_started':
-      sink.onCompaction(compactionFromEvent(event, 'running'))
-      return
-    case 'compaction_completed':
-      sink.onCompaction(compactionFromEvent(event, 'success'))
-      return
-    case 'goal_updated':
-      sink.onGoal({
-        threadId: event.threadId ?? event.goal?.threadId ?? '',
-        goal: event.goal ? goalFromCore(event.goal) : null,
-        createdAt: event.timestamp
-      })
-      return
-    case 'goal_cleared':
-      sink.onGoal({
-        threadId: event.threadId ?? '',
-        goal: null,
-        cleared: true,
-        createdAt: event.timestamp
-      })
-      return
-    case 'todos_updated':
-      sink.onTodos?.({
-        threadId: event.threadId ?? event.todos?.threadId ?? '',
-        todos: event.todos ? todosFromCore(event.todos) : null,
-        createdAt: event.timestamp
-      })
-      return
-    case 'todos_cleared':
-      sink.onTodos?.({
-        threadId: event.threadId ?? '',
-        todos: null,
-        cleared: true,
-        createdAt: event.timestamp
-      })
-      return
-    case 'usage':
-      if (event.usage) sink.onUsage?.(usageFromCore(event.usage))
-      return
-    case 'thread_updated':
-      sink.onThreadUpdated?.({
-        threadId: event.threadId ?? '',
-        ...(event.title !== undefined ? { title: event.title } : {}),
-        ...(event.titleAuto !== undefined ? { titleAuto: event.titleAuto } : {}),
-        ...(typeof event.status === 'string' ? { status: event.status } : {})
-      })
-      return
-    case 'turn_completed':
-    case 'turn_aborted':
-      if (event.child) {
-        const tool = childLifecycleToolEventFromRuntimeEvent(event)
-        if (tool) sink.onTool(tool)
-        return
-      }
-      sink.onTurnComplete()
-      return
-    case 'turn_failed': {
-      if (event.child) {
-        const tool = childLifecycleToolEventFromRuntimeEvent(event)
-        if (tool) sink.onTool(tool)
-        return
-      }
-      const payload = runtimeErrorFromEvent(event, 'Kun turn failed')
-      sink.onRuntimeError?.(payload)
-      sink.onError(errorForRuntimeEvent(payload), { terminal: true })
-      return
-    }
-    case 'error':
-      if (event.code === 'compaction_summary_fallback') {
-        const status = runtimeStatusFromEvent(event)
-        if (status) sink.onRuntimeStatus?.(status)
-        return
-      }
-      sink.onRuntimeError?.(runtimeErrorFromEvent(event, 'Runtime error'))
-      return
-    default:
-      return
+  const actions = runtimeProjectionActionsFromEvent(event)
+  for (const action of actions) {
+    await applyRuntimeProjectionAction(action, sink, handleApprovalRequest)
   }
 }

@@ -51,7 +51,7 @@
 - [x] 5.1 Capture live, replay, reconnect, duplicate completion, approval/user-input,
   child-agent, goal/todo, and workspace-refresh projections.
 - [x] 5.2 Introduce normalized runtime projection action types.
-- [ ] 5.3 Extract pure item/event-to-action normalization from `kun-mapper`.
+- [x] 5.3 Extract pure item/event-to-action normalization from `kun-mapper`.
 - [ ] 5.4 Extract a pure chat projection reducer shared by live SSE and replay.
 - [ ] 5.5 Represent notifications, reconnect, reload, mirror, and workspace refresh as
   explicit effect commands with once-only tests.
