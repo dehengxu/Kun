@@ -55,7 +55,7 @@
 - [x] 5.4 Extract a pure chat projection reducer shared by live SSE and replay.
 - [x] 5.5 Represent notifications, reconnect, reload, mirror, and workspace refresh as
   explicit effect commands with once-only tests.
-- [ ] 5.6 Reduce `chat-store-runtime` and `kun-mapper` to wiring/facade roles.
+- [x] 5.6 Reduce `chat-store-runtime` and `kun-mapper` to wiring/facade roles.
 
 ## 6. Workflow execution and configuration
 

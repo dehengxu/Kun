@@ -302,8 +302,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'hello',
-        approvalPolicy: 'auto',
-        sandboxMode: 'danger-full-access'
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write'
       })
     )
     expect(result.userMessageItemId).toBe('item_user_real')
@@ -328,8 +328,8 @@ describe('KunRuntimeProvider', () => {
         prompt: 'hello',
         model: 'mimo-v2.5',
         providerId: 'xiaomi-token-plan',
-        approvalPolicy: 'auto',
-        sandboxMode: 'danger-full-access'
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write'
       })
     )
   })
@@ -348,8 +348,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'hello',
-        approvalPolicy: 'auto',
-        sandboxMode: 'danger-full-access',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
         workspaceCheckpointId: 'gcp_1'
       })
     )
@@ -372,8 +372,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'design a screen',
-        approvalPolicy: 'auto',
-        sandboxMode: 'danger-full-access',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
         guiDesignCanvas: true,
         guiDesignMode: true
       })
@@ -401,8 +401,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'animate the mark',
-        approvalPolicy: 'auto',
-        sandboxMode: 'danger-full-access',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
         guiDesignMode: true,
         guiDesignArtifact: {
           kind: 'svg',
@@ -441,8 +441,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'describe this',
-        approvalPolicy: 'auto',
-        sandboxMode: 'danger-full-access',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
         attachmentIds: ['att_1']
       })
     )
@@ -479,8 +479,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'explain these files',
-        approvalPolicy: 'auto',
-        sandboxMode: 'danger-full-access',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
         fileReferences: [
           {
             path: '/workspace/deepseek-gui/src/App.tsx',
@@ -519,8 +519,8 @@ describe('KunRuntimeProvider', () => {
       JSON.stringify({
         prompt: 'think harder',
         model: 'auto',
-        approvalPolicy: 'auto',
-        sandboxMode: 'danger-full-access',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
         reasoningEffort: 'max'
       })
     )
@@ -553,8 +553,8 @@ describe('KunRuntimeProvider', () => {
       'POST',
       JSON.stringify({
         prompt: 'refine the plan',
-        approvalPolicy: 'auto',
-        sandboxMode: 'danger-full-access',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'workspace-write',
         displayText: 'Generate implementation plan',
         mode: 'plan',
         guiPlan: {
