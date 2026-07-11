@@ -1305,6 +1305,7 @@ async function applyRuntimeProjectionAction(
     case 'compaction_updated': sink.onCompaction(action.payload); return
     case 'review_updated': sink.onReview?.(action.payload); return
     case 'approval_requested': await handleApprovalRequest(action.event, sink); return
+    case 'approval_received': sink.onApproval(action.payload); return
     case 'user_input_requested': sink.onUserInput(action.payload); return
     case 'user_input_status_changed': sink.onUserInputStatus(action.payload); return
     case 'runtime_status_received': sink.onRuntimeStatus?.(action.payload); return

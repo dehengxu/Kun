@@ -891,69 +891,9 @@ export function buildThreadEventSink(
         deltas.push(delta)
       }
       if (deltas.length === 0) return
-      set((s) => {
-        resetBusyRecoveryAttempts()
-        const nextError = clearRuntimeStreamRecoveringError(s.error)
-        const seqs = deltas
-          .map((delta) => delta.seq)
-          .filter((value): value is number => typeof value === 'number')
-        const nextLastSeq = seqs.length > 0 ? Math.max(s.lastSeq, ...seqs) : s.lastSeq
-        const base: Partial<ChatState> = {
-          error: nextError,
-          ...(nextLastSeq !== s.lastSeq ? { lastSeq: nextLastSeq } : {})
-        }
-        // When deltas arrive but busy is false (e.g. switching back to a running
-        // thread or SSE stream recovered from a transient error), restore the
-        // busy flag so the interrupt button reappears.
-        if (!s.busy) {
-          base.busy = true
-          armBusyWatchdog(set, get)
-        }
-        let liveReasoning = s.liveReasoning
-        let liveAssistant = s.liveAssistant
-        // Shared, cross-sink replay guard — see ChatState.liveDeltaSeqFloor.
-        // The per-sink `appliedDeltaSeqFloor` above only dedups within one
-        // subscription; while a flaky long turn briefly has more than one sink
-        // live, each independently re-applies the same replayed deltas. Gating
-        // on the store floor serializes them so each seq folds in just once.
-        let liveDeltaSeqFloor = s.liveDeltaSeqFloor
-        let nextReasoningFirstAtByUserId = s.turnReasoningFirstAtByUserId
-        let nextReasoningLastAtByUserId = s.turnReasoningLastAtByUserId
-        const userId = s.currentTurnUserId
-        let sawReasoning = false
-        for (const delta of deltas) {
-          if (typeof delta.seq === 'number') {
-            if (delta.seq <= liveDeltaSeqFloor) continue
-            liveDeltaSeqFloor = delta.seq
-          }
-          if (delta.kind === 'agent_reasoning') {
-            liveReasoning += delta.text
-            sawReasoning = true
-            continue
-          }
-          liveAssistant += delta.text
-        }
-        // Stamp reasoning timings once per batch instead of per delta.
-        if (sawReasoning && userId) {
-          const now = Date.now()
-          if (typeof nextReasoningFirstAtByUserId[userId] !== 'number') {
-            nextReasoningFirstAtByUserId = { ...s.turnReasoningFirstAtByUserId, [userId]: now }
-          }
-          nextReasoningLastAtByUserId = { ...s.turnReasoningLastAtByUserId, [userId]: now }
-        }
-        return {
-          ...base,
-          ...(liveReasoning !== s.liveReasoning ? { liveReasoning } : {}),
-          ...(liveAssistant !== s.liveAssistant ? { liveAssistant } : {}),
-          ...(liveDeltaSeqFloor !== s.liveDeltaSeqFloor ? { liveDeltaSeqFloor } : {}),
-          ...(nextReasoningFirstAtByUserId !== s.turnReasoningFirstAtByUserId
-            ? { turnReasoningFirstAtByUserId: nextReasoningFirstAtByUserId }
-            : {}),
-          ...(nextReasoningLastAtByUserId !== s.turnReasoningLastAtByUserId
-            ? { turnReasoningLastAtByUserId: nextReasoningLastAtByUserId }
-            : {})
-        }
-      })
+      resetBusyRecoveryAttempts()
+      if (!get().busy) armBusyWatchdog(set, get)
+      set((state) => reduce(state, { type: 'deltas_received', deltas }))
     },
     onTool: (ev) => {
       if (!isCurrentStream()) return
@@ -1034,114 +974,18 @@ export function buildThreadEventSink(
         }
       })
     },
-    onCompaction: (ev) => {
+    onCompaction: (event) => {
       if (!isCurrentStream()) return
-      set((s) => {
-        resetBusyRecoveryAttempts()
-        const base: Partial<ChatState> = {}
-        if (!s.busy && ev.status === 'running') {
-          base.busy = true
-          armBusyWatchdog(set, get)
-        }
-        // A standalone (manual `/compact`) compaction has no enclosing turn to
-        // flip the thread back to idle, so clear the transient busy flag it set
-        // on the `running` event once the compaction settles.
-        if (s.busy && ev.status !== 'running' && !s.currentTurnId) {
-          base.busy = false
-          clearBusyWatchdog()
-        }
-        const idx = s.blocks.findIndex((b) => b.kind === 'compaction' && b.id === ev.itemId)
-        if (idx >= 0) {
-          const cur = s.blocks[idx]
-          if (cur.kind !== 'compaction') return { ...base }
-          const next: CompactionBlock = {
-            ...cur,
-            summary: ev.summary || cur.summary,
-            status: ev.status,
-            detail: ev.detail ?? cur.detail,
-            auto: ev.auto ?? cur.auto,
-            messagesBefore: ev.messagesBefore ?? cur.messagesBefore,
-            messagesAfter: ev.messagesAfter ?? cur.messagesAfter,
-            createdAt: cur.createdAt ?? ev.createdAt
-          }
-          const blocks = [...s.blocks]
-          blocks[idx] = next
-          return {
-            ...base,
-            blocks,
-            error: clearRuntimeStreamRecoveringError(s.error)
-          }
-        }
-        const flushed = flushLiveBlocks(s)
-        const baseBlocks = flushed.blocks ?? s.blocks
-        const block: CompactionBlock = {
-          kind: 'compaction',
-          id: ev.itemId,
-          createdAt: ev.createdAt ?? new Date().toISOString(),
-          summary: ev.summary,
-          status: ev.status,
-          detail: ev.detail,
-          auto: ev.auto,
-          messagesBefore: ev.messagesBefore,
-          messagesAfter: ev.messagesAfter
-        }
-        return {
-          ...base,
-          ...flushed,
-          blocks: [...baseBlocks, block],
-          error: clearRuntimeStreamRecoveringError(s.error)
-        }
-      })
+      resetBusyRecoveryAttempts()
+      if (!get().busy && event.status === 'running') armBusyWatchdog(set, get)
+      if (get().busy && event.status !== 'running' && !get().currentTurnId) clearBusyWatchdog()
+      set((state) => reduce(state, { type: 'compaction_updated', payload: event }))
     },
-    onReview: (ev: ReviewEventPayload) => {
+    onReview: (event: ReviewEventPayload) => {
       if (!isCurrentStream()) return
-      set((s) => {
-        resetBusyRecoveryAttempts()
-        const base: Partial<ChatState> = {}
-        if (!s.busy && ev.status === 'running') {
-          base.busy = true
-          armBusyWatchdog(set, get)
-        }
-        const idx = s.blocks.findIndex((b) => b.kind === 'review' && b.id === ev.itemId)
-        if (idx >= 0) {
-          const cur = s.blocks[idx]
-          if (cur.kind !== 'review') return { ...base }
-          const next: ReviewBlock = {
-            ...cur,
-            title: ev.title || cur.title,
-            status: ev.status,
-            target: ev.target ?? cur.target,
-            reviewText: ev.reviewText ?? cur.reviewText,
-            output: ev.output ?? cur.output,
-            createdAt: cur.createdAt ?? ev.createdAt
-          }
-          const blocks = [...s.blocks]
-          blocks[idx] = next
-          return {
-            ...base,
-            blocks,
-            error: clearRuntimeStreamRecoveringError(s.error)
-          }
-        }
-        const flushed = flushLiveBlocks(s)
-        const baseBlocks = flushed.blocks ?? s.blocks
-        const block: ReviewBlock = {
-          kind: 'review',
-          id: ev.itemId,
-          createdAt: ev.createdAt ?? new Date().toISOString(),
-          title: ev.title,
-          status: ev.status,
-          target: ev.target,
-          reviewText: ev.reviewText,
-          output: ev.output
-        }
-        return {
-          ...base,
-          ...flushed,
-          blocks: [...baseBlocks, block],
-          error: clearRuntimeStreamRecoveringError(s.error)
-        }
-      })
+      resetBusyRecoveryAttempts()
+      if (!get().busy && event.status === 'running') armBusyWatchdog(set, get)
+      set((state) => reduce(state, { type: 'review_updated', payload: event }))
     },
     onApproval: (request) => {
       if (!isCurrentStream()) return

@@ -42,6 +42,55 @@ export function reduceChatProjection(
   context: ChatProjectionReducerContext
 ): Partial<ChatState> {
   switch (action.type) {
+    case 'deltas_received': {
+      const deltas = action.deltas
+      if (deltas.length === 0) return {}
+      const seqs = deltas
+        .map((delta) => delta.seq)
+        .filter((value): value is number => typeof value === 'number')
+      const patch: Partial<ChatState> = {
+        error: context.clearRecoveringError(state.error),
+        ...(seqs.length > 0 ? { lastSeq: Math.max(state.lastSeq, ...seqs) } : {}),
+        ...(!state.busy ? { busy: true } : {})
+      }
+      let liveReasoning = state.liveReasoning
+      let liveAssistant = state.liveAssistant
+      let liveDeltaSeqFloor = state.liveDeltaSeqFloor
+      let reasoningFirst = state.turnReasoningFirstAtByUserId
+      let reasoningLast = state.turnReasoningLastAtByUserId
+      let sawReasoning = false
+      for (const delta of deltas) {
+        if (typeof delta.seq === 'number') {
+          if (delta.seq <= liveDeltaSeqFloor) continue
+          liveDeltaSeqFloor = delta.seq
+        }
+        if (delta.kind === 'agent_reasoning') {
+          liveReasoning += delta.text
+          sawReasoning = true
+        } else {
+          liveAssistant += delta.text
+        }
+      }
+      const userId = state.currentTurnUserId
+      if (sawReasoning && userId) {
+        if (typeof reasoningFirst[userId] !== 'number') {
+          reasoningFirst = { ...reasoningFirst, [userId]: context.now }
+        }
+        reasoningLast = { ...reasoningLast, [userId]: context.now }
+      }
+      return {
+        ...patch,
+        ...(liveReasoning !== state.liveReasoning ? { liveReasoning } : {}),
+        ...(liveAssistant !== state.liveAssistant ? { liveAssistant } : {}),
+        ...(liveDeltaSeqFloor !== state.liveDeltaSeqFloor ? { liveDeltaSeqFloor } : {}),
+        ...(reasoningFirst !== state.turnReasoningFirstAtByUserId
+          ? { turnReasoningFirstAtByUserId: reasoningFirst }
+          : {}),
+        ...(reasoningLast !== state.turnReasoningLastAtByUserId
+          ? { turnReasoningLastAtByUserId: reasoningLast }
+          : {})
+      }
+    }
     case 'approval_received': {
       const request = action.payload
       if (state.blocks.some(
@@ -155,6 +204,88 @@ export function reduceChatProjection(
       return {
         ...flushed,
         blocks: context.upsertRuntimeError(baseBlocks, block),
+        error: context.clearRecoveringError(state.error)
+      }
+    }
+    case 'compaction_updated': {
+      const event = action.payload
+      const base: Partial<ChatState> = {}
+      if (!state.busy && event.status === 'running') base.busy = true
+      if (state.busy && event.status !== 'running' && !state.currentTurnId) base.busy = false
+      const index = state.blocks.findIndex(
+        (block) => block.kind === 'compaction' && block.id === event.itemId
+      )
+      if (index >= 0) {
+        const current = state.blocks[index]
+        if (current.kind !== 'compaction') return base
+        const blocks = [...state.blocks]
+        blocks[index] = {
+          ...current,
+          summary: event.summary || current.summary,
+          status: event.status,
+          detail: event.detail ?? current.detail,
+          auto: event.auto ?? current.auto,
+          messagesBefore: event.messagesBefore ?? current.messagesBefore,
+          messagesAfter: event.messagesAfter ?? current.messagesAfter,
+          createdAt: current.createdAt ?? event.createdAt
+        }
+        return { ...base, blocks, error: context.clearRecoveringError(state.error) }
+      }
+      const flushed = flushLiveProjection(state, context.now)
+      const baseBlocks = flushed.blocks ?? state.blocks
+      return {
+        ...base,
+        ...flushed,
+        blocks: [...baseBlocks, {
+          kind: 'compaction',
+          id: event.itemId,
+          createdAt: event.createdAt ?? new Date(context.now).toISOString(),
+          summary: event.summary,
+          status: event.status,
+          detail: event.detail,
+          auto: event.auto,
+          messagesBefore: event.messagesBefore,
+          messagesAfter: event.messagesAfter
+        }],
+        error: context.clearRecoveringError(state.error)
+      }
+    }
+    case 'review_updated': {
+      const event = action.payload
+      const base: Partial<ChatState> = !state.busy && event.status === 'running' ? { busy: true } : {}
+      const index = state.blocks.findIndex(
+        (block) => block.kind === 'review' && block.id === event.itemId
+      )
+      if (index >= 0) {
+        const current = state.blocks[index]
+        if (current.kind !== 'review') return base
+        const blocks = [...state.blocks]
+        blocks[index] = {
+          ...current,
+          title: event.title || current.title,
+          status: event.status,
+          target: event.target ?? current.target,
+          reviewText: event.reviewText ?? current.reviewText,
+          output: event.output ?? current.output,
+          createdAt: current.createdAt ?? event.createdAt
+        }
+        return { ...base, blocks, error: context.clearRecoveringError(state.error) }
+      }
+      const flushed = flushLiveProjection(state, context.now)
+      const baseBlocks = flushed.blocks ?? state.blocks
+      return {
+        ...base,
+        ...flushed,
+        blocks: [...baseBlocks, {
+          kind: 'review',
+          id: event.itemId,
+          createdAt: event.createdAt ?? new Date(context.now).toISOString(),
+          title: event.title,
+          status: event.status,
+          target: event.target,
+          reviewText: event.reviewText,
+          output: event.output
+        }],
         error: context.clearRecoveringError(state.error)
       }
     }
