@@ -8,7 +8,7 @@ import type {
   OAuthTokens
 } from '@modelcontextprotocol/sdk/shared/auth.js'
 import { spawn } from 'node:child_process'
-import { createHash, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import type { McpCapabilityConfig, McpServerConfig } from '../../contracts/capabilities.js'
@@ -435,8 +435,15 @@ function parseTokenScopes(scope: string | undefined): string[] {
 }
 
 export function defaultMcpOAuthRedirectPort(serverId: string, url: string): number {
-  const digest = createHash('sha256').update(`${serverId}\n${url}`).digest()
-  return MCP_OAUTH_PORT_BASE + digest.readUInt16BE(0) % MCP_OAUTH_PORT_RANGE
+  // The port only needs a stable distribution; it is not a secret or a
+  // security token. Keep this deliberately non-cryptographic so the value is
+  // never confused with password/key derivation.
+  let hash = 0x811c9dc5
+  for (const character of `${serverId}\n${url}`) {
+    hash ^= character.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return MCP_OAUTH_PORT_BASE + (hash >>> 0) % MCP_OAUTH_PORT_RANGE
 }
 
 function safeMcpOAuthFileName(serverId: string): string {

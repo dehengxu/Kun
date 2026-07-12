@@ -38,9 +38,13 @@ describe('local-whisper-service helpers', () => {
   it('keeps checksum metadata for every downloadable model', () => {
     for (const model of LOCAL_WHISPER_MODELS) {
       expect(model.sha256).toMatch(/^[a-f0-9]{64}$/)
-      expect(model.downloadUrl).toContain('https://huggingface.co/')
-      expect(model.downloadMirrors.some((mirror) => mirror.downloadUrl.includes('https://hf-mirror.com/'))).toBe(true)
-      expect(model.downloadMirrors.some((mirror) => mirror.downloadUrl.includes('https://hf-cdn.sufy.com/'))).toBe(true)
+      expect(new URL(model.downloadUrl).origin).toBe('https://huggingface.co')
+      expect(model.downloadMirrors.some((mirror) => (
+        new URL(mirror.downloadUrl).origin === 'https://hf-mirror.com'
+      ))).toBe(true)
+      expect(model.downloadMirrors.some((mirror) => (
+        new URL(mirror.downloadUrl).origin === 'https://hf-cdn.sufy.com'
+      ))).toBe(true)
     }
   })
 
@@ -48,8 +52,10 @@ describe('local-whisper-service helpers', () => {
     const model = localWhisperModelById(LOCAL_WHISPER_SMALL_MODEL_ID)
 
     expect(_internals.localWhisperDownloadUrl(model, 'huggingface')).toBe(model.downloadUrl)
-    expect(_internals.localWhisperDownloadUrl(model, 'hf-mirror')).toContain('https://hf-mirror.com/')
-    expect(_internals.localWhisperDownloadUrl(model, 'hf-sufy')).toContain('https://hf-cdn.sufy.com/')
+    expect(new URL(_internals.localWhisperDownloadUrl(model, 'hf-mirror')).origin)
+      .toBe('https://hf-mirror.com')
+    expect(new URL(_internals.localWhisperDownloadUrl(model, 'hf-sufy')).origin)
+      .toBe('https://hf-cdn.sufy.com')
   })
 
   it('bundles Whisper runners for supported desktop platforms', () => {

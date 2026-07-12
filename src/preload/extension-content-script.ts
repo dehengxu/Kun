@@ -3,6 +3,7 @@ import type {
   ExtensionHostContentScriptBootstrapBinding,
   ExtensionHostContentScriptBridgeRequest
 } from '../shared/extension-ipc'
+import { EXTENSION_CONTENT_SCRIPT_DEACTIVATION_SOURCE } from '../shared/extension-content-script-sources'
 
 const BOOTSTRAP_CHANNEL = 'extension:content-script:bootstrap'
 const INSTALL_CHANNEL = 'extension:content-script:install'
@@ -230,10 +231,9 @@ function styleInstallationCode(marker: string, css: string): string {
 function deactivationSource(
   binding: ExtensionHostContentScriptBootstrapBinding
 ): { code: string; url?: string } {
-  const { extensionId, contributionId, marker } = binding.context
   return {
-    code: `(() => { const detail = Object.freeze({ extensionId: ${JSON.stringify(extensionId)}, contributionId: ${JSON.stringify(contributionId)} }); window.dispatchEvent(new CustomEvent('kun-extension-deactivate', { detail })); const marker = ${JSON.stringify(marker)}; document.querySelectorAll('[data-kun-extension-style], [data-kun-extension-root]').forEach((node) => { if (node.getAttribute('data-kun-extension-style') === marker || node.getAttribute('data-kun-extension-root') === marker) node.remove(); }); })();`,
-    url: `kun-extension://${extensionId}/__kun_deactivate__.js`
+    code: EXTENSION_CONTENT_SCRIPT_DEACTIVATION_SOURCE,
+    url: `kun-extension://${binding.context.extensionId}/__kun_deactivate__.js`
   }
 }
 

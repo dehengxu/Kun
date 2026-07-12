@@ -4,6 +4,7 @@ import {
   contentScriptIsolationPrelude,
   registerExtensionContentScriptPreload
 } from './extension-content-script'
+import { EXTENSION_CONTENT_SCRIPT_DEACTIVATION_SOURCE } from '../shared/extension-content-script-sources'
 
 function binding(runAt: 'documentStart' | 'documentEnd'): ExtensionHostContentScriptBootstrapBinding {
   return {
@@ -122,5 +123,15 @@ describe('Direct DOM workbench preload', () => {
     expect(prelude).toContain("['WebSocket', denied]")
     expect(prelude).toContain("['open', denied]")
     expect(prelude).toContain("Object.defineProperty(globalThis, key, { value: undefined")
+  })
+
+  it('uses a static deactivation source backed by the isolated-world context', () => {
+    const state = fixture('documentStart', 'complete')
+    const api = state.exposed[0]!.api
+    ;(api.dispose as () => void)()
+    const source = state.execute.mock.calls.at(-1)![1][0]!.code
+    expect(source).toBe(EXTENSION_CONTENT_SCRIPT_DEACTIVATION_SOURCE)
+    expect(source).toContain('globalThis.kunHost')
+    expect(source).not.toContain(JSON.stringify(state.value.context.extensionId))
   })
 })

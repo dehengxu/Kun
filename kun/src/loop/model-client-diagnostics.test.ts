@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../ports/model-client.js'
-import { modelClientDiagnostics } from './model-client-diagnostics.js'
+import { modelClientDiagnostics, sanitizeProviderBaseUrl } from './model-client-diagnostics.js'
 
 class DiagnosticModel implements ModelClient {
   readonly provider = 'compat-multi'
@@ -26,5 +26,18 @@ describe('modelClientDiagnostics', () => {
     expect(modelClientDiagnostics(new DiagnosticModel(), 'missing')).toEqual({
       provider: 'compat-multi'
     })
+  })
+
+  it('fails closed instead of leaking malformed provider URL fragments', () => {
+    for (const value of [
+      'not a url?api_key=also-secret',
+      'https://alice:supersecret@ invalid.example/#also-secret',
+      `${'#'.repeat(20_000)}also-secret`
+    ]) {
+      const sanitized = sanitizeProviderBaseUrl(value)
+      expect(sanitized).toBe('[invalid URL]')
+      expect(sanitized).not.toContain('supersecret')
+      expect(sanitized).not.toContain('also-secret')
+    }
   })
 })

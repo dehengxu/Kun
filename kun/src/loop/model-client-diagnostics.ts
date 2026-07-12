@@ -57,9 +57,8 @@ export function sanitizeProviderBaseUrl(baseUrl: string): string {
     url.hash = ''
     return url.toString().replace(/\/$/, '')
   } catch {
-    return baseUrl
-      .replace(/(^|\/\/)[^/?#@\s]*@/, '$1')
-      .replace(/[?#].*$/, '')
-      .replace(/\/+$/, '')
+    // Invalid URLs do not have reliable credential/query boundaries. Avoid
+    // echoing provider configuration into diagnostics when parsing fails.
+    return '[invalid URL]'
   }
 }

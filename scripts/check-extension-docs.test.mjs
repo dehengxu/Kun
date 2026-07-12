@@ -8,6 +8,7 @@ import {
   API_EXPORTS_END,
   SDK_SNAPSHOTS_BEGIN,
   SDK_SNAPSHOTS_END,
+  githubHeadingSlug,
   renderApiExportsRegion,
   renderSdkSnapshotsRegion,
   validateBilingualPair,
@@ -42,6 +43,13 @@ test('validates usable Markdown anchors instead of only target-file existence', 
   const broken = markdown.replace('](#部分)', '](#missing)')
   const problems = await validateMarkdownLinks('broken.md', path, broken, new Map([[path, broken]]))
   assert.ok(problems.some((problem) => problem.includes('broken Markdown anchor')))
+})
+
+test('normalizes inline HTML in heading anchors without executable-text sanitization', () => {
+  assert.equal(githubHeadingSlug('<span>Extension</span> API'), 'extension-api')
+  assert.equal(githubHeadingSlug('Nested <span title="<b>">heading</span>'), 'nested-heading')
+  assert.equal(githubHeadingSlug('Unclosed <span heading'), 'unclosed-span-heading')
+  assert.equal(githubHeadingSlug('<script>alert(1)</script> Safe'), 'alert1-safe')
 })
 
 test('rejects invalid JSON and TypeScript snippets while allowing reasoned skips', async () => {

@@ -92,9 +92,9 @@ export function redactUrlForLog(url: string): string {
     parsed.password = ''
     return parsed.toString()
   } catch {
-    return trimmed
-      .replace(/^[^:/]+:\/\/[^/@]*@/, (match) => match.replace(/\/\/.*@$/, '//'))
-      .replace(/([?&][^=&]*(?:key|token|secret|signature|auth|password)[^=]*=)[^&#]*/gi, '$1[redacted]')
+    // A malformed URL has no dependable authority/query boundaries. Logging
+    // any fragment risks leaking userinfo or credentials, so fail closed.
+    return '[invalid URL]'
   }
 }
 

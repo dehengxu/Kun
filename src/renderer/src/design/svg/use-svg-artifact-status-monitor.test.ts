@@ -38,6 +38,12 @@ describe('SVG artifact background status', () => {
     )).toBe('pending')
   })
 
+  it('does not create a visual element by joining text around a removed block', () => {
+    expect(svgArtifactStatusForSource(
+      '<svg xmlns="http://www.w3.org/2000/svg"><pa<script>alert(1)</script>th d="M0 0h1" /></svg>'
+    )).toBe('pending')
+  })
+
   it('does not dispatch or restart watches when a pending skeleton remains pending', async () => {
     const relativePath = '.kun-design/doc/motion/v1.svg'
     const motion: DesignArtifact = {

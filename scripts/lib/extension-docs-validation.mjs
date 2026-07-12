@@ -388,9 +388,8 @@ function markdownHeadings(markdown) {
   })
 }
 
-function githubHeadingSlug(heading) {
-  return heading
-    .replace(/<[^>]*>/gu, '')
+export function githubHeadingSlug(heading) {
+  return stripInlineHtmlTags(heading)
     .replace(/!\[([^\]]*)\]\([^)]*\)/gu, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/gu, '$1')
     .replace(/`([^`]*)`/gu, '$1')
@@ -398,6 +397,20 @@ function githubHeadingSlug(heading) {
     .trim()
     .replace(/[^\p{L}\p{M}\p{N}\p{Pc}\- ]/gu, '')
     .replace(/\s+/gu, '-')
+}
+
+function stripInlineHtmlTags(value) {
+  let result = ''
+  let cursor = 0
+  while (cursor < value.length) {
+    const opening = value.indexOf('<', cursor)
+    if (opening < 0) return result + value.slice(cursor)
+    const closing = value.indexOf('>', opening + 1)
+    if (closing < 0) return result + value.slice(cursor)
+    result += value.slice(cursor, opening)
+    cursor = closing + 1
+  }
+  return result
 }
 
 export async function validateMarkdownLinks(name, path, markdown, markdownByPath) {

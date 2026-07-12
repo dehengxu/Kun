@@ -28,9 +28,9 @@ export function svgArtifactStatusForSource(
       }
     }
     const sanitized = source
-      .replace(/<(?:script|foreignObject)\b[^>]*\/>/gi, '')
-      .replace(/<(script|foreignObject)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
-      .replace(/<(defs|symbol|clipPath|mask|marker|pattern|filter)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+      .replace(/<(?:script|foreignObject)\b[^>]*\/>/gi, ' ')
+      .replace(/<(script|foreignObject)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+      .replace(/<(defs|symbol|clipPath|mask|marker|pattern|filter)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
     return /<(?:path|rect|circle|ellipse|line|polyline|polygon|text|use|image)\b/i.test(sanitized)
       ? 'ready'
       : 'pending'

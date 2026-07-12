@@ -9,4 +9,17 @@ describe('CompatModelClient log redaction', () => {
     expect(redacted).not.toContain('supersecret')
     expect(redacted).not.toContain('also-secret')
   })
+
+  it('fails closed for malformed or adversarial URL text', () => {
+    for (const value of [
+      'not a url?api_key=also-secret',
+      'https://alice:supersecret@ invalid.example/?token=also-secret',
+      `${'&key'.repeat(20_000)}=also-secret`
+    ]) {
+      const redacted = redactUrlForLog(value)
+      expect(redacted).toBe('[invalid URL]')
+      expect(redacted).not.toContain('supersecret')
+      expect(redacted).not.toContain('also-secret')
+    }
+  })
 })

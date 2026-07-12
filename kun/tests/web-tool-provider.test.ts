@@ -378,6 +378,7 @@ describe('Web tool provider', () => {
       'http://[fe80::1]/',
       'http://169.254.169.254/latest/meta-data/',
       'http://localhost./',
+      `http://localhost${'.'.repeat(10_000)}/`,
       'http://metadata.google.internal/computeMetadata/v1/'
     ]
 

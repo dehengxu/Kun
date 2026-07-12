@@ -659,7 +659,13 @@ function domainMatches(hostname: string, domain: string): boolean {
 }
 
 function normalizedHostname(value: string): string {
-  return value.trim().toLowerCase().replace(/^\[(.*)\]$/, '$1').replace(/\.+$/, '')
+  let normalized = value.trim().toLowerCase()
+  if (normalized.startsWith('[') && normalized.endsWith(']')) {
+    normalized = normalized.slice(1, -1)
+  }
+  let end = normalized.length
+  while (end > 0 && normalized[end - 1] === '.') end -= 1
+  return normalized.slice(0, end)
 }
 
 function isLocalOnlyHostname(hostname: string): boolean {
