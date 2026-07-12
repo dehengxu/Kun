@@ -79,7 +79,7 @@ test('selects host-native packaged resources and never launches desktop Electron
   assert.equal(desktopApplicationEntry('/packaged/Resources', '/packaged/Kun', '/packaged/Kun'), undefined)
   assert.equal(
     desktopApplicationEntry('/packaged/Resources', '/host/Electron', '/packaged/Kun'),
-    '/packaged/Resources/app.asar'
+    resolve('/packaged/Resources', 'app.asar')
   )
   assert.equal(
     desktopSmokeSettings(43123, '/isolated-home/.kun/default_workspace').workspaceRoot,
@@ -959,6 +959,7 @@ function assertOrderedSourceMarkers(source, markers) {
 }
 
 function assertSourceMarkersAfter(source, priorMarker, markers) {
+  source = source.replace(/\r\n/gu, '\n')
   const priorIndex = source.indexOf(priorMarker)
   assert.notEqual(priorIndex, -1, `missing prior source marker: ${priorMarker}`)
   for (const marker of markers) {
