@@ -42,8 +42,10 @@ import { useChatStore } from '../../store/chat-store'
 import type { AppRoute } from '../../store/chat-store-types'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import {
+  COMPOSER_FILE_REFERENCE_DRAG_MIME,
   composerFileReferenceFromPath,
   isComposerDirectoryReference,
+  parseComposerFileReferenceDragData,
   type ComposerFileReference
 } from '../../lib/composer-file-references'
 import {
@@ -431,6 +433,7 @@ export function FloatingComposer({
   const canPickFileReference = canCompose && fileReferenceEnabled && Boolean(effectiveWorkspaceRoot) && Boolean(onOpenFileReferencePicker)
   const canPickDesignReference = canCompose && fileReferenceEnabled && Boolean(onOpenDesignReferencePicker)
   const canPickLocalFileReference = canCompose && fileReferenceEnabled && Boolean(onPickFileReferences)
+  const canAddFileReference = canCompose && fileReferenceEnabled && Boolean(effectiveWorkspaceRoot) && Boolean(onAddFileReference)
   const showIntentToolbar = !compact && route === 'chat'
   const showComposerMenuButton = showIntentToolbar
   const canTogglePlanMode = canCompose && Boolean(onPlanCommand)
@@ -1031,14 +1034,21 @@ export function FloatingComposer({
 
   const handleComposerDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
     const dataTransferTypes = Array.from(event.dataTransfer.types ?? [])
+    const canAcceptFileReference = canAddFileReference && dataTransferTypes.includes(COMPOSER_FILE_REFERENCE_DRAG_MIME)
     const canAcceptImages = canPickAttachment && imageTransferHasImages(event.dataTransfer)
     const canAcceptPdf = canPickAttachment && Array.from(event.dataTransfer.files ?? []).some(isPdfFile)
-    if (!dataTransferTypes.includes('Files') && !canAcceptImages && !canAcceptPdf) return
+    if (!dataTransferTypes.includes('Files') && !canAcceptImages && !canAcceptPdf && !canAcceptFileReference) return
     event.preventDefault()
     event.dataTransfer.dropEffect = 'copy'
   }
 
   const handleComposerDrop = (event: ReactDragEvent<HTMLDivElement>): void => {
+    const draggedReference = canAddFileReference
+      ? parseComposerFileReferenceDragData(
+          event.dataTransfer.getData(COMPOSER_FILE_REFERENCE_DRAG_MIME),
+          effectiveWorkspaceRoot
+        )
+      : null
     const imageFiles = canPickAttachment ? imageFilesFromTransfer(event.dataTransfer) : []
     const rawFiles = Array.from(event.dataTransfer.files ?? [])
     const isImageLike = (file: File): boolean =>
@@ -1047,8 +1057,9 @@ export function FloatingComposer({
     const pathFiles = canPickLocalFileReference && onAddFileReference
       ? rawFiles.filter((file) => !isImageLike(file) && !isPdfFile(file))
       : []
-    if (imageFiles.length === 0 && pdfFiles.length === 0 && pathFiles.length === 0) return
+    if (!draggedReference && imageFiles.length === 0 && pdfFiles.length === 0 && pathFiles.length === 0) return
     event.preventDefault()
+    if (draggedReference) onAddFileReference?.(draggedReference)
     if ((imageFiles.length > 0 || pdfFiles.length > 0) && onPickAttachments) {
       onPickAttachments([...imageFiles, ...pdfFiles])
     }

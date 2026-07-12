@@ -1,4 +1,5 @@
 import type {
+  ApprovalStatusPayload,
   ChatBlock,
   CompactionEventPayload,
   GeneratedFileReference,
@@ -840,12 +841,27 @@ function approvalBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRuntimeM
     summary: item.summary?.trim() || 'Approval required',
     toolName: item.toolName,
     status:
-      item.status === 'allowed' || item.status === 'denied'
+      item.status === 'allowed' || item.status === 'denied' || item.status === 'expired'
         ? item.status
         : item.status === 'failed'
           ? 'error'
           : 'pending',
     ...(Object.keys(meta).length > 0 ? { meta } : {})
+  }
+}
+
+function approvalStatusFromEvent(event: CoreRuntimeEventJson): ApprovalStatusPayload | null {
+  const approvalId = event.approvalId ?? event.itemId ?? ''
+  if (!approvalId) return null
+  if (event.status !== 'allowed' && event.status !== 'denied' && event.status !== 'expired') {
+    return null
+  }
+  return {
+    approvalId,
+    status: event.status,
+    ...(event.status === 'expired' && event.reason?.trim()
+      ? { errorMessage: redactSecretText(event.reason.trim()) }
+      : {})
   }
 }
 
@@ -1249,6 +1265,7 @@ const kunEventNormalizerDeps: KunEventNormalizerDeps = {
   readyTool: toolReadyFromEvent,
   runtimeStatus: runtimeStatusFromEvent,
   approvalAction: (event) => ({ type: 'approval_requested', event }),
+  approvalStatus: approvalStatusFromEvent,
   userInputRequest: (event) => userInputRequestFromCore({
     itemId: event.itemId,
     inputId: event.inputId,
@@ -1306,6 +1323,7 @@ async function applyRuntimeProjectionAction(
     case 'review_updated': sink.onReview?.(action.payload); return
     case 'approval_requested': await handleApprovalRequest(action.event, sink); return
     case 'approval_received': sink.onApproval(action.payload); return
+    case 'approval_status_changed': sink.onApprovalStatus?.(action.payload); return
     case 'user_input_requested': sink.onUserInput(action.payload); return
     case 'user_input_status_changed': sink.onUserInputStatus(action.payload); return
     case 'runtime_status_received': sink.onRuntimeStatus?.(action.payload); return

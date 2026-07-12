@@ -70,6 +70,7 @@ import {
   type ExtensionWorkbenchViewGroups,
   writeStoredExtensionSurfaceId
 } from '../extensions/ExtensionWorkbenchSurfaces'
+import { getSlashQuery } from './chat/floating-composer-commands'
 
 const FILE_TREE_SIDEBAR_WIDTH = 320
 const extensionSurfaceLayoutStorage = {
@@ -270,7 +271,8 @@ export function Workbench(): ReactElement {
   })
   const { runtimeInfo, runtimeSkills } = useWorkbenchRuntimeMetadata({
     activeSkillWorkspace,
-    runtimeConnection
+    runtimeConnection,
+    skillMenuOpen: getSlashQuery(input) !== null
   })
   const {
     beginLeftResize, beginRightResize, beginTerminalResize, filePreviewTarget,

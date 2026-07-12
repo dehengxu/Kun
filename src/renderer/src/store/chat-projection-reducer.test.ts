@@ -101,6 +101,56 @@ describe('chat projection reducer', () => {
     expect(projected.blocks).toHaveLength(2)
   })
 
+  it('retires a pending approval after its runtime resolution is projected', () => {
+    const projected = project(state(), [
+      {
+        type: 'approval_received',
+        payload: { approvalId: 'approval_1', summary: 'Run tests' }
+      },
+      {
+        type: 'approval_status_changed',
+        payload: {
+          approvalId: 'approval_1',
+          status: 'expired',
+          errorMessage: 'turn aborted while awaiting approval'
+        }
+      }
+    ])
+
+    expect(projected.blocks).toContainEqual(expect.objectContaining({
+      kind: 'approval',
+      approvalId: 'approval_1',
+      status: 'expired',
+      errorMessage: 'turn aborted while awaiting approval'
+    }))
+  })
+
+  it.each(['allowed', 'denied'] as const)(
+    'clears stale approval errors when the runtime resolves it as %s',
+    (status) => {
+      const initial = {
+        ...state(),
+        blocks: [{
+          kind: 'approval' as const,
+          id: 'approval-approval_1',
+          approvalId: 'approval_1',
+          summary: 'Run tests',
+          status: 'error' as const,
+          errorMessage: 'response was lost'
+        }]
+      }
+
+      const projected = project(initial, [{
+        type: 'approval_status_changed',
+        payload: { approvalId: 'approval_1', status }
+      }])
+      const approval = projected.blocks[0]
+
+      expect(approval).toMatchObject({ kind: 'approval', status })
+      expect(approval).not.toHaveProperty('errorMessage')
+    }
+  )
+
   it('reconciles a persisted completion through the same projection reducer', () => {
     const initial = {
       ...state(),

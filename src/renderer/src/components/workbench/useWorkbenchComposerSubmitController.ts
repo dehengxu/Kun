@@ -348,6 +348,8 @@ export function useWorkbenchComposerSubmitController({
       if (sent) {
         useWriteWorkspaceStore.getState().clearQuotedSelections()
         if (attachments.length > 0) clearComposerAttachments(attachmentScope)
+      } else {
+        setInput(v)
       }
     })()
   }, [

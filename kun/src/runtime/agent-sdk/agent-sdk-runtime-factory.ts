@@ -276,40 +276,114 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
     sandboxMode: SandboxMode | undefined,
     signal: AbortSignal
   ): ((approval: ApprovalRequest) => Promise<'allow' | 'deny'>) => async (approval) => {
-    if (approvalPolicy === 'never' || !deps.approvalGate) return 'deny'
-    const pending = deps.approvalGate.request(approval)
-    const cancelPendingApproval = (reason: string): void => {
-      if (!deps.approvalGate?.expire?.(approval.id, reason)) {
-        deps.approvalGate?.decide(approval.id, 'deny', reason)
+    const gate = deps.approvalGate
+    if (approvalPolicy === 'never' || !gate) return 'deny'
+    const pending = gate.request(approval)
+
+    // Arm cancellation before publishing approval_requested. The recorder may
+    // block on durable storage or synchronous observers, but a cancelled SDK
+    // turn must still stop waiting immediately.
+    let resolveRequested!: () => void
+    let rejectRequested!: (reason: unknown) => void
+    const requested = new Promise<void>((resolve, reject) => {
+      resolveRequested = resolve
+      rejectRequested = reject
+    })
+
+    return new Promise<'allow' | 'deny'>((resolve, reject) => {
+      let settled = false
+      let expiredResolutionScheduled = false
+      const cleanup = (): void => signal.removeEventListener('abort', onAbort)
+      const recordExpiredAfterRequest = (): void => {
+        if (expiredResolutionScheduled) return
+        expiredResolutionScheduled = true
+        // Preserve the observable event order and consume every background
+        // promise: requested must be durable before its expired resolution.
+        void requested.then(async () => {
+          await pending
+          const current = gate.get(approval.id)
+          if (current?.status !== 'expired') return
+          await deps.events.record({
+            kind: 'approval_resolved',
+            threadId: approval.threadId,
+            turnId: approval.turnId,
+            approvalId: approval.id,
+            toolName: approval.toolName,
+            status: 'expired',
+            summary: approval.summary,
+            ...(current.reason ? { reason: current.reason } : {})
+          })
+        }).catch(() => undefined)
       }
-    }
-    try {
-      await deps.events.record({
-        kind: 'approval_requested',
-        threadId: approval.threadId,
-        turnId: approval.turnId,
-        approvalId: approval.id,
-        toolName: approval.toolName,
-        status: 'pending',
-        approvalPolicy,
-        sandboxMode: sandboxMode ?? DEFAULT_SANDBOX_MODE,
-        summary: approval.summary
-      })
-    } catch (error) {
-      cancelPendingApproval('failed to publish approval request')
-      void pending.catch(() => undefined)
-      throw error
-    }
-    try {
-      return await awaitAbortableGate(
-        pending,
-        signal,
-        () => { cancelPendingApproval('turn aborted while awaiting approval') },
-        'approval wait aborted'
+      const expirePending = (reason: string): void => {
+        // InMemoryApprovalGate resolves an expiration as deny. When an HTTP
+        // decision is reserved, expiration is deferred until commit/rollback;
+        // the status check above prevents a false expired event if commit wins.
+        if (gate.expire(approval.id, reason)) recordExpiredAfterRequest()
+      }
+      const onAbort = (): void => {
+        if (settled) return
+        settled = true
+        cleanup()
+        expirePending('turn aborted while awaiting approval')
+        void pending.catch(() => undefined)
+        resolve('deny')
+      }
+
+      signal.addEventListener('abort', onAbort, { once: true })
+
+      try {
+        const recording = deps.events.record({
+          kind: 'approval_requested',
+          threadId: approval.threadId,
+          turnId: approval.turnId,
+          approvalId: approval.id,
+          toolName: approval.toolName,
+          status: 'pending',
+          approvalPolicy,
+          sandboxMode: sandboxMode ?? DEFAULT_SANDBOX_MODE,
+          summary: approval.summary
+        })
+        // Attach both handlers immediately so a recorder rejection cannot
+        // surface as unhandled while abort is winning the race.
+        void recording.then(resolveRequested, rejectRequested).catch(rejectRequested)
+      } catch (error) {
+        rejectRequested(error)
+      }
+
+      if (signal.aborted) {
+        onAbort()
+        return
+      }
+
+      requested.then(
+        () => {
+          if (settled) return
+          pending.then(
+            (decision) => {
+              if (settled) return
+              settled = true
+              cleanup()
+              resolve(decision)
+            },
+            (error) => {
+              if (settled) return
+              settled = true
+              cleanup()
+              reject(error)
+            }
+          )
+        },
+        (error) => {
+          if (settled) return
+          settled = true
+          cleanup()
+          gate.expire(approval.id, 'failed to publish approval request')
+          void pending.catch(() => undefined)
+          reject(error)
+        }
       )
-    } catch {
-      return 'deny'
-    }
+    })
   }
 
   const toolContext = (

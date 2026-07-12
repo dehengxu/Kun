@@ -36,6 +36,22 @@ class AllowApprovalGate {
     return false
   }
 
+  reserveDecision(): boolean {
+    return false
+  }
+
+  commitDecision(): boolean {
+    return false
+  }
+
+  rollbackDecision(): boolean {
+    return false
+  }
+
+  expire(): boolean {
+    return false
+  }
+
   pending(): ApprovalRequest[] {
     return []
   }

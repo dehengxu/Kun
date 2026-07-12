@@ -551,6 +551,12 @@ export class AgentLoop {
       return finalStatus
     } catch (error) {
       if (wallTimeExceeded) return failWallTimeLimit()
+      if (signal.aborted) {
+        const settlement = await settle({ status: 'aborted' })
+        finalStatus = statusFromSettlement(settlement, 'aborted')
+        finalError = errorFromSettlement(settlement)
+        return finalStatus
+      }
       const raw = error instanceof Error ? error.message : String(error)
       // Best-effort enrichment so the renderer can show "what failed where"
       // instead of the bare "Kun turn failed" string. See issue #26.

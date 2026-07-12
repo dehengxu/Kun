@@ -310,7 +310,7 @@ export type ChatBlock =
       approvalId: string
       summary: string
       toolName?: string
-      status: 'pending' | 'submitting' | 'allowed' | 'denied' | 'error'
+      status: 'pending' | 'submitting' | 'allowed' | 'denied' | 'expired' | 'error'
       errorMessage?: string
       meta?: RuntimeDisclosureMetadata
     }
@@ -337,6 +337,12 @@ export type ApprovalRequestPayload = {
   summary: string
   toolName?: string
   meta?: RuntimeDisclosureMetadata
+}
+
+export type ApprovalStatusPayload = {
+  approvalId: string
+  status: 'allowed' | 'denied' | 'expired' | 'error'
+  errorMessage?: string
 }
 
 export type ToolEventPayload = {
@@ -458,6 +464,7 @@ export type ThreadEventSink = {
   onCompaction(ev: CompactionEventPayload): void
   onReview?(ev: ReviewEventPayload): void
   onApproval(req: ApprovalRequestPayload): void
+  onApprovalStatus?(ev: ApprovalStatusPayload): void
   onUserInput(req: UserInputRequestPayload): void
   onUserInputStatus(ev: UserInputStatusPayload): void
   onRuntimeStatus?(ev: RuntimeStatusEventPayload): void
