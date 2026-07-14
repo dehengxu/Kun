@@ -1,6 +1,6 @@
 {
   "name": "kun",
-  "version": "0.1.0",
+  "version": "0.2.26-henryx",
   "description": "Kun local HTTP/SSE agent runtime",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
@@ -68,7 +68,6 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.193",
     "@computer-use/nut-js": "^4.2.0",
-    "@kun/extension-api": "file:../packages/extension-api",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@xmldom/xmldom": "^0.9.10",
     "ajv": "^8.20.0",
