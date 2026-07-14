@@ -65,6 +65,25 @@ describe('createSecretEncryptor', () => {
     }
   })
 
+  it('does not replace a macOS key when its keychain lookup fails transiently', async () => {
+    const run = vi.fn(async (_command: string, args: string[]) => {
+      if (args[0] === 'find-generic-password') {
+        return { code: -1, stdout: '', stderr: 'User interaction is not allowed.' }
+      }
+      return { code: 0, stdout: '', stderr: '' }
+    })
+    const dir = await mkdtemp(join(tmpdir(), 'kun-secret-'))
+    const keyPath = join(dir, 'secret.key')
+    try {
+      await expect(createSecretEncryptor({ keyFilePath: keyPath, platform: 'darwin', run }))
+        .rejects.toThrow(/refusing to replace/)
+      expect(run.mock.calls.some(([, args]) => args[0] === 'add-generic-password')).toBe(false)
+      await expect(readFile(keyPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('falls back to a 0600 key file when the keychain is unavailable', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'kun-secret-'))
     try {

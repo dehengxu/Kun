@@ -118,19 +118,43 @@ export type KeyProviderResult = {
 const KEYCHAIN_SERVICE = 'kun-secret-key'
 const KEYCHAIN_ACCOUNT = 'kun'
 
-async function tryReadOsKey(platform: NodeJS.Platform, run: CommandRunner): Promise<Buffer | null> {
+type OsKeyLookup =
+  | { status: 'found'; key: Buffer }
+  | { status: 'missing' }
+  | { status: 'unavailable'; reason: string }
+
+async function tryReadOsKey(platform: NodeJS.Platform, run: CommandRunner): Promise<OsKeyLookup> {
   try {
     if (platform === 'darwin') {
       const res = await run('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT, '-w'])
-      if (res.code === 0 && res.stdout.trim()) return Buffer.from(res.stdout.trim(), 'base64')
+      if (res.code === 0 && res.stdout.trim()) {
+        const key = Buffer.from(res.stdout.trim(), 'base64')
+        return key.length === 32
+          ? { status: 'found', key }
+          : { status: 'unavailable', reason: 'macOS keychain returned an invalid Kun key' }
+      }
+      if (res.code === 44 || /(?:could not be found|not found)/i.test(res.stderr)) {
+        return { status: 'missing' }
+      }
+      return { status: 'unavailable', reason: 'macOS keychain lookup failed' }
     } else if (platform === 'linux') {
       const res = await run('secret-tool', ['lookup', 'service', KEYCHAIN_SERVICE, 'account', KEYCHAIN_ACCOUNT])
-      if (res.code === 0 && res.stdout.trim()) return Buffer.from(res.stdout.trim(), 'base64')
+      if (res.code === 0 && res.stdout.trim()) {
+        const key = Buffer.from(res.stdout.trim(), 'base64')
+        return key.length === 32
+          ? { status: 'found', key }
+          : { status: 'unavailable', reason: 'Linux secret service returned an invalid Kun key' }
+      }
+      if (res.code === 1 && !res.stderr.trim()) return { status: 'missing' }
+      return { status: 'unavailable', reason: 'Linux secret service lookup failed' }
     }
-  } catch {
-    // tool missing → caller falls back to the key file
+  } catch (error) {
+    return {
+      status: 'unavailable',
+      reason: `OS credential helper failed: ${error instanceof Error ? error.message : String(error)}`
+    }
   }
-  return null
+  return { status: 'missing' }
 }
 
 async function tryWriteOsKey(platform: NodeJS.Platform, run: CommandRunner, key: Buffer): Promise<boolean> {
@@ -266,8 +290,15 @@ export async function createSecretEncryptor(options: CreateKeyProviderOptions): 
       return { encryptor: createAesEncryptor(legacyFileKey), osKeychain: false, reason: 'OS keychain migration failed; existing 0600 key file preserved' }
     }
     const existing = await tryReadOsKey(platform, run)
-    if (existing && existing.length === 32) {
-      return { encryptor: createAesEncryptor(existing), osKeychain: true, reason: 'key loaded from OS keychain' }
+    if (existing.status === 'found') {
+      return { encryptor: createAesEncryptor(existing.key), osKeychain: true, reason: 'key loaded from OS keychain' }
+    }
+    // A lookup failure is different from a confirmed missing item. Generating
+    // a replacement here would make every credential encrypted by the
+    // temporarily inaccessible key permanently unreadable. Fail closed and
+    // let the caller retry once Keychain/secret-service access is restored.
+    if (existing.status === 'unavailable') {
+      throw new Error(`${existing.reason}; refusing to replace the existing Kun encryption key`)
     }
     const fresh = randomBytes(32)
     if (await tryWriteOsKey(platform, run, fresh)) {
