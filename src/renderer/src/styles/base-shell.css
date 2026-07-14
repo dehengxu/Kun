@@ -2934,8 +2934,8 @@ body.ds-workbench-resizing webview {
   box-sizing: border-box;
   width: 100%;
   min-width: 100%;
-  height: 1.25rem;
-  min-height: 1.25rem;
+  height: 1rem;
+  min-height: 1rem;
   margin-left: 0;
   padding: 0;
   border: 0;
