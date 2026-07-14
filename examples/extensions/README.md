@@ -8,6 +8,7 @@ Kun runtime, renderer, Electron, or private HTTP/IPC modules.
 | [`hello-sidebar`](./hello-sidebar) | Sandboxed right-sidebar View, theme, locale, and persisted View state | Browser/Webview |
 | [`workspace-dashboard`](./workspace-dashboard) | Editor dashboard, namespaced command, workspace reads, storage, and Host messages | Node + Webview |
 | [`agent-assistant`](./agent-assistant) | Extension-owned Agent run, replayable events, cancellation, and owned thread history | Node + Webview |
+| [`presentation-studio`](./presentation-studio) | Revisioned standalone HTML slides, visual editing, typed Agent operations, and safe projection | Node + Webview |
 | [`tool-provider`](./tool-provider) | Namespaced typed tool, progress, cancellation, and workspace access | Node/headless |
 | [`streaming-model-provider`](./streaming-model-provider) | API-key and OAuth account bindings, normalized model streaming, usage, cancellation, and no-fallback errors | Node/headless |
 | [`direct-dom`](./direct-dom) | High-risk isolated-world content script with bounded, failure-tolerant DOM changes | Node + content script |
@@ -30,7 +31,7 @@ npm --prefix examples/extensions/hello-sidebar run validate
 npm --prefix examples/extensions/hello-sidebar run pack
 ```
 
-The three Webview examples use Vite to bundle the public API client into
+The Webview examples use Vite to bundle the public API client into
 confined relative assets. `check:extension-examples` inspects the generated
 HTML and JavaScript so a bare npm import cannot accidentally ship to Chromium.
 

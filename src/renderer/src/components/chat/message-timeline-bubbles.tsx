@@ -25,6 +25,7 @@ import {
   shouldShowQuestionHeader
 } from './user-input-panel-logic'
 import { InjectedMemoryMetaChip } from './injected-memory-meta-chip'
+import { isPresentationArtifactPath } from './presentation-file-artifacts'
 
 const COPY_FEEDBACK_RESET_MS = 1600
 const ASSISTANT_EXPORT_FORMATS: WriteExportFormat[] = ['pdf', 'docx', 'png', 'html']
@@ -985,7 +986,9 @@ export function GeneratedFilesPanel({ blocks }: { blocks: ToolBlock[] }): ReactE
       attachments.push(...metaAttachmentReferences(block.meta as RuntimeDisclosureMetadata | undefined))
       generatedFiles.push(...metaGeneratedFileReferences(block.meta))
     }
-    return mergeMediaReferences(attachments, generatedFiles)
+    return mergeMediaReferences(attachments, generatedFiles).filter(
+      (file) => !isPresentationArtifactPath(mediaPath(file))
+    )
   }, [blocks])
 
   if (media.length === 0) return null

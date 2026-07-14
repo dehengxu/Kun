@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { ExtensionApiError } from '@kun/extension-api'
 import { beforeAll, describe, expect, it } from 'vitest'
 import {
   ExtensionHostProcess,
@@ -101,6 +102,58 @@ describe('extension host protocol', () => {
         params: { value: 'x'.repeat(1_000) }
       })
     ).rejects.toMatchObject({ code: 'EXTENSION_HOST_MESSAGE_LIMIT' })
+    left.close()
+    right.close()
+  })
+
+  it('round-trips bundled public API errors without trusting unbranded error-shaped objects', async () => {
+    let left!: JsonRpcPeer
+    let right!: JsonRpcPeer
+    right = new JsonRpcPeer({
+      send: async (envelope) => left.receive(structuredClone(envelope)),
+      onRequest: async (method) => {
+        if (method === 'public-error') {
+          const error = new ExtensionApiError({
+            code: 'CONFLICT',
+            message: 'The expected revision is stale.',
+            retryable: true,
+            details: {
+              expectedRevision: 7,
+              actualRevision: 8,
+              authToken: 'must-not-cross-the-rpc-boundary'
+            }
+          })
+          Object.setPrototypeOf(error, Error.prototype)
+          throw error
+        }
+        throw Object.assign(new Error('untrusted implementation detail'), {
+          code: 'CONFLICT',
+          retryable: true,
+          details: { leaked: true }
+        })
+      }
+    })
+    left = new JsonRpcPeer({
+      send: async (envelope) => right.receive(structuredClone(envelope))
+    })
+
+    const publicError = await left.request('public-error', null).catch((error: unknown) => error)
+    expect(publicError).toBeInstanceOf(ExtensionApiError)
+    expect(publicError).toMatchObject({
+      code: 'CONFLICT',
+      message: 'The expected revision is stale.',
+      retryable: true,
+      details: {
+        expectedRevision: 7,
+        actualRevision: 8,
+        authToken: '<redacted>'
+      }
+    })
+    await expect(left.request('error-shaped-object', null)).rejects.toMatchObject({
+      code: 'EXTENSION_INTERNAL_ERROR',
+      message: 'Extension operation failed',
+      details: {}
+    })
     left.close()
     right.close()
   })
@@ -245,6 +298,97 @@ export async function migrateState(state, context) {
       expect(unregisterCalls).toBe(1)
       await expect(host.notify('ui.message', { channel: 'late', payload: null }))
         .rejects.toMatchObject({ code: 'EXTENSION_NOT_ACTIVE' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 15_000)
+
+  it('preserves public API failures through a real Node Host broker round trip', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-extension-api-error-'))
+    try {
+      const packagePath = join(root, 'extension')
+      await mkdir(packagePath, { recursive: true })
+      await writeFile(join(packagePath, 'main.mjs'), `
+export async function activate(context) {
+  context.subscriptions.add(await context.commands.registerCommand('save', async () => {
+    await context.workspace.writeFile({
+      path: 'deck.kun-ppt.html',
+      content: '<!doctype html>',
+      encoding: 'utf8'
+    });
+    return null;
+  }));
+}
+`)
+      const manifest = parseExtensionManifest({
+        publisher: 'acme',
+        name: 'api-error',
+        version: '1.0.0',
+        manifestVersion: 1,
+        apiVersion: '1.0.0',
+        engines: { kun: '*' },
+        main: 'main.mjs',
+        activationEvents: ['onCommand:save'],
+        contributes: { commands: [{ id: 'save', title: 'Save' }] },
+        permissions: ['commands.register', 'workspace.write'],
+        stateSchemaVersion: 0
+      })
+      const extension: ResolvedExtension = {
+        id: 'acme.api-error',
+        version: '1.0.0',
+        packagePath,
+        manifest,
+        requestedPermissions: [...manifest.permissions],
+        grantedPermissions: [...manifest.permissions],
+        source: { type: 'development', locator: packagePath },
+        development: true,
+        generation: 1
+      }
+      const host = new ExtensionHostProcess({
+        extension,
+        compatibilityReport: manifestCompatibilityReport(manifest, {
+          kunVersion: '0.1.0',
+          supportedManifestVersions: [1],
+          supportedApiVersions: ['1.1.0']
+        }),
+        paths: new ExtensionPaths({
+          packageRoot: join(root, 'packages'),
+          dataRoot: join(root, 'data')
+        }),
+        runnerPath: builtinRunnerPath,
+        limits: {
+          activationTimeoutMs: 4_000,
+          operationTimeoutMs: 4_000,
+          shutdownTimeoutMs: 2_000
+        },
+        requiredPermission: (method) => method.startsWith('commands.')
+          ? 'commands.register'
+          : method === 'workspace.writeFile' ? 'workspace.write' : undefined,
+        broker: async ({ method }) => {
+          if (method === 'commands.register') return { registrationId: 'command-save' }
+          if (method === 'commands.unregister') return null
+          if (method === 'workspace.writeFile') {
+            throw new ExtensionApiError({
+              code: 'CONFLICT',
+              message: 'The presentation revision changed before commit.',
+              retryable: true,
+              details: { expectedRevision: 3, actualRevision: 4 }
+            })
+          }
+          throw new Error(`unexpected broker method: ${method}`)
+        }
+      })
+
+      await host.activate('onCommand:save')
+      const error = await host.invoke('commands.invoke:command-save', null).catch((value: unknown) => value)
+      expect(error).toBeInstanceOf(ExtensionApiError)
+      expect(error).toMatchObject({
+        code: 'CONFLICT',
+        message: 'The presentation revision changed before commit.',
+        retryable: true,
+        details: { expectedRevision: 3, actualRevision: 4 }
+      })
+      await host.deactivate()
     } finally {
       await rm(root, { recursive: true, force: true })
     }

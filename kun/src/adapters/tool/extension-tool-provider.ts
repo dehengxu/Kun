@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { ExtensionApiError, type ExtensionErrorCode } from '@kun/extension-api'
 import type { ExtensionPrincipal } from '../../services/extension-agent-service.js'
 import type {
   ExtensionToolCatalogEntry,
@@ -101,6 +102,21 @@ const ABSOLUTE_MAX_OUTPUT_BYTES = 1024 * 1024
 const MAX_PROGRESS_UPDATES = 64
 const MAX_PROGRESS_BYTES = 64 * 1024
 export const MAX_DIRECT_EXTENSION_TOOLS = 16
+const KNOWN_PRE_COMMIT_EXTENSION_API_ERROR_CODES: ReadonlySet<ExtensionErrorCode> = new Set([
+  'INVALID_ARGUMENT',
+  'VALIDATION_FAILED',
+  'PERMISSION_DENIED',
+  'NOT_FOUND',
+  'CONFLICT',
+  'UNSUPPORTED_CAPABILITY',
+  'INCOMPATIBLE_API',
+  'INCOMPATIBLE_MANIFEST',
+  'INCOMPATIBLE_ENGINE',
+  'INCOMPATIBLE_RPC',
+  'INTERACTION_REQUIRED',
+  'ACCOUNT_REQUIRED',
+  'RESOURCE_LIMIT'
+])
 
 /**
  * Dynamic Extension Tool Provider. It adapts host-process handlers into
@@ -498,6 +514,7 @@ export class ExtensionToolRegistry {
             return {
               output: {
                 canonicalToolId,
+                sideEffect: registration.declaration.sideEffect,
                 result: result.item.output
               },
               ...(result.item.isError ? { isError: true } : {})
@@ -651,6 +668,9 @@ function hasUnknownSideEffect(sideEffect: ExtensionToolSideEffect): boolean {
 }
 
 function isKnownFailure(error: unknown): boolean {
+  if (error instanceof ExtensionApiError) {
+    return KNOWN_PRE_COMMIT_EXTENSION_API_ERROR_CODES.has(error.code)
+  }
   return Boolean(error && typeof error === 'object' && 'knownFailure' in error && error.knownFailure === true)
 }
 

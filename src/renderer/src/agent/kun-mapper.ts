@@ -26,6 +26,12 @@ import { normalizeKunRuntimeEvent, type KunEventNormalizerDeps } from './kun-eve
 import type { RuntimeProjectionAction } from './runtime-projection-actions'
 import { redactSecrets, redactSecretText } from '@shared/secret-redaction'
 import { applyClientUserMessageSourceMeta } from '@shared/background-shell-notice'
+import {
+  PRESENTATION_STUDIO_EXTENSION_ID,
+  PRESENTATION_STUDIO_WRITE_TOOL_NAMES,
+  presentationStudioCanonicalToolId,
+  presentationStudioModelAlias
+} from '@shared/presentation-artifact'
 import type {
   CoreChildRuntimeMetadataJson,
   CoreRuntimeEventJson,
@@ -173,12 +179,16 @@ function readStructuredString(record: Record<string, unknown>, ...keys: string[]
 
 const FILE_PATH_KEYS = [
   'absolute_path',
+  'output_path',
+  'outputPath',
+  'destination_path',
+  'destinationPath',
   'path',
   'file_path',
   'file',
   'relative_path',
   'target_path',
-  'destination_path'
+  'targetPath'
 ] as const
 
 const COMMAND_KEYS = ['command', 'cmd', 'script'] as const
@@ -222,6 +232,62 @@ function payloadFor(item: CoreTurnItemJson): Record<string, unknown> {
       : {}
   }
   return (item.arguments ?? {}) as Record<string, unknown>
+}
+
+function structuredPayloadsFor(item: CoreTurnItemJson): Record<string, unknown>[] {
+  const payloads: Record<string, unknown>[] = []
+  const seen = new Set<Record<string, unknown>>()
+  const visit = (value: unknown, depth: number): void => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return
+    const record = value as Record<string, unknown>
+    if (seen.has(record)) return
+    seen.add(record)
+    payloads.push(record)
+    if (depth >= 2) return
+    visit(record.result, depth + 1)
+    visit(record.content, depth + 1)
+  }
+  visit(payloadFor(item), 0)
+  return payloads
+}
+
+const PRESENTATION_STUDIO_WRITE_TOOL_IDS = new Set(
+  PRESENTATION_STUDIO_WRITE_TOOL_NAMES.map(presentationStudioCanonicalToolId)
+)
+const PRESENTATION_STUDIO_DIRECT_TOOL_IDS = new Map(
+  PRESENTATION_STUDIO_WRITE_TOOL_NAMES.map((name) => [
+    presentationStudioModelAlias(name),
+    presentationStudioCanonicalToolId(name)
+  ])
+)
+
+function gatewayPayloadFor(item: CoreTurnItemJson): Record<string, unknown> | null {
+  if (item.kind !== 'tool_result' || item.toolName !== 'extension_tool_call') return null
+  return payloadFor(item)
+}
+
+function presentationStudioWriteToolId(item: CoreTurnItemJson): string | undefined {
+  const direct = item.toolName ? PRESENTATION_STUDIO_DIRECT_TOOL_IDS.get(item.toolName) : undefined
+  if (direct) return direct
+  const canonicalToolId = gatewayPayloadFor(item)?.canonicalToolId
+  return typeof canonicalToolId === 'string' && PRESENTATION_STUDIO_WRITE_TOOL_IDS.has(canonicalToolId)
+    ? canonicalToolId
+    : undefined
+}
+
+function gatewayHasWorkspaceWriteSideEffect(item: CoreTurnItemJson): boolean {
+  return gatewayPayloadFor(item)?.sideEffect === 'workspace-write'
+}
+
+function readItemStructuredString(
+  item: CoreTurnItemJson,
+  ...keys: readonly string[]
+): string | undefined {
+  for (const payload of structuredPayloadsFor(item)) {
+    const value = readStructuredString(payload, ...keys)
+    if (value) return value
+  }
+  return undefined
 }
 
 function normalizeChildMetadata(
@@ -468,10 +534,14 @@ function isGeneratedFileToolName(toolName: string | undefined): boolean {
 
 function extractToolGeneratedFiles(item: CoreTurnItemJson): GeneratedFileReference[] | undefined {
   if (item.kind !== 'tool_result') return undefined
-  const payload = payloadFor(item)
+  const payloads = structuredPayloadsFor(item)
   const candidates = [
-    ...(Array.isArray(payload.generatedFiles) ? payload.generatedFiles : []),
-    ...(isGeneratedFileToolName(item.toolName) && Array.isArray(payload.files) ? payload.files : [])
+    ...payloads.flatMap((payload) =>
+      Array.isArray(payload.generatedFiles) ? payload.generatedFiles : []
+    ),
+    ...(isGeneratedFileToolName(item.toolName)
+      ? payloads.flatMap((payload) => Array.isArray(payload.files) ? payload.files : [])
+      : [])
   ]
   const generatedFiles: GeneratedFileReference[] = []
   const seen = new Set<string>()
@@ -507,9 +577,16 @@ function inferToolPresentation(item: CoreTurnItemJson): {
   filePath?: string
   command?: string
 } {
-  const payload = payloadFor(item)
-  const filePath = readStructuredString(payload, ...FILE_PATH_KEYS)
-  const command = readStructuredString(payload, ...COMMAND_KEYS)
+  const filePath = readItemStructuredString(item, ...FILE_PATH_KEYS)
+  const command = readItemStructuredString(item, ...COMMAND_KEYS)
+
+  if (presentationStudioWriteToolId(item) || gatewayHasWorkspaceWriteSideEffect(item)) {
+    return {
+      toolKind: 'file_change',
+      ...(filePath ? { filePath } : {}),
+      ...(command ? { command } : {})
+    }
+  }
 
   if (
     item.toolKind === 'tool_call' ||
@@ -606,6 +683,15 @@ function toolBlockFromItem(item: CoreTurnItemJson, child?: CoreChildRuntimeMetad
   if (attachments) meta.attachments = attachments
   const generatedFiles = extractToolGeneratedFiles(item)
   if (generatedFiles) meta.generatedFiles = generatedFiles
+  const presentationStudioToolId = presentationStudioWriteToolId(item)
+  if (presentationStudioToolId) {
+    meta.canonicalToolId = presentationStudioToolId
+    meta.presentationArtifactProducer = PRESENTATION_STUDIO_EXTENSION_ID
+    const contentSha256 = readItemStructuredString(item, 'contentSha256')
+    if (contentSha256 && /^[a-f0-9]{64}$/i.test(contentSha256)) {
+      meta.presentationArtifactSha256 = contentSha256.toLowerCase()
+    }
+  }
   const presentation = inferToolPresentation(item)
   const payload = payloadFor(item)
   if (presentation.command) meta.command = presentation.command

@@ -316,6 +316,21 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect((html.match(/type="button"/g) ?? []).length).toBe(2)
   })
 
+  it('leaves supported presentation outputs to the dedicated presentation panel', () => {
+    const block: ToolBlock = toolBlock({
+      id: 'tool_presentations',
+      summary: 'presentation export',
+      meta: {
+        generatedFiles: [
+          { relativePath: 'presentations/brief.pptx' },
+          { relativePath: 'brief.kun-ppt.html' }
+        ]
+      }
+    })
+
+    expect(renderToStaticMarkup(createElement(GeneratedFilesPanel, { blocks: [block] }))).toBe('')
+  })
+
   it('projects only bounded non-secret generated-file metadata to result preview Views', () => {
     const sources = resultPreviewSourcesForTurn({
       user: { kind: 'user', id: 'user_1', text: 'make report' },

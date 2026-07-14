@@ -14,6 +14,7 @@ const expected = [
   'agent-assistant',
   'direct-dom',
   'hello-sidebar',
+  'presentation-studio',
   'streaming-model-provider',
   'tool-provider',
   'workspace-dashboard'

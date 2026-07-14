@@ -9,6 +9,8 @@ import { useTimelineScroll } from './use-timeline-scroll'
 import { deriveTurnSections } from './derive-turn-sections'
 import { MessageTimelineEmptyHero, ThreadForkBanner, ThreadForkPoint } from './message-timeline-empty'
 import { GeneratedFilesPanel, MessageBubble } from './message-timeline-bubbles'
+import { PresentationFilesPanel } from './PresentationFilesPanel'
+import { presentationFileArtifactsForTurn } from './presentation-file-artifacts'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
 import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
 import type { OpenChildThreadHandler } from './SubagentCallCard'
@@ -802,6 +804,15 @@ function MessageTurn({
       }),
     [turn, isProcessing, liveProcessText, liveContent, filePreviewWorkspaceRoot]
   )
+  const presentationFiles = useMemo(
+    () => presentationFileArtifactsForTurn(
+      turn.blocks,
+      filePreviewWorkspaceRoot,
+      isProcessing,
+      typeof window === 'undefined' ? '' : window.kunGui?.platform ?? ''
+    ),
+    [turn.blocks, filePreviewWorkspaceRoot, isProcessing]
+  )
   const compactionBlocks = useMemo(
     () => processBlocks.filter((block): block is CompactionTimelineBlock => block.kind === 'compaction'),
     [processBlocks]
@@ -945,6 +956,8 @@ function MessageTurn({
       ) : null}
 
       <GeneratedFilesPanel blocks={generatedFileBlocks} />
+
+      <PresentationFilesPanel files={presentationFiles} workspaceRoot={filePreviewWorkspaceRoot} />
 
       {reviewBlocks.map((review) => (
         <ReviewSummaryCard key={review.id} review={review} />

@@ -7,6 +7,11 @@ import {
 } from './kun-mapper'
 import type { CoreRuntimeEventJson, CoreTurnItemJson } from './kun-contract'
 import type { ThreadErrorOptions, ThreadEventSink } from './types'
+import {
+  PRESENTATION_STUDIO_EXTENSION_ID,
+  presentationStudioCanonicalToolId,
+  presentationStudioModelAlias
+} from '@shared/presentation-artifact'
 
 function makeSink(): ThreadEventSink {
   return {
@@ -1483,6 +1488,127 @@ describe('tool presentation inference', () => {
       kind: 'tool',
       toolKind: 'file_change',
       filePath: '/tmp/demo.ts'
+    })
+  })
+
+  it('surfaces final output and destination path aliases for generated artifacts', () => {
+    const ppt = chatBlockFromItem({
+      id: 'item_ppt',
+      turnId: 'turn_1',
+      threadId: 'thr_1',
+      role: 'tool',
+      status: 'completed',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      kind: 'tool_result',
+      toolName: 'ppt_master_run',
+      toolKind: 'file_change',
+      callId: 'call_ppt',
+      output: {
+        output_path: '/tmp/presentations/brief.pptx',
+        generatedFiles: [{
+          relativePath: 'presentations/brief.pptx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        }]
+      }
+    })
+    const htmlCopy = chatBlockFromItem({
+      id: 'item_html_copy',
+      turnId: 'turn_1',
+      threadId: 'thr_1',
+      role: 'tool',
+      status: 'completed',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      kind: 'tool_result',
+      toolName: presentationStudioModelAlias('presentation-export-copy'),
+      toolKind: 'file_change',
+      callId: 'call_html_copy',
+      output: {
+        content: {
+          sourcePath: 'brief.kun-ppt.html',
+          destinationPath: 'brief-copy.kun-ppt.html',
+          contentSha256: 'a'.repeat(64)
+        },
+        summary: 'Exported copy'
+      }
+    })
+
+    expect(ppt).toMatchObject({
+      filePath: '/tmp/presentations/brief.pptx',
+      meta: {
+        generatedFiles: [{
+          relativePath: 'presentations/brief.pptx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        }]
+      }
+    })
+    expect(htmlCopy).toMatchObject({
+      filePath: 'brief-copy.kun-ppt.html',
+      meta: {
+        canonicalToolId: presentationStudioCanonicalToolId('presentation-export-copy'),
+        presentationArtifactProducer: PRESENTATION_STUDIO_EXTENSION_ID,
+        presentationArtifactSha256: 'a'.repeat(64)
+      }
+    })
+  })
+
+  it('unwraps progressive extension gateway presentation writes with trusted provenance', () => {
+    const block = chatBlockFromItem({
+      id: 'item_gateway_html',
+      turnId: 'turn_1',
+      threadId: 'thr_1',
+      role: 'tool',
+      status: 'completed',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      kind: 'tool_result',
+      toolName: 'extension_tool_call',
+      toolKind: 'tool_call',
+      callId: 'call_gateway_html',
+      output: {
+        canonicalToolId: presentationStudioCanonicalToolId('presentation-apply'),
+        result: {
+          content: {
+            path: 'brief.kun-ppt.html',
+            resultingRevision: 2,
+            contentSha256: 'b'.repeat(64)
+          },
+          summary: 'Applied operations'
+        }
+      }
+    })
+
+    expect(block).toMatchObject({
+      toolKind: 'file_change',
+      filePath: 'brief.kun-ppt.html',
+      meta: {
+        canonicalToolId: presentationStudioCanonicalToolId('presentation-apply'),
+        presentationArtifactProducer: PRESENTATION_STUDIO_EXTENSION_ID,
+        presentationArtifactSha256: 'b'.repeat(64)
+      }
+    })
+  })
+
+  it('preserves workspace-write semantics from a generic progressive extension gateway', () => {
+    const block = chatBlockFromItem({
+      id: 'item_gateway_ppt',
+      turnId: 'turn_1',
+      threadId: 'thr_1',
+      role: 'tool',
+      status: 'completed',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      kind: 'tool_result',
+      toolName: 'extension_tool_call',
+      toolKind: 'tool_call',
+      callId: 'call_gateway_ppt',
+      output: {
+        canonicalToolId: 'extension:example.exporter/export-ppt',
+        sideEffect: 'workspace-write',
+        result: { content: { destinationPath: 'presentations/brief.pptx' } }
+      }
+    })
+
+    expect(block).toMatchObject({
+      toolKind: 'file_change',
+      filePath: 'presentations/brief.pptx'
     })
   })
 
