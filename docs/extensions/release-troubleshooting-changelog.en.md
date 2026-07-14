@@ -196,9 +196,9 @@ The Changelog records public Extension API, not Kun internal refactors. Each ent
 The public surface snapshots below are computed from package entries, public exports, and reachable `.d.ts` declarations. Update them only after this section explains the compatibility impact; changing a hash is not itself a Changelog entry.
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.1.0 sha256:cdc0bd632da1bbcc647eee6d35153117384cc383a57836882d52240170044a4b -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.1.0 sha256:23d962fa42a44e9c1a14be639158b794cf659c3875a1c502dea272ada2f870a7 -->
 <!-- sdk-surface-snapshot @kun/extension-react@1.1.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
-<!-- sdk-surface-snapshot @kun/extension-test@1.1.0 sha256:33b2b05b8f258d9f56d4cba2b74ce080a498e2aa0880ae4402a09c79668985a3 -->
+<!-- sdk-surface-snapshot @kun/extension-test@1.1.0 sha256:c7937552f87d719626aa28df9f5e72bec325209636625fb1b78680aeec489ea5 -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
 
 ### v1.1.0 — Brokered media, durable jobs, and generated artifacts
@@ -207,12 +207,14 @@ Added:
 
 - `media.read`, `media.process`, `media.export`, and `jobs.manage` least-privilege permissions.
 - `MediaApi` protected picker, opaque handle/stat, normalized probe, short-lived View resource lease, release, and brokered FFmpeg job contracts.
-- Optional bounded `textOutputs` on brokered FFmpeg jobs for Host-granted UTF-8, SRT, and WebVTT sidecars that commit or roll back atomically with media outputs; existing callers need no migration.
+- `MediaApi.readText()` reads at most 512 KiB of Host-granted UTF-8 through an opaque handle; `MediaApi.getCapabilities()` returns a bounded FFmpeg, ffprobe, libx264, AAC, and optional caption-filter capability snapshot so extensions can offer actionable fallbacks before pickers or jobs.
+- Optional bounded `textOutputs` on brokered FFmpeg jobs for Host-granted UTF-8, SRT, and WebVTT sidecars that commit or roll back atomically with media outputs. A text-only durable job may omit FFmpeg inputs, outputs, and arguments, so standalone subtitle export does not require FFmpeg. Existing callers need no migration.
 - `JobsApi` owned job get/list/cursor subscription/cancel contracts, bounded progress/events/results, explicit interrupted state, and no generic `jobs.start` or extension worker registration.
 - Top-level `generatedArtifacts` on tool and terminal job results, plus artifact/media-handle result-preview references without local paths.
 - `media.performArtifactAction()` for user-initiated open/reveal of available generated artifacts from an authenticated interactive View; existing media callers need no migration.
-- Deterministic fake media/jobs, permission failures, restart/cancellation controls, executable-unavailable behavior, and artifact fixtures in `@kun/extension-test`.
+- Deterministic fake media/jobs, configurable media capabilities, text-only jobs, permission failures, restart/cancellation controls, executable-unavailable behavior, and artifact fixtures in `@kun/extension-test`.
 - A public fail-closed View-safe method catalog for Host boundary drift checks.
+- Optional bounded Manifest `localizations` overlays and `resolveExtensionManifestLocale()` for Host-rendered extension metadata and declared display fields. Existing Manifests remain valid and their base strings are the fallback; overlays cannot change identity, permissions, activation, executable paths, schemas, or Agent instructions.
 
 Changed:
 

@@ -65,6 +65,7 @@
 | `version` | 是 | 此 `.kunx` 包的 SemVer 版本 |
 | `displayName` | 否 | 面向用户的短名称，作为不可信纯文本渲染 |
 | `description` | 否 | 面向用户的说明，作为不可信纯文本渲染 |
+| `localizations` | 否 | Host 渲染的 Manifest 和贡献显示文案的有界语言覆盖 |
 | `license` | 否 | 简短许可证标识；发布包仍必须包含 `LICENSE` |
 | `homepage` | 否 | 扩展主页 HTTPS URL |
 | `engines.kun` | 是 | 兼容 Kun 版本的 SemVer range |
@@ -83,6 +84,31 @@ Browser-only Manifest（只有 `browser`）不能声明 `commands`、`agentProfi
 完整 ID 为 `publisher.name`，一旦公开不得更改。改名等同于一个新扩展，旧状态、权限、账号和 thread 不会自动转移。
 
 `publisher` 使用小写 ASCII 字母/数字/连字符、以字母或数字开头，最长 64；`name` 和所有 local contribution ID 使用小写字母开头，之后只允许小写字母/数字/连字符，最长 64。以同版本 Schema 的正则和保留字校验为准。
+
+## Host 渲染文案的本地化
+
+`localizations` 把最多 32 个有界 BCP 47 语言标签映射为纯文本显示覆盖。基础 Manifest 始终是必需的 fallback，也是身份、激活事件、权限、路径、可执行 Schema 和 Agent instructions 的稳定真源。覆盖只能修改已知显示字段，且必须引用已声明的贡献、设置属性、通知操作或 Provider model。
+
+```json
+{
+  "displayName": "Issue Assistant",
+  "contributes": {
+    "views.rightSidebar": [{ "id": "issues", "title": "Issues", "entry": "dist/index.html" }]
+  },
+  "localizations": {
+    "zh-CN": {
+      "displayName": "问题助手",
+      "contributes": {
+        "views.rightSidebar": {
+          "issues": { "title": "问题" }
+        }
+      }
+    }
+  }
+}
+```
+
+Kun 先按大小写不敏感的完整标签匹配，再逐级匹配更宽的语言标签（`zh-Hans-CN` → `zh-Hans` → `zh`），最后使用基础 Manifest。Webview 内容仍通过 `ui.getLocale` 和 `ui.localeChanged` 自行本地化；Manifest 覆盖用于侧栏 tooltip、面板/结果预览标题、扩展中心卡片和声明式设置等 Host chrome。
 
 ## 版本字段
 

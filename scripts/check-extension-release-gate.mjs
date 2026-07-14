@@ -500,15 +500,15 @@ for (const marker of [
   "'typecheck'",
   "'build'",
   "'test'",
-  "'extension', 'validate'",
-  "'extension', 'pack'"
+  "'run', 'validate'",
+  "'run', 'pack'"
 ]) {
   check(exampleGateSource.includes(marker), `Extension example gate omits video lifecycle marker: ${marker}`)
 }
 const videoExampleReadme = await text(`${videoExampleRoot}/README.md`)
 for (const marker of [
   '## Install the release package',
-  'kun-video-editor-0.2.2.kunx',
+  'kun-video-editor-0.3.0.kunx',
   'kun extension validate',
   'kun extension install',
   'npm run pack:kun-video-editor',
@@ -993,7 +993,7 @@ const appImageDesktopCommand = 'npm run smoke:packaged-extension-appimage'
 const nativeMediaSmokeCommand = 'npm run smoke:extension-native-media'
 const packagedVideoNativeCommand = 'npm run smoke:packaged-video-editor-native'
 const packagedVideoReleaseCommand =
-  'npm run smoke:packaged-video-editor-native -- --archive dist/kun-video-editor-0.2.2.kunx'
+  'npm run smoke:packaged-video-editor-native -- --archive dist/kun-video-editor-0.3.0.kunx'
 const nativeEvidenceCommand = 'npm run evidence:extension-native'
 const nativeEvidenceVerifierCommand = 'npm run verify:extension-native-evidence'
 const videoEditorPackCommand = 'npm run pack:kun-video-editor'
@@ -1059,11 +1059,14 @@ for (const marker of [
   "'video-update-timeline'",
   "kind: 'proof-frame'",
   "kind: 'h264-mp4'",
-  "captionMode: 'both'",
+  "captionMode = 'both'",
+  "captionMode: paths.captionMode",
   'subtitleOutputHandleId',
   "subtitleFormat: 'srt'",
   'application/x-subrip',
-  "action: 'cancel'",
+  "'video-render-cancel'",
+  "approvalCount('video-render-status')",
+  "approvalCount('video-render-cancel')",
   'artifacts.listOwned',
   'assertH264Probe',
   'assertSrtSidecar',
@@ -1072,7 +1075,8 @@ for (const marker of [
   'assertReleaseArchive',
   'archiveHash',
   'smoke archive changed during lifecycle validation',
-  'ffprobe is not available on this host',
+  "code: 'FFPROBE_UNAVAILABLE'",
+  'ffprobe is unavailable',
   "'extension', 'uninstall'"
 ]) {
   check(packagedVideoNativeSource.includes(marker), `Packaged video editor native smoke omits assertion: ${marker}`)
@@ -1501,13 +1505,13 @@ requireOrderedSourceMarkers(releaseMacScript, 'scripts/release-mac.sh packaged s
   'npm run smoke:packaged-extensions -- --resources "${x64_resources}"',
   'npm run smoke:packaged-extensions -- --resources "${arm64_resources}"',
   'npm run smoke:packaged-extension-desktop -- --resources "${host_resources}"',
-  '--archive "${ROOT}/dist/kun-video-editor-0.2.2.kunx"'
+  '--archive "${ROOT}/dist/kun-video-editor-0.3.0.kunx"'
 ])
 for (const marker of [
   '|| die "macOS x64 packaged Extension Node runtime smoke failed"',
   '|| die "macOS arm64 packaged Extension Node runtime smoke failed"',
   '|| die "macOS packaged Extension desktop Chromium smoke failed"',
-  '--archive "${ROOT}/dist/kun-video-editor-0.2.2.kunx"',
+  '--archive "${ROOT}/dist/kun-video-editor-0.3.0.kunx"',
   'verify:manual-extension-release',
   'collect "Kun Video Editor extension" "dist/kun-video-editor-*.kunx"',
   '--r2) R2_UPLOAD=true; R2_PROMOTE=false',

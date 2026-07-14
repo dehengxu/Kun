@@ -90,6 +90,12 @@ export type MediaCapability = {
   available: boolean
   source?: 'configured' | 'path'
   version?: string
+  features?: Array<
+    | 'libx264-encoder'
+    | 'aac-encoder'
+    | 'drawtext-filter'
+    | 'subtitles-filter'
+  >
 }
 
 export type MediaCapabilities = {
@@ -282,11 +288,20 @@ export class ExtensionMediaProcessService {
       if (result.exitCode !== 0) return { name, available: false }
       const firstLine = result.stdout.toString('utf8').split(/\r?\n/u, 1)[0]?.trim() ?? ''
       const version = boundedVersion(firstLine, name)
+      const features = name === 'ffmpeg'
+        ? await inspectFfmpegFeatures(
+            executable.path,
+            scrubbedEnvironment(this.pathEnv),
+            this.discoveryTimeoutMs,
+            this.maxDiagnosticBytes
+          )
+        : []
       return {
         name,
         available: true,
         source: executable.source,
-        ...(version ? { version } : {})
+        ...(version ? { version } : {}),
+        ...(features.length > 0 ? { features } : {})
       }
     } catch {
       return { name, available: false }
@@ -308,6 +323,41 @@ export class ExtensionMediaProcessService {
       )
     }
     return executable
+  }
+}
+
+async function inspectFfmpegFeatures(
+  executable: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+  maxBytes: number
+): Promise<NonNullable<MediaCapability['features']>> {
+  try {
+    const [encoders, filters] = await Promise.all([
+      runBoundedProcess(executable, ['-hide_banner', '-encoders'], {
+        env,
+        timeoutMs,
+        maxStdoutBytes: maxBytes,
+        maxStderrBytes: maxBytes
+      }),
+      runBoundedProcess(executable, ['-hide_banner', '-filters'], {
+        env,
+        timeoutMs,
+        maxStdoutBytes: maxBytes,
+        maxStderrBytes: maxBytes
+      })
+    ])
+    if (encoders.exitCode !== 0 || filters.exitCode !== 0) return []
+    const encoderText = encoders.stdout.toString('utf8')
+    const filterText = filters.stdout.toString('utf8')
+    const features: NonNullable<MediaCapability['features']> = []
+    if (/^\s*[A-Z.]{6}\s+libx264\s/mu.test(encoderText)) features.push('libx264-encoder')
+    if (/^\s*[A-Z.]{6}\s+aac\s/mu.test(encoderText)) features.push('aac-encoder')
+    if (/^\s*[A-Z.]{3}\s+drawtext\s/mu.test(filterText)) features.push('drawtext-filter')
+    if (/^\s*[A-Z.]{3}\s+subtitles\s/mu.test(filterText)) features.push('subtitles-filter')
+    return features
+  } catch {
+    return []
   }
 }
 

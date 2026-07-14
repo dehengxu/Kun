@@ -335,7 +335,8 @@ describe('runtime factory usage carryover', () => {
       await platform.packageManager.setWorkspacePermissionGrant(
         'acme.lazy',
         platform.paths.workspaceKey(workspace),
-        ['tools.register']
+        ['tools.register'],
+        '1.0.0'
       )
       const tools = await runtime.toolHost!.listTools({
         threadId: 'thread_workspace',
@@ -348,6 +349,147 @@ describe('runtime factory usage carryover', () => {
 
       expect(tools.some((tool) => tool.providerId === 'extension:acme.lazy')).toBe(true)
       await expect(platform.manager.diagnostic('acme.lazy')).resolves.toMatchObject({ active: true })
+    } finally {
+      await runtime.shutdown?.()
+    }
+  })
+
+  it('routes workspace configuration changes to only the owning Host and View while global changes fan out', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-extension-config-scope-'))
+    const sourceDir = await mkdtemp(join(tmpdir(), 'kun-runtime-extension-config-source-'))
+    const workspaceA = join(sourceDir, 'workspace-a')
+    const workspaceB = join(sourceDir, 'workspace-b')
+    tempDirs.push(dataDir, sourceDir)
+    await Promise.all([
+      mkdir(workspaceA, { recursive: true }),
+      mkdir(workspaceB, { recursive: true })
+    ])
+    await writeConfigurationExtension(sourceDir)
+    const runnerPath = await writeConfigurationFixtureRunner(sourceDir)
+    const runtime = await createKunServeRuntime({
+      host: '127.0.0.1',
+      port: 0,
+      dataDir,
+      runtimeToken: 'tok',
+      apiKey: 'sk-default',
+      baseUrl: 'https://api.example.test/v1',
+      model: 'model-before',
+      approvalPolicy: 'auto',
+      sandboxMode: 'danger-full-access',
+      tokenEconomyMode: false,
+      insecure: false,
+      storage: { backend: 'file' },
+      capabilities: KunCapabilitiesConfig.parse({}),
+      extensionHostRunnerPath: runnerPath
+    })
+
+    try {
+      const extensionId = 'acme.configuration-scope'
+      const extensionVersion = '1.0.0'
+      const platform = runtime.extensionPlatform!
+      await platform.packageManager.registerDevelopment(sourceDir, {
+        grantedPermissions: ['ui.actions', 'ui.views', 'webview'],
+        enable: true,
+        select: true
+      })
+      const workspaceKeyA = platform.paths.workspaceKey(workspaceA)
+      const workspaceKeyB = platform.paths.workspaceKey(workspaceB)
+      await Promise.all([
+        platform.packageManager.setWorkspacePermissionGrant(
+          extensionId,
+          workspaceKeyA,
+          ['ui.actions', 'ui.views', 'webview'],
+          extensionVersion
+        ),
+        platform.packageManager.setWorkspacePermissionGrant(
+          extensionId,
+          workspaceKeyB,
+          ['ui.actions', 'ui.views', 'webview'],
+          extensionVersion
+        )
+      ])
+      const entry = await platform.registry.get(extensionId)
+      const manifest = entry?.development?.manifest
+      if (!manifest) throw new Error('Expected the configuration fixture manifest')
+      const viewTarget = {
+        extensionId,
+        extensionVersion,
+        contributionId: `extension:${extensionId}/panel`,
+        localContributionId: 'panel',
+        entry: 'view.html',
+        activationEvent: 'onView:panel',
+        workspaceTrusted: true,
+        grantedPermissions: ['ui.actions', 'ui.views', 'webview']
+      }
+      const viewA = platform.viewSessions.create({ ...viewTarget, workspaceRoot: workspaceA })
+      const viewB = platform.viewSessions.create({ ...viewTarget, workspaceRoot: workspaceB })
+      await Promise.all([
+        platform.manager.activate(extensionId, 'onView:panel', { workspaceRoot: workspaceA }),
+        platform.manager.activate(extensionId, 'onView:panel', { workspaceRoot: workspaceB })
+      ])
+
+      await platform.configuration.update({
+        principal: platform.viewSessions.principal(viewA.sessionId),
+        manifest,
+        sectionId: 'workspace',
+        key: 'mode',
+        value: 'workspace-a',
+        expectedRevision: 0
+      })
+      await platform.configuration.update({
+        principal: platform.viewSessions.principal(viewB.sessionId),
+        manifest,
+        sectionId: 'workspace',
+        key: 'mode',
+        value: 'workspace-b',
+        expectedRevision: 1
+      })
+      await platform.configuration.update({
+        principal: platform.viewSessions.principal(viewA.sessionId),
+        manifest,
+        sectionId: 'global',
+        key: 'enabled',
+        value: true,
+        expectedRevision: 2
+      })
+
+      const hostNotifications = async (workspaceRoot: string) => platform.manager.invoke(
+        extensionId,
+        'onView:panel',
+        'notifications',
+        null,
+        { workspaceRoot }
+      )
+      const workspaceEvent = (value: string) => ({
+        method: 'configuration.changed',
+        params: { sectionId: 'workspace', key: 'mode', scope: 'workspace', value }
+      })
+      const globalEvent = {
+        method: 'configuration.changed',
+        params: { sectionId: 'global', key: 'enabled', scope: 'global', value: true }
+      }
+      await expect(hostNotifications(workspaceA)).resolves.toEqual([
+        workspaceEvent('workspace-a'),
+        globalEvent
+      ])
+      await expect(hostNotifications(workspaceB)).resolves.toEqual([
+        workspaceEvent('workspace-b'),
+        globalEvent
+      ])
+
+      const viewNotifications = (sessionId: string) => platform.viewSessions
+        .replay(sessionId, 0, 20)
+        .events
+        .filter((event) => event.type === 'bridge')
+        .map((event) => event.payload)
+      expect(viewNotifications(viewA.sessionId)).toEqual([
+        workspaceEvent('workspace-a'),
+        globalEvent
+      ])
+      expect(viewNotifications(viewB.sessionId)).toEqual([
+        workspaceEvent('workspace-b'),
+        globalEvent
+      ])
     } finally {
       await runtime.shutdown?.()
     }
@@ -401,6 +543,87 @@ export async function activate(context) {
 }
 export function crash() { process.exit(17); }
 `)
+}
+
+async function writeConfigurationExtension(root: string): Promise<void> {
+  await writeFile(join(root, 'kun-extension.json'), `${JSON.stringify({
+    manifestVersion: 1,
+    apiVersion: '1.0.0',
+    publisher: 'acme',
+    name: 'configuration-scope',
+    version: '1.0.0',
+    engines: { kun: '*' },
+    main: 'main.mjs',
+    activationEvents: ['onView:panel'],
+    contributes: {
+      'views.rightSidebar': [{ id: 'panel', title: 'Panel', entry: 'view.html' }],
+      settings: [{
+        id: 'workspace',
+        title: 'Workspace',
+        scope: 'workspace',
+        properties: {
+          mode: { type: 'string', default: 'default' }
+        }
+      }, {
+        id: 'global',
+        title: 'Global',
+        scope: 'global',
+        properties: {
+          enabled: { type: 'boolean', default: false }
+        }
+      }]
+    },
+    permissions: ['ui.actions', 'ui.views', 'webview'],
+    stateSchemaVersion: 0
+  }, null, 2)}\n`)
+  await writeFile(join(root, 'README.md'), '# Configuration scope fixture\n')
+  await writeFile(join(root, 'LICENSE'), 'MIT\n')
+  await writeFile(join(root, 'main.mjs'), 'export async function activate() {}\n')
+  await writeFile(join(root, 'view.html'), '<!doctype html><title>Panel</title>\n')
+}
+
+async function writeConfigurationFixtureRunner(root: string): Promise<string> {
+  const path = join(root, 'configuration-fixture-runner.mjs')
+  await writeFile(path, `
+const notifications = [];
+function send(message) { if (process.connected) process.send(message); }
+function result(id, value) {
+  send({ rpcVersion: 1, kind: 'response', id, result: value });
+}
+process.on('message', (message) => {
+  if (message.kind === 'notification') {
+    notifications.push({ method: message.method, params: message.params });
+    return;
+  }
+  if (message.kind !== 'request') return;
+  if (message.method === 'host.initialize') {
+    result(message.id, {
+      initialized: true,
+      rpcVersion: 1,
+      apiVersion: message.params.identity.apiVersion
+    });
+    return;
+  }
+  if (message.method === 'host.load') {
+    result(message.id, { loaded: true });
+    return;
+  }
+  if (message.method === 'extension.activate') {
+    result(message.id, { activated: true });
+    return;
+  }
+  if (message.method === 'extension.invoke') {
+    result(message.id, message.params.method === 'notifications' ? notifications : null);
+    return;
+  }
+  if (message.method === 'extension.deactivate') {
+    result(message.id, { deactivated: true });
+  }
+});
+process.on('disconnect', () => process.exit(0));
+send({ rpcVersion: 1, kind: 'notification', method: 'host.ready', params: { pid: process.pid } });
+`)
+  return path
 }
 
 async function writeLazyFixtureRunner(root: string): Promise<string> {

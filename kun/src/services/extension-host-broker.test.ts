@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { ExtensionManifestSchema, type ModelProviderAdapter } from '@kun/extension-api'
 import type { ExtensionToolHandler } from '../adapters/tool/extension-tool-provider.js'
 import type { ExtensionBrokerRequest, ExtensionPrincipal as HostPrincipal } from '../extensions/host-process.js'
@@ -257,9 +260,20 @@ describe('ExtensionHostBroker', () => {
       if (method === 'media.performArtifactAction') return { performed: true }
       return undefined
     })
+    const capabilities = vi.fn(async () => ({
+      probedAt: '2026-01-01T00:00:00.000Z',
+      ffprobe: { name: 'ffprobe', available: true, source: 'configured', version: '8.0.1' },
+      ffmpeg: {
+        name: 'ffmpeg',
+        available: true,
+        source: 'configured',
+        version: '8.0.1',
+        features: ['libx264-encoder', 'aac-encoder']
+      }
+    }))
     const broker = createBroker({
       mediaHandles: { stat, release: vi.fn(async () => true) } as never,
-      mediaProcesses: { probe } as never,
+      mediaProcesses: { probe, capabilities } as never,
       mediaJobs: { start } as never,
       onUiRequest
     })
@@ -285,6 +299,17 @@ describe('ExtensionHostBroker', () => {
     })
     await expect(call('media.probe', { handleId: 'media_123456789012' }))
       .resolves.toMatchObject({ handleId: 'media_123456789012' })
+    await expect(call('media.getCapabilities', {})).resolves.toEqual({
+      probedAt: '2026-01-01T00:00:00.000Z',
+      ffprobe: { name: 'ffprobe', available: true, version: '8.0.1', features: [] },
+      ffmpeg: {
+        name: 'ffmpeg',
+        available: true,
+        version: '8.0.1',
+        features: ['libx264-encoder', 'aac-encoder']
+      }
+    })
+    expect(JSON.stringify(await call('media.getCapabilities', {}))).not.toContain('configured')
     await expect(call('media.openViewResource', { handleId: 'media_123456789012' }))
       .resolves.toMatchObject({ url: 'kun-media://resource/opaque-token' })
     await expect(call('media.performArtifactAction', {
@@ -303,6 +328,64 @@ describe('ExtensionHostBroker', () => {
     })).resolves.toMatchObject({ job: { jobId: 'job_12345678' } })
     expect(JSON.stringify(await call('media.stat', { handleId: 'media_123456789012' })))
       .not.toContain('/tmp/workspace')
+  })
+
+  it('reads bounded UTF-8 from an owned media handle and rejects invalid text', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-media-text-'))
+    const validPath = join(root, 'captions.srt')
+    const invalidPath = join(root, 'invalid.srt')
+    await writeFile(validPath, '1\n00:00:00,000 --> 00:00:01,000\n你好\n')
+    await writeFile(invalidPath, Buffer.from([0xff, 0xfe, 0xfd]))
+    const mediaPrincipal = {
+      extensionId: 'acme.broker',
+      extensionVersion: '1.0.0',
+      permissions: ['media.read', 'workspace.read'],
+      workspaceRoots: [root],
+      workspaceTrusted: true,
+      viewSessionId: 'view-session-1',
+      viewContributionId: 'editor'
+    }
+    const resolve = vi.fn(async (_principal, handleId: string) => ({
+      id: handleId,
+      displayName: handleId.includes('invalid') ? 'invalid.srt' : 'captions.srt',
+      mode: 'read',
+      source: 'picker',
+      mimeType: 'application/x-subrip',
+      byteSize: handleId.includes('invalid') ? 3 : undefined,
+      available: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      absolutePath: handleId.includes('invalid') ? invalidPath : validPath,
+      workspaceRoot: root,
+      ownerExtensionId: 'acme.broker',
+      ownerExtensionVersion: '1.0.0'
+    }))
+    const broker = createBroker({ mediaHandles: { resolve } as never })
+    const call = (handleId: string, maxBytes: number) => broker.handlePrincipal({
+      principal: mediaPrincipal,
+      method: 'media.readText',
+      params: { handleId, maxBytes },
+      signal: new AbortController().signal,
+      requestId: `request-${handleId}`
+    })
+    try {
+      await expect(call('media_text_123456789', 1024)).resolves.toMatchObject({
+        handleId: 'media_text_123456789',
+        displayName: 'captions.srt',
+        content: expect.stringContaining('你好')
+      })
+      await expect(call('media_text_123456789', 4)).rejects.toMatchObject({
+        code: 'MEDIA_LIMIT_EXCEEDED'
+      })
+      await expect(call('media_invalid_123456', 1024)).rejects.toMatchObject({
+        code: 'MEDIA_INVALID_ARGUMENT'
+      })
+      expect(resolve).toHaveBeenCalledWith(expect.objectContaining({
+        extensionId: 'acme.broker',
+        workspaceRoots: [root]
+      }), 'media_text_123456789', 'read')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it('returns an explicit interaction-required error for headless picker calls', async () => {
@@ -509,6 +592,129 @@ describe('ExtensionHostBroker', () => {
     await expect(broker.handle(request('commands.execute', {
       id: 'hello', args: { valid: true }
     }))).rejects.toThrow('command is not registered')
+  })
+
+  it('routes workspace commands to their owning Host and disposes one Host generation only', async () => {
+    const workspaceA = '/tmp/workspace-a'
+    const workspaceB = '/tmp/workspace-b'
+    const principalA: HostPrincipal = {
+      ...principal,
+      lifecycleNonce: 'host-workspace-a',
+      workspaceRoots: [workspaceA]
+    }
+    const principalB: HostPrincipal = {
+      ...principal,
+      lifecycleNonce: 'host-workspace-b',
+      workspaceRoots: [workspaceB]
+    }
+    const disposeToolA = vi.fn()
+    const disposeToolB = vi.fn()
+    const invokeExtension = vi.fn(async (
+      _extensionId: string,
+      _event: string,
+      _method: string,
+      _params: unknown,
+      options: { workspaceRoots?: string[] }
+    ) => ({ invoked: options.workspaceRoots?.[0] === workspaceA }))
+    const registerTool = vi.fn()
+      .mockResolvedValueOnce({
+        canonicalToolId: 'extension:acme.broker/summarize',
+        modelAlias: 'ext_summary',
+        dispose: disposeToolA
+      })
+      .mockResolvedValueOnce({
+        canonicalToolId: 'extension:acme.broker/summarize',
+        modelAlias: 'ext_summary',
+        dispose: disposeToolB
+      })
+    const broker = createBroker({
+      invokeExtension,
+      tools: { register: registerTool }
+    })
+    const hostRequest = (owner: HostPrincipal, method: string, params: unknown) => broker.handle({
+      principal: owner,
+      method,
+      params: JSON.parse(JSON.stringify(params)),
+      signal: new AbortController().signal,
+      requestId: `${owner.lifecycleNonce}-${method}`
+    })
+    await hostRequest(principalA, 'commands.register', { id: 'hello' })
+    await hostRequest(principalB, 'commands.register', { id: 'hello' })
+    await hostRequest(principalA, 'tools.register', manifest.contributes.tools[0])
+    await hostRequest(principalB, 'tools.register', manifest.contributes.tools[0])
+
+    const executeFromView = (workspace: string, sessionId: string) => broker.handlePrincipal({
+      principal: {
+        extensionId: principal.extensionId,
+        extensionVersion: principal.version,
+        permissions: principal.grantedPermissions,
+        workspaceRoots: [workspace],
+        workspaceTrusted: true,
+        viewSessionId: sessionId
+      },
+      method: 'commands.execute',
+      params: { id: 'hello', args: { valid: true } },
+      signal: new AbortController().signal,
+      requestId: `execute-${sessionId}`
+    })
+
+    await expect(executeFromView(workspaceA, 'view-a')).resolves.toEqual({ invoked: true })
+    await expect(executeFromView(workspaceB, 'view-b')).resolves.toEqual({ invoked: false })
+    expect(invokeExtension.mock.calls.at(-2)?.[4]).toMatchObject({ workspaceRoots: [workspaceA] })
+    expect(invokeExtension.mock.calls.at(-1)?.[4]).toMatchObject({ workspaceRoots: [workspaceB] })
+
+    await broker.disposeHost(principalA)
+
+    expect(disposeToolA).toHaveBeenCalledTimes(1)
+    expect(disposeToolB).not.toHaveBeenCalled()
+    await expect(executeFromView(workspaceA, 'view-a-after-exit'))
+      .rejects.toThrow('command is not registered')
+    await expect(executeFromView(workspaceB, 'view-b-after-exit'))
+      .resolves.toEqual({ invoked: false })
+  })
+
+  it('disposes broker registrations only in the revoked extension workspace', async () => {
+    const workspaceA = '/tmp/workspace-a'
+    const workspaceB = '/tmp/workspace-b'
+    const invokeExtension = vi.fn(async (
+      _extensionId: string,
+      _event: string,
+      _method: string,
+      _params: unknown,
+      options: { workspaceRoots?: string[] }
+    ) => ({ invoked: options.workspaceRoots?.[0] === workspaceA }))
+    const broker = createBroker({ invokeExtension })
+    const register = (workspaceRoot: string, lifecycleNonce: string) => broker.handle({
+      principal: { ...principal, lifecycleNonce, workspaceRoots: [workspaceRoot] },
+      method: 'commands.register',
+      params: { id: 'hello' },
+      signal: new AbortController().signal,
+      requestId: `register-${lifecycleNonce}`
+    })
+    await register(workspaceA, 'host-workspace-a')
+    await register(workspaceB, 'host-workspace-b')
+    const execute = (workspaceRoot: string) => broker.handlePrincipal({
+      principal: {
+        extensionId: principal.extensionId,
+        extensionVersion: principal.version,
+        permissions: principal.grantedPermissions,
+        workspaceRoots: [workspaceRoot],
+        workspaceTrusted: true,
+        viewSessionId: `view-${workspaceRoot}`
+      },
+      method: 'commands.execute',
+      params: { id: 'hello', args: { valid: true } },
+      signal: new AbortController().signal,
+      requestId: `execute-${workspaceRoot}`
+    })
+
+    await broker.disposeExtensionWorkspace(
+      principal.extensionId,
+      extensionWorkspaceKey(workspaceA)
+    )
+
+    await expect(execute(workspaceA)).rejects.toThrow('command is not registered')
+    await expect(execute(workspaceB)).resolves.toEqual({ invoked: false })
   })
 
   it('preserves the manifest output schema and content value at the ToolHost boundary', async () => {
@@ -826,7 +1032,11 @@ describe('ExtensionHostBroker', () => {
       payload: {}
     })
     expect(notifyExtension).toHaveBeenCalledWith(
-      'acme.broker',
+      expect.objectContaining({
+        extensionId: 'acme.broker',
+        hostLifecycleNonce: principal.lifecycleNonce,
+        workspaceRoots: [WORKSPACE_ROOT]
+      }),
       'agent.event',
       expect.objectContaining({ subscriptionId: nodeSubscription.subscriptionId })
     )

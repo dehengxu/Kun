@@ -108,7 +108,7 @@ jobs:
       - name: Smoke packaged Kun Video Editor native workflow
         run: >
           npm run smoke:packaged-video-editor-native --
-          --archive dist/kun-video-editor-0.2.2.kunx
+          --archive dist/kun-video-editor-0.3.0.kunx
 
       - name: Prepare and verify Linux user namespace sandbox
         run: |

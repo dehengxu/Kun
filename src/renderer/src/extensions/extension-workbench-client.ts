@@ -49,7 +49,7 @@ export type ExtensionManagementVersion = {
   views?: Array<{
     id: string
     title: string
-    point: 'views.editorTab' | 'views.fullPage'
+    point: 'views.rightSidebar' | 'views.editorTab' | 'views.fullPage'
   }>
   modelProviders?: ModelProviderDeclaration[]
   authentication?: AuthenticationProviderDeclaration[]
@@ -84,6 +84,16 @@ export type ExtensionHostDiagnostic = {
   active: boolean
   logPath?: string
   lastError?: { code?: string; message?: string }
+}
+
+export type BundledExtensionSeedDiagnostic = {
+  extensionId: string
+  version: string
+  outcome: 'installed' | 'updated-selected' | 'updated-unselected' | 'unchanged' |
+    'user-managed' | 'removed' | 'skipped-downgrade' | 'skipped-permission-change' |
+    'skipped-version-conflict' | 'failed'
+  code?: string
+  message?: string
 }
 
 export type ExtensionAccountProtection = {
@@ -178,15 +188,28 @@ function parseBody(result: { ok: boolean; status: number; body: string }): unkno
 export class ExtensionWorkbenchClient {
   constructor(private readonly transport: ExtensionWorkbenchTransport = trustedWorkbenchTransport) {}
 
-  async loadContributions(workspaceRoot?: string): Promise<ExtensionWorkbenchSnapshot> {
-    const result = await this.transport.getWorkbench(workspaceRoot ? { workspaceRoot } : undefined)
+  async loadContributions(
+    workspaceRoot?: string,
+    locale?: string
+  ): Promise<ExtensionWorkbenchSnapshot> {
+    const request = {
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      ...(locale ? { locale } : {})
+    }
+    const result = await this.transport.getWorkbench(
+      Object.keys(request).length > 0 ? request : undefined
+    )
     return ExtensionWorkbenchSnapshotSchema.parse(parseBody(result))
   }
 
-  async listExtensions(workspaceRoot?: string): Promise<ExtensionManagementEntry[]> {
+  async listExtensions(
+    workspaceRoot?: string,
+    locale?: string
+  ): Promise<ExtensionManagementEntry[]> {
     const value = parseBody(await window.kunGui.extensionList({
       limit: 500,
-      ...(workspaceRoot ? { workspaceRoot } : {})
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      ...(locale ? { locale } : {})
     }))
     if (!value || typeof value !== 'object' || !Array.isArray((value as { extensions?: unknown }).extensions)) {
       throw new ExtensionWorkbenchClientError('EXTENSION_RESPONSE_INVALID', 'Extension list is malformed')
@@ -198,6 +221,7 @@ export class ExtensionWorkbenchClient {
     extensionId: string
     extension?: ExtensionManagementEntry
     host: ExtensionHostDiagnostic
+    seed?: BundledExtensionSeedDiagnostic
   }>> {
     const value = parseBody(await window.kunGui.extensionDiagnostics())
     if (!value || typeof value !== 'object' || !Array.isArray((value as { diagnostics?: unknown }).diagnostics)) {
@@ -207,6 +231,7 @@ export class ExtensionWorkbenchClient {
       extensionId: string
       extension?: ExtensionManagementEntry
       host: ExtensionHostDiagnostic
+      seed?: BundledExtensionSeedDiagnostic
     }> }).diagnostics
   }
 
@@ -233,13 +258,13 @@ export class ExtensionWorkbenchClient {
 
   async setPermissions(
     extensionId: string,
-    extensionVersion: string,
+    expectedVersion: string,
     permissions: string[],
     workspaceRoot?: string
   ): Promise<void> {
     parseBody(await window.kunGui.extensionSetPermissions({
       extensionId,
-      extensionVersion,
+      expectedVersion,
       permissions,
       workspaceRoot
     }))

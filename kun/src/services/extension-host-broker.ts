@@ -24,6 +24,7 @@ import {
   JobListRequestSchema,
   JobSnapshotSchema,
   MediaMetadataSchema,
+  MediaCapabilitiesSchema,
   MediaOpenViewResourceRequestSchema,
   MediaPickFilesRequestSchema,
   MediaPickFilesResultSchema,
@@ -31,6 +32,8 @@ import {
   MediaPickSaveTargetResultSchema,
   MediaProbeRequestSchema,
   MediaProbeResultSchema,
+  MediaReadTextRequestSchema,
+  MediaReadTextResultSchema,
   MediaReleaseRequestSchema,
   MediaResourceLeaseSchema,
   MediaStartFfmpegJobRequestSchema,
@@ -172,7 +175,7 @@ export type ExtensionHostBrokerOptions = {
       workspaceRoots?: string[]
     }
   ): Promise<JsonValue>
-  notifyExtension?(extensionId: string, method: string, params: JsonValue): Promise<void>
+  notifyExtension?(principal: ExtensionPrincipal, method: string, params: JsonValue): Promise<void>
   /** Deliver a public SDK notification to one sender-bound Webview session. */
   notifyView?(input: {
     principal: ExtensionPrincipal
@@ -204,6 +207,8 @@ export type ExtensionHostBrokerOptions = {
 
 type ToolRegistration = {
   extensionId: string
+  hostLifecycleNonce?: string
+  workspaceRoots: readonly string[]
   localId: string
   activationEvent: string
   dispose(): void
@@ -211,6 +216,8 @@ type ToolRegistration = {
 
 type ProviderRegistration = {
   extensionId: string
+  hostLifecycleNonce?: string
+  workspaceRoots: readonly string[]
   localId: string
   providerId: string
   activationEvent: string
@@ -219,18 +226,24 @@ type ProviderRegistration = {
 
 type AgentSubscription = {
   extensionId: string
+  hostLifecycleNonce?: string
   viewSessionId?: string
+  workspaceRoots: readonly string[]
   subscription: ExtensionAgentSubscription
 }
 
 type JobSubscription = {
   extensionId: string
+  hostLifecycleNonce?: string
   viewSessionId?: string
+  workspaceRoots: readonly string[]
   subscription: ExtensionJobSubscription
 }
 
 type CommandRegistration = {
   extensionId: string
+  hostLifecycleNonce?: string
+  workspaceRoots: readonly string[]
   localId: string
   activationEvent: string
   contribution: CommandContribution
@@ -240,6 +253,7 @@ type CommandRegistration = {
 
 type StoredAccountSession = AccountSession & {
   extensionId: string
+  workspaceRoots: readonly string[]
   lastTouchedAt: number
   transactionId?: string
   providerId?: string
@@ -253,6 +267,7 @@ type ExtensionBrokerDispatchRequest = Pick<
 
 type ProviderStreamEntry = {
   extensionId: string
+  hostLifecycleNonce?: string
   registrationId: string
   requestId: string
   queue: AsyncEventQueue<ModelProviderStreamEvent>
@@ -517,6 +532,102 @@ export class ExtensionHostBroker {
     }
   }
 
+  /** Dispose broker state admitted for one extension workspace only. */
+  async disposeExtensionWorkspace(extensionId: string, workspaceId: string): Promise<void> {
+    const ownsWorkspace = (entry: { extensionId: string; workspaceRoots: readonly string[] }) =>
+      entry.extensionId === extensionId && registrationIncludesWorkspace(entry, workspaceId)
+    const registrationIds = [...this.providers]
+      .filter(([, registration]) => ownsWorkspace(registration))
+      .map(([registrationId]) => registrationId)
+    for (const [id, registration] of [...this.tools]) {
+      if (!ownsWorkspace(registration)) continue
+      registration.dispose()
+      this.tools.delete(id)
+    }
+    for (const [id, registration] of [...this.providers]) {
+      if (!ownsWorkspace(registration)) continue
+      await registration.dispose().catch(() => undefined)
+      await this.options.providerAccounts.unregisterProvider(
+        this.principalWithProviderPermissions(extensionId, [], registration.providerId),
+        registration.providerId
+      ).catch(() => undefined)
+      this.providers.delete(id)
+    }
+    for (const [id, entry] of [...this.subscriptions]) {
+      if (!ownsWorkspace(entry)) continue
+      entry.subscription.close()
+      this.subscriptions.delete(id)
+    }
+    for (const [id, entry] of [...this.jobSubscriptions]) {
+      if (!ownsWorkspace(entry)) continue
+      entry.subscription.close()
+      this.jobSubscriptions.delete(id)
+    }
+    for (const [id, entry] of [...this.commands]) {
+      if (ownsWorkspace(entry)) this.commands.delete(id)
+    }
+    for (const [id, session] of [...this.accountSessions]) {
+      if (!ownsWorkspace(session)) continue
+      if (session.transactionId) {
+        this.options.accounts.cancelAuthorization(
+          this.principalWithProviderPermissions(extensionId, [], session.providerId ?? ''),
+          session.transactionId
+        )
+      }
+      this.accountSessions.delete(id)
+    }
+    for (const [key, entry] of [...this.providerStreams]) {
+      if (registrationIds.some((registrationId) => key.startsWith(`${registrationId}:`))) {
+        this.failProviderStream(entry, new Error('extension host workspace was disposed'))
+        this.providerStreams.delete(key)
+      }
+    }
+  }
+
+  /** Dispose only registrations owned by one exact Node Host generation. */
+  async disposeHost(hostPrincipalValue: HostExtensionPrincipal): Promise<void> {
+    const principal = hostPrincipal(hostPrincipalValue)
+    const registrationIds = [...this.providers]
+      .filter(([, registration]) => hostOwnsRegistration(principal, registration))
+      .map(([registrationId]) => registrationId)
+    for (const [id, registration] of [...this.tools]) {
+      if (!hostOwnsRegistration(principal, registration)) continue
+      registration.dispose()
+      this.tools.delete(id)
+    }
+    for (const [id, registration] of [...this.providers]) {
+      if (!hostOwnsRegistration(principal, registration)) continue
+      await registration.dispose().catch(() => undefined)
+      await this.options.providerAccounts.unregisterProvider(
+        principal,
+        registration.providerId
+      ).catch(() => undefined)
+      this.providers.delete(id)
+    }
+    for (const [id, entry] of [...this.subscriptions]) {
+      if (!hostOwnsRegistration(principal, entry)) continue
+      entry.subscription.close()
+      this.subscriptions.delete(id)
+    }
+    for (const [id, entry] of [...this.jobSubscriptions]) {
+      if (!hostOwnsRegistration(principal, entry)) continue
+      entry.subscription.close()
+      this.jobSubscriptions.delete(id)
+    }
+    for (const [id, entry] of [...this.commands]) {
+      if (hostOwnsRegistration(principal, entry)) this.commands.delete(id)
+    }
+    for (const [key, entry] of [...this.providerStreams]) {
+      if (
+        hostOwnsRegistration(principal, entry) ||
+        registrationIds.some((registrationId) => key.startsWith(`${registrationId}:`))
+      ) {
+        this.failProviderStream(entry, new Error('extension host was disposed'))
+        this.providerStreams.delete(key)
+      }
+    }
+  }
+
   disposeViewSession(viewSessionId: string): number {
     let disposed = 0
     for (const [id, entry] of [...this.subscriptions]) {
@@ -660,12 +771,16 @@ export class ExtensionHostBroker {
         return this.mediaPickSaveTarget(principal, request.params, request.signal)
       case 'media.stat':
         return this.mediaStat(principal, request.params)
+      case 'media.readText':
+        return this.mediaReadText(principal, request.params)
       case 'media.release':
         return this.mediaRelease(principal, request.params, request.signal)
       case 'media.openViewResource':
         return this.mediaOpenViewResource(principal, request.params, request.signal)
       case 'media.performArtifactAction':
         return this.mediaPerformArtifactAction(principal, request.params, request.signal)
+      case 'media.getCapabilities':
+        return this.mediaGetCapabilities(principal)
       case 'media.probe':
         return this.mediaProbe(principal, request.params)
       case 'media.startFfmpegJob':
@@ -710,6 +825,44 @@ export class ExtensionHostBroker {
     const request = z.strictObject({ handleId: z.string().min(16).max(512) }).parse(params)
     const handle = await this.options.mediaHandles.stat(principal, request.handleId)
     return publicMediaMetadata(handle)
+  }
+
+  private async mediaReadText(principal: ExtensionPrincipal, params: JsonValue) {
+    if (!this.options.mediaHandles) throw new Error('Media handle service is unavailable')
+    const request = MediaReadTextRequestSchema.parse(params)
+    const handle = await this.options.mediaHandles.resolve(principal, request.handleId, 'read')
+    if (handle.byteSize !== undefined && handle.byteSize > request.maxBytes) {
+      throw extensionError(
+        'MEDIA_LIMIT_EXCEEDED',
+        `Selected text file exceeds the ${request.maxBytes}-byte read limit`,
+        { operation: 'media.readText', limitCategory: 'media_text_bytes' }
+      )
+    }
+    const bytes = await readFile(handle.absolutePath)
+    if (bytes.byteLength > request.maxBytes) {
+      throw extensionError(
+        'MEDIA_LIMIT_EXCEEDED',
+        `Selected text file exceeds the ${request.maxBytes}-byte read limit`,
+        { operation: 'media.readText', limitCategory: 'media_text_bytes' }
+      )
+    }
+    let content: string
+    try {
+      content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    } catch {
+      throw extensionError(
+        'MEDIA_INVALID_ARGUMENT',
+        'Selected text file is not valid UTF-8',
+        { operation: 'media.readText' }
+      )
+    }
+    return MediaReadTextResultSchema.parse({
+      handleId: handle.id,
+      displayName: handle.displayName,
+      mimeType: handle.mimeType,
+      byteSize: bytes.byteLength,
+      content
+    })
   }
 
   private async mediaRelease(
@@ -757,6 +910,16 @@ export class ExtensionHostBroker {
     return ArtifactHostActionResultSchema.parse(result)
   }
 
+  private async mediaGetCapabilities(principal: ExtensionPrincipal) {
+    if (!this.options.mediaProcesses) throw new Error('Media process service is unavailable')
+    const capabilities = await this.options.mediaProcesses.capabilities(principal)
+    return MediaCapabilitiesSchema.parse({
+      probedAt: capabilities.probedAt,
+      ffprobe: publicMediaCapability(capabilities.ffprobe),
+      ffmpeg: publicMediaCapability(capabilities.ffmpeg)
+    })
+  }
+
   private async mediaProbe(principal: ExtensionPrincipal, params: JsonValue) {
     if (!this.options.mediaProcesses) throw new Error('Media process service is unavailable')
     const request = MediaProbeRequestSchema.parse(params)
@@ -802,7 +965,11 @@ export class ExtensionHostBroker {
     if (!subscription.complete) {
       this.jobSubscriptions.set(subscription.subscriptionId, {
         extensionId: principal.extensionId,
+        ...(principal.hostLifecycleNonce
+          ? { hostLifecycleNonce: principal.hostLifecycleNonce }
+          : {}),
         ...(principal.viewSessionId ? { viewSessionId: principal.viewSessionId } : {}),
+        workspaceRoots: normalizedRegistrationWorkspaceRoots(principal.workspaceRoots),
         subscription
       })
       void this.pumpJobSubscription(principal, subscription)
@@ -821,7 +988,7 @@ export class ExtensionHostBroker {
     const jobs = this.requireJobs(principal)
     const { subscriptionId } = SubscriptionIdSchema.parse(params)
     const entry = this.jobSubscriptions.get(subscriptionId)
-    if (entry?.extensionId === principal.extensionId && entry.viewSessionId === principal.viewSessionId) {
+    if (entry && registrationOwnedByPrincipal(entry, principal)) {
       jobs.unsubscribe(jobCaller(principal), subscriptionId)
       entry.subscription.close()
       this.jobSubscriptions.delete(subscriptionId)
@@ -853,7 +1020,7 @@ export class ExtensionHostBroker {
           if (!this.options.notifyView) throw new Error('View notification bridge is unavailable')
           await this.options.notifyView({ principal, method: 'jobs.event', params: notification })
         } else {
-          await this.options.notifyExtension?.(principal.extensionId, 'jobs.event', notification)
+          await this.options.notifyExtension?.(principal, 'jobs.event', notification)
         }
       }
     } finally {
@@ -905,6 +1072,10 @@ export class ExtensionHostBroker {
     const registrationId = `command_${randomUUID()}`
     this.commands.set(registrationId, {
       extensionId: principal.extensionId,
+      ...(principal.hostLifecycleNonce
+        ? { hostLifecycleNonce: principal.hostLifecycleNonce }
+        : {}),
+      workspaceRoots: normalizedRegistrationWorkspaceRoots(principal.workspaceRoots),
       localId: input.id,
       activationEvent: activationEventFor(manifest, `onCommand:${input.id}`),
       contribution,
@@ -917,14 +1088,18 @@ export class ExtensionHostBroker {
   private unregisterCommand(principal: ExtensionPrincipal, params: JsonValue) {
     const { registrationId } = RegistrationRequestSchema.parse(params)
     const registration = this.commands.get(registrationId)
-    if (registration?.extensionId === principal.extensionId) this.commands.delete(registrationId)
+    if (registrationOwnedByPrincipal(registration, principal)) this.commands.delete(registrationId)
     return null
   }
 
   private async executeCommand(principal: ExtensionPrincipal, params: JsonValue, signal: AbortSignal) {
     const input = CommandExecuteSchema.parse(params)
     const registration = [...this.commands.entries()].find(([, entry]) =>
-      entry.extensionId === principal.extensionId && entry.localId === input.id
+      entry.extensionId === principal.extensionId &&
+      entry.localId === input.id &&
+      sameRegistrationWorkspace(entry.workspaceRoots, principal.workspaceRoots) &&
+      (principal.hostLifecycleNonce === undefined ||
+        entry.hostLifecycleNonce === principal.hostLifecycleNonce)
     )
     if (!registration) throw new Error(`command is not registered: ${input.id}`)
     const [registrationId, entry] = registration
@@ -935,7 +1110,7 @@ export class ExtensionHostBroker {
       entry.activationEvent,
       `commands.invoke:${registrationId}`,
       toJson(args),
-      { signal, workspaceRoots: [...principal.workspaceRoots] }
+      { signal, workspaceRoots: [...entry.workspaceRoots] }
     )
     entry.outputValidator?.assert(result, `command ${input.id} result`)
     return result
@@ -1140,7 +1315,7 @@ export class ExtensionHostBroker {
             })
           } else {
             await this.options.notifyExtension?.(
-              principal.extensionId,
+              principal,
               'agent.event',
               notification
             )
@@ -1170,7 +1345,11 @@ export class ExtensionHostBroker {
     if (terminalSeen) subscription.close()
     else this.subscriptions.set(subscriptionId, {
       extensionId: principal.extensionId,
+      ...(principal.hostLifecycleNonce
+        ? { hostLifecycleNonce: principal.hostLifecycleNonce }
+        : {}),
       ...(principal.viewSessionId ? { viewSessionId: principal.viewSessionId } : {}),
+      workspaceRoots: normalizedRegistrationWorkspaceRoots(principal.workspaceRoots),
       subscription
     })
     replaying = false
@@ -1180,10 +1359,7 @@ export class ExtensionHostBroker {
   private agentUnsubscribe(principal: ExtensionPrincipal, params: JsonValue) {
     const { subscriptionId } = SubscriptionIdSchema.parse(params)
     const entry = this.subscriptions.get(subscriptionId)
-    if (
-      entry?.extensionId === principal.extensionId &&
-      entry.viewSessionId === principal.viewSessionId
-    ) {
+    if (entry && registrationOwnedByPrincipal(entry, principal)) {
       entry.subscription.close()
       this.subscriptions.delete(subscriptionId)
     }
@@ -1278,6 +1454,10 @@ export class ExtensionHostBroker {
     })
     this.tools.set(registrationId, {
       extensionId: principal.extensionId,
+      ...(principal.hostLifecycleNonce
+        ? { hostLifecycleNonce: principal.hostLifecycleNonce }
+        : {}),
+      workspaceRoots: normalizedRegistrationWorkspaceRoots(principal.workspaceRoots),
       localId: declaration.id,
       activationEvent,
       dispose: registration.dispose
@@ -1288,7 +1468,7 @@ export class ExtensionHostBroker {
   private unregisterTool(principal: ExtensionPrincipal, params: JsonValue) {
     const { registrationId } = RegistrationRequestSchema.parse(params)
     const registration = this.tools.get(registrationId)
-    if (registration?.extensionId === principal.extensionId) {
+    if (registration && registrationOwnedByPrincipal(registration, principal)) {
       registration.dispose()
       this.tools.delete(registrationId)
     }
@@ -1354,6 +1534,10 @@ export class ExtensionHostBroker {
     }
     this.providers.set(registrationId, {
       extensionId: principal.extensionId,
+      ...(principal.hostLifecycleNonce
+        ? { hostLifecycleNonce: principal.hostLifecycleNonce }
+        : {}),
+      workspaceRoots: normalizedRegistrationWorkspaceRoots(principal.workspaceRoots),
       localId: declaration.id,
       providerId: definition.id,
       activationEvent,
@@ -1366,7 +1550,7 @@ export class ExtensionHostBroker {
   private async unregisterProvider(principal: ExtensionPrincipal, params: JsonValue) {
     const { registrationId } = RegistrationRequestSchema.parse(params)
     const registration = this.providers.get(registrationId)
-    if (registration?.extensionId === principal.extensionId) {
+    if (registration && registrationOwnedByPrincipal(registration, principal)) {
       await registration.dispose()
       await this.options.providerAccounts.unregisterProvider(principal, registration.providerId)
       this.providers.delete(registrationId)
@@ -1448,6 +1632,9 @@ export class ExtensionHostBroker {
     else signal.addEventListener('abort', forwardCancellation, { once: true })
     const entry: ProviderStreamEntry = {
       extensionId: principal.extensionId,
+      ...(principal.hostLifecycleNonce
+        ? { hostLifecycleNonce: principal.hostLifecycleNonce }
+        : {}),
       registrationId,
       requestId: request.requestId,
       queue,
@@ -1544,7 +1731,9 @@ export class ExtensionHostBroker {
         headless: true
       })
       session = {
-        id, extensionId: principal.extensionId, lastTouchedAt: now,
+        id, extensionId: principal.extensionId,
+        workspaceRoots: normalizedRegistrationWorkspaceRoots(principal.workspaceRoots),
+        lastTouchedAt: now,
         transactionId: pending.transactionId,
         providerId: provider.id, kind: 'oauth-pkce',
         status: 'pending', verificationUrl: pending.authorizationUrl,
@@ -1559,7 +1748,9 @@ export class ExtensionHostBroker {
         scopes: effectiveScopes
       })
       session = {
-        id, extensionId: principal.extensionId, lastTouchedAt: now,
+        id, extensionId: principal.extensionId,
+        workspaceRoots: normalizedRegistrationWorkspaceRoots(principal.workspaceRoots),
+        lastTouchedAt: now,
         transactionId: pending.transactionId,
         providerId: provider.id, kind: 'oauth-device',
         status: 'pending', verificationUrl: pending.verificationUri, userCode: pending.userCode,
@@ -1568,7 +1759,9 @@ export class ExtensionHostBroker {
       }
     } else {
       session = {
-        id, extensionId: principal.extensionId, lastTouchedAt: now,
+        id, extensionId: principal.extensionId,
+        workspaceRoots: normalizedRegistrationWorkspaceRoots(principal.workspaceRoots),
+        lastTouchedAt: now,
         providerId: provider.id, kind: 'api-key', status: 'pending',
         expiresAt: new Date(now + 10 * 60_000).toISOString(),
         message: 'API keys must be entered in the protected Kun account window.'
@@ -1861,10 +2054,15 @@ export function requiredExtensionBrokerPermission(method: string, params: JsonVa
   if (method === 'workspace.writeFile') return 'workspace.write'
   if (method.startsWith('workspace.')) return 'workspace.read'
   if (method === 'media.pickSaveTarget') return 'media.export'
-  if (method === 'media.probe' || method === 'media.startFfmpegJob') return 'media.process'
+  if (
+    method === 'media.getCapabilities' ||
+    method === 'media.probe' ||
+    method === 'media.startFfmpegJob'
+  ) return 'media.process'
   if (
     method === 'media.pickFiles' ||
     method === 'media.stat' ||
+    method === 'media.readText' ||
     method === 'media.openViewResource' ||
     method === 'media.performArtifactAction'
   ) {
@@ -1911,11 +2109,73 @@ function publicMediaMetadata(handle: MediaHandleProjection) {
   })
 }
 
+function publicMediaCapability(capability: {
+  name: 'ffprobe' | 'ffmpeg'
+  available: boolean
+  version?: string
+  features?: string[]
+}) {
+  return {
+    name: capability.name,
+    available: capability.available,
+    ...(capability.version ? { version: capability.version.slice(0, 512) } : {}),
+    features: capability.features ?? []
+  }
+}
+
 function jobCaller(principal: ExtensionPrincipal) {
   return {
     extensionId: principal.extensionId,
     workspaceIds: principal.workspaceRoots.map(extensionWorkspaceKey)
   }
+}
+
+function hostOwnsRegistration(
+  principal: ExtensionPrincipal,
+  entry: { extensionId: string; hostLifecycleNonce?: string } | undefined
+): boolean {
+  return Boolean(
+    entry &&
+    principal.hostLifecycleNonce &&
+    entry.extensionId === principal.extensionId &&
+    entry.hostLifecycleNonce === principal.hostLifecycleNonce
+  )
+}
+
+function registrationOwnedByPrincipal(
+  entry: {
+    extensionId: string
+    hostLifecycleNonce?: string
+    viewSessionId?: string
+  } | undefined,
+  principal: ExtensionPrincipal
+): boolean {
+  if (!entry || entry.extensionId !== principal.extensionId) return false
+  if (principal.viewSessionId !== undefined) {
+    return entry.viewSessionId === principal.viewSessionId
+  }
+  return hostOwnsRegistration(principal, entry)
+}
+
+function normalizedRegistrationWorkspaceRoots(workspaceRoots: readonly string[]): string[] {
+  return [...new Set(workspaceRoots.map((root) => resolve(root)))].sort()
+}
+
+function registrationIncludesWorkspace(
+  entry: { workspaceRoots: readonly string[] },
+  workspaceId: string
+): boolean {
+  return entry.workspaceRoots.some((root) => extensionWorkspaceKey(root) === workspaceId)
+}
+
+function sameRegistrationWorkspace(
+  left: readonly string[],
+  right: readonly string[]
+): boolean {
+  const normalizedLeft = normalizedRegistrationWorkspaceRoots(left)
+  const normalizedRight = normalizedRegistrationWorkspaceRoots(right)
+  return normalizedLeft.length === normalizedRight.length &&
+    normalizedLeft.every((root, index) => root === normalizedRight[index])
 }
 
 function hostPrincipal(input: HostExtensionPrincipal): ExtensionPrincipal {
@@ -1924,7 +2184,8 @@ function hostPrincipal(input: HostExtensionPrincipal): ExtensionPrincipal {
     extensionVersion: input.version,
     permissions: [...input.grantedPermissions],
     workspaceRoots: [...input.workspaceRoots],
-    workspaceTrusted: input.workspaceRoots.length > 0
+    workspaceTrusted: input.workspaceRoots.length > 0,
+    hostLifecycleNonce: input.lifecycleNonce
   }
 }
 

@@ -4,9 +4,12 @@ import { classifyError } from '../src/webview/controller.js'
 import {
   INITIAL_EDITOR_STATE,
   VIEW_LIMITS,
+  activeCaptionAtFrame,
   activeTranscriptSegment,
   editorReducer,
+  projectFrameFromSourceTime,
   proofIsStale,
+  timelineSourceAtFrame,
   transcriptFrame,
   type RenderTicket
 } from '../src/webview/model.js'
@@ -115,5 +118,70 @@ describe('video editor bounded View state', () => {
       durationFrames: 60
     }
     expect(activeTranscriptSegment(shifted, 'asset-1', 30)?.id).toBe('segment-2')
+  })
+
+  it('maps the composed playhead through trims and speed to the source player and captions', () => {
+    const project = makeViewProject()
+    project.items = [{
+      ...project.items[0]!,
+      timelineStartFrame: 60,
+      durationFrames: 30,
+      sourceStartUs: 1_000_000,
+      sourceEndUs: 3_000_000,
+      speed: { numerator: 2, denominator: 1 }
+    }]
+    project.captions = [{
+      id: 'caption-active',
+      trackId: 'captions-1',
+      startFrame: 70,
+      endFrame: 80,
+      text: 'Mapped caption',
+      placement: 'bottom'
+    }]
+
+    const source = timelineSourceAtFrame(project, 75)
+    expect(source).toMatchObject({
+      sourceTimeUs: 2_000_000,
+      playbackRate: 2,
+      item: { timelineStartFrame: 60 }
+    })
+    expect(projectFrameFromSourceTime(project, source!, 2)).toBe(75)
+    expect(activeCaptionAtFrame(project, 75)?.text).toBe('Mapped caption')
+    expect(activeCaptionAtFrame(project, 80)).toBeUndefined()
+  })
+
+  it('clears media, jobs, selections, script and Agent state when switching projects', () => {
+    const first = makeViewProject()
+    const second = { ...makeViewProject(), id: 'second-project', name: 'Second' }
+    let state = editorReducer(INITIAL_EDITOR_STATE, { type: 'project', value: first })
+    state = {
+      ...state,
+      selectedItemId: first.items[0]?.id,
+      selectedAssetId: first.assets[0]?.id,
+      activeMediaHandleId: first.assets[0]?.mediaHandleId,
+      activeMediaUrl: 'kun-media://lease/first',
+      script: { revision: 0, digest: 'digest', markdown: '# first', dirty: false },
+      jobs: [makeJob('running')],
+      agentRun: {
+        id: 'run-1', threadId: 'thread-1', ownerExtensionId: 'kun-examples.kun-video-editor',
+        ownerExtensionVersion: '0.1.0', extensionVisibility: 'private', extensionBudget: {},
+        toolCatalogEpoch: 'epoch', state: 'running', createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }
+    }
+    state = editorReducer(state, { type: 'project', value: second })
+    expect(state).toMatchObject({
+      project: { id: 'second-project' },
+      playheadFrame: 0,
+      playing: false,
+      media: {},
+      leases: {},
+      jobs: [],
+      agentEvents: []
+    })
+    expect(state.activeMediaUrl).toBeUndefined()
+    expect(state.selectedItemId).toBeUndefined()
+    expect(state.script).toBeUndefined()
+    expect(state.agentRun).toBeUndefined()
   })
 })

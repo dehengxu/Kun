@@ -241,7 +241,11 @@ function prepareCompositionInputs(
   for (const item of [...project.items].sort(compositionItemComparator(project))) {
     const asset = assetForItem(project, item)
     if (!includeAudioOnlyItems && !asset.video) continue
-    const inputName = `item-${item.id}`
+    // Media placeholders are part of the public broker request and therefore
+    // have their own bounded identifier budget. Timeline ids grow after
+    // repeated transcript cuts (`-part-N`), so never derive a binding key from
+    // the user/project-controlled id.
+    const inputName = `clip-${items.length}`
     inputs[inputName] = assetReference(asset)
     args.push(
       '-ss', microsecondsToSecondsArgument(item.sourceStartUs),
@@ -261,7 +265,7 @@ function audioStep(project: VideoProject, outputHandleId: string): FfmpegRenderS
   for (const item of [...project.items].sort(compositionItemComparator(project))) {
     const asset = assetForItem(project, item)
     if (!asset.audio) continue
-    const name = `item-${item.id}`
+    const name = `clip-${inputIndex}`
     inputs[name] = assetReference(asset)
     args.push(
       '-ss', microsecondsToSecondsArgument(item.sourceStartUs),
@@ -303,7 +307,15 @@ function compositionGraph(
   burnedCaptions: boolean,
   includeAudio: boolean
 ): { graph: string; videoOutput: string; audioOutput?: string } {
-  const duration = frameToSecondsArgument(projectDurationFrames(project), project.fps)
+  if (canUseSequentialConcat(items, burnedCaptions, includeAudio)) {
+    return sequentialCompositionGraph(project, items, includeAudio)
+  }
+
+  // The color source duration option accepts a decimal duration, but FFmpeg 8
+  // no longer accepts the rational frame expression used by timeline filters.
+  const duration = microsecondsToSecondsArgument(
+    framesToMicroseconds(projectDurationFrames(project), project.fps)
+  )
   const filters = [
     `color=c=${project.canvas.background}:s=${project.canvas.width}x${project.canvas.height}:r=${project.fps.numerator}/${project.fps.denominator}:d=${duration}[base]`
   ]
@@ -370,6 +382,82 @@ function compositionGraph(
   return { graph, videoOutput: `[${videoLabel}]`, audioOutput }
 }
 
+/**
+ * Ordinary transcript edits produce many adjacent cuts on one track. Building
+ * those as overlays repeats the base canvas and timing expression for every
+ * clip and crosses the public 8 KiB per-argument limit at roughly 25 cuts.
+ * A concat graph is both semantically simpler and substantially smaller.
+ */
+function sequentialCompositionGraph(
+  project: VideoProject,
+  items: Array<{ item: TimelineItem; asset: MediaAsset; inputIndex: number }>,
+  includeAudio: boolean
+): { graph: string; videoOutput: string; audioOutput?: string } {
+  const hasAudio = includeAudio && items.every(({ asset }) => asset.audio !== undefined)
+  const filters: string[] = []
+  const concatInputs: string[] = []
+
+  for (const { item, inputIndex } of items) {
+    const videoLabel = `v${inputIndex}`
+    filters.push(
+      `[${inputIndex}:v]setpts=(PTS-STARTPTS)/${item.speed.numerator}*${item.speed.denominator},` +
+      `${sequentialGeometryFilter(project)},settb=AVTB[${videoLabel}]`
+    )
+    concatInputs.push(`[${videoLabel}]`)
+    if (hasAudio) {
+      const audioLabel = `a${inputIndex}`
+      filters.push(
+        `[${inputIndex}:a]asetpts=(PTS-STARTPTS)/${item.speed.numerator}*${item.speed.denominator},` +
+        `aresample=async=1:first_pts=0[${audioLabel}]`
+      )
+      concatInputs.push(`[${audioLabel}]`)
+    }
+  }
+
+  filters.push(
+    `${concatInputs.join('')}concat=n=${items.length}:v=1:a=${hasAudio ? 1 : 0}` +
+    (hasAudio ? '[vout][aout]' : '[vout]')
+  )
+  const graph = filters.join(';')
+  assertBoundedFilterGraph(graph)
+  return {
+    graph,
+    videoOutput: '[vout]',
+    ...(hasAudio ? { audioOutput: '[aout]' } : {})
+  }
+}
+
+function canUseSequentialConcat(
+  items: Array<{ item: TimelineItem; asset: MediaAsset; inputIndex: number }>,
+  burnedCaptions: boolean,
+  includeAudio: boolean
+): boolean {
+  if (burnedCaptions || items.length === 0) return false
+  const firstTrackId = items[0]!.item.trackId
+  const audioPresence = items[0]!.asset.audio !== undefined
+  let cursor = 0
+  for (const { item, asset } of items) {
+    if (
+      !asset.video ||
+      item.trackId !== firstTrackId ||
+      item.timelineStartFrame !== cursor ||
+      item.transform.x !== 0 ||
+      item.transform.y !== 0 ||
+      item.transform.scaleX !== 1 ||
+      item.transform.scaleY !== 1 ||
+      item.transform.rotation !== 0 ||
+      item.opacity !== 1 ||
+      item.fadeInFrames !== 0 ||
+      item.fadeOutFrames !== 0 ||
+      (includeAudio && (asset.audio !== undefined) !== audioPresence)
+    ) {
+      return false
+    }
+    cursor += item.durationFrames
+  }
+  return true
+}
+
 function assertBoundedFilterGraph(graph: string): void {
   if (graph.length <= 8_000) return
   throw engineError(
@@ -407,17 +495,33 @@ function safeCaptionColor(value: string | undefined, fallback: string): string {
 }
 
 function geometryFilter(project: VideoProject, item: TimelineItem): string {
-  const width = Math.max(2, Math.round(project.canvas.width * item.transform.scaleX / 2) * 2)
-  const height = Math.max(2, Math.round(project.canvas.height * item.transform.scaleY / 2) * 2)
-  const geometry = project.canvas.fit === 'crop'
-    ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${project.canvas.width}:${project.canvas.height}`
+  const baseGeometry = project.canvas.fit === 'crop'
+    ? `scale=${project.canvas.width}:${project.canvas.height}:force_original_aspect_ratio=increase,` +
+      `crop=${project.canvas.width}:${project.canvas.height},setsar=1`
     : project.canvas.fit === 'pad'
-      ? `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${project.canvas.width}:${project.canvas.height}:(ow-iw)/2:(oh-ih)/2:${project.canvas.background}`
-      : `scale=${width}:${height}:force_original_aspect_ratio=decrease`
+      ? sequentialGeometryFilter(project)
+      : `scale=${project.canvas.width}:${project.canvas.height}:force_original_aspect_ratio=decrease,setsar=1`
+  // Apply item transforms only after the source has been fitted to the canvas.
+  // Scaling the target first made crop mode request (for example) a 640x360
+  // crop from a 320x180 image whenever the item scale was 0.5.
+  const transformed = item.transform.scaleX === 1 && item.transform.scaleY === 1
+    ? baseGeometry
+    : `${baseGeometry},scale=iw*${item.transform.scaleX.toFixed(6)}:` +
+      `ih*${item.transform.scaleY.toFixed(6)}`
   const rotation = item.transform.rotation === 0
     ? ''
     : `,rotate=${(item.transform.rotation * Math.PI / 180).toFixed(8)}:c=none`
-  return `${geometry}${rotation}`
+  return `${transformed}${rotation}`
+}
+
+function sequentialGeometryFilter(project: VideoProject): string {
+  if (project.canvas.fit === 'crop') {
+    return `scale=${project.canvas.width}:${project.canvas.height}:force_original_aspect_ratio=increase,` +
+      `crop=${project.canvas.width}:${project.canvas.height},setsar=1`
+  }
+  return `scale=${project.canvas.width}:${project.canvas.height}:force_original_aspect_ratio=decrease,` +
+    `pad=${project.canvas.width}:${project.canvas.height}:(ow-iw)/2:(oh-ih)/2:${project.canvas.background},` +
+    'setsar=1'
 }
 
 function subtitleStep(

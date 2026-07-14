@@ -543,6 +543,29 @@ describe('ExtensionJobService lifecycle fencing', () => {
     expect(await store.get(second.snapshot.id)).toMatchObject({ state: 'cancelled' })
   })
 
+  it('fences a crashed workspace Host without cancelling a peer workspace job', async () => {
+    const { store, service } = await createService()
+    service.registerCoreExecutor({
+      kind: 'media.connection-bound',
+      connectionBound: true,
+      async execute() {
+        return { schemaVersion: 1, generatedArtifacts: [] }
+      }
+    })
+    const first = await service.createJob(jobInput({ kind: 'media.connection-bound' }))
+    const second = await service.createJob(jobInput({
+      kind: 'media.connection-bound',
+      owner: { ...jobInput().owner, workspaceId: OTHER_WORKSPACE_ID },
+      workspaceRoot: OTHER_WORKSPACE_ROOT
+    }))
+
+    await expect(service.handleExtensionHostCrash('video.editor', [WORKSPACE_ID]))
+      .resolves.toMatchObject({ matched: 1, cancelled: 1 })
+
+    expect(await store.get(first.snapshot.id)).toMatchObject({ state: 'cancelled' })
+    expect(await store.get(second.snapshot.id)).toMatchObject({ state: 'queued' })
+  })
+
   it('scopes workspace revocation without affecting another authorized workspace', async () => {
     const { store, service } = await createService()
     const first = await service.createJob(jobInput())

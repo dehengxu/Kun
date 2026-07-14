@@ -1,6 +1,6 @@
 {
   "name": "@kun-examples/kun-video-editor",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -12,8 +12,8 @@
     "fixture:check": "node ./fixtures/generate-local-fixture.mjs --check",
     "typecheck": "tsc --noEmit -p tsconfig.host.json && tsc --noEmit -p tsconfig.webview.json && tsc --noEmit -p tsconfig.test.json",
     "test": "npm run fixture:check && vitest run --config vitest.config.ts",
-    "validate": "node ../../../kun/dist/cli/serve-entry.js extension validate .",
-    "pack": "npm run build && node ../../../kun/dist/cli/serve-entry.js extension pack . --overwrite"
+    "validate": "node ../run-repository-kun-cli.mjs extension validate .",
+    "pack": "npm run build && node ../run-repository-kun-cli.mjs extension pack . --overwrite"
   },
   "dependencies": {
     "@kun/extension-api": "^1.1.0",

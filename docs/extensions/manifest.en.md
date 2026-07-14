@@ -65,6 +65,7 @@ Empty arrays may be omitted. A real Manifest should declare only contributions a
 | `version` | Yes | SemVer version of this `.kunx` package |
 | `displayName` | No | Short user-facing name, rendered as untrusted plain text |
 | `description` | No | User-facing description, rendered as untrusted plain text |
+| `localizations` | No | Bounded locale overlays for Host-rendered manifest and contribution display copy |
 | `license` | No | Short license identifier; a release package still includes `LICENSE` |
 | `homepage` | No | Extension homepage HTTPS URL |
 | `engines.kun` | Yes | SemVer range of compatible Kun versions |
@@ -83,6 +84,31 @@ A browser-only Manifest (only `browser`) cannot declare `commands`, `agentProfil
 The full ID is `publisher.name` and must not change after publication. Renaming creates a new extension; state, grants, accounts, and threads are not transferred automatically.
 
 `publisher` uses lowercase ASCII letters, digits, and hyphens, starts with a letter or digit, and is at most 64 characters. `name` and every local contribution ID start with a lowercase letter and then use lowercase letters, digits, or hyphens, at most 64 characters. Use the same-version Schema for exact regex and reserved-name validation.
+
+## Host-rendered localization
+
+`localizations` maps up to 32 bounded BCP 47 language tags to plain-text display overlays. The base Manifest remains the required fallback and the stable source for identity, activation, permissions, paths, executable schemas, and Agent instructions. An overlay can change only known display fields and must reference an existing contribution, setting property, notification action, or declared Provider model.
+
+```json
+{
+  "displayName": "Issue Assistant",
+  "contributes": {
+    "views.rightSidebar": [{ "id": "issues", "title": "Issues", "entry": "dist/index.html" }]
+  },
+  "localizations": {
+    "zh-CN": {
+      "displayName": "问题助手",
+      "contributes": {
+        "views.rightSidebar": {
+          "issues": { "title": "问题" }
+        }
+      }
+    }
+  }
+}
+```
+
+Kun resolves a case-insensitive exact tag first, then progressively less-specific tags (`zh-Hans-CN` → `zh-Hans` → `zh`), then uses the base Manifest. Webview content continues to localize through `ui.getLocale` and `ui.localeChanged`; manifest overlays cover Host chrome such as rail tooltips, panel/result-preview titles, Extension Center cards, and declarative settings.
 
 ## Version fields
 

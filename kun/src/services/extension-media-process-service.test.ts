@@ -84,6 +84,33 @@ describe('ExtensionMediaProcessService', () => {
     ]))
   })
 
+  it('reports only the reviewed ffmpeg features used by public render plans', async () => {
+    const test = await fixture(`
+      const args = process.argv.slice(2)
+      if (args.includes('-version')) process.stdout.write('ffmpeg version 8.0-test\\n')
+      else if (args.includes('-encoders')) process.stdout.write(' V..... libx264 H.264\\n A..... aac AAC\\n V..... dangerous_extra ignored\\n')
+      else if (args.includes('-filters')) process.stdout.write(' T.. drawtext V->V\\n ..S subtitles V->V\\n ... arbitrary ignored\\n')
+    `)
+    const service = new ExtensionMediaProcessService({
+      handleService: test.handles,
+      ffmpegPath: test.bin,
+      pathEnv: process.env.PATH
+    })
+    await expect(service.capabilities(test.principal)).resolves.toMatchObject({
+      ffmpeg: {
+        name: 'ffmpeg',
+        available: true,
+        version: '8.0-test',
+        features: [
+          'libx264-encoder',
+          'aac-encoder',
+          'drawtext-filter',
+          'subtitles-filter'
+        ]
+      }
+    })
+  })
+
   it('uses a fixed ffprobe profile and returns normalized bounded metadata', async () => {
     const payload = {
       format: {

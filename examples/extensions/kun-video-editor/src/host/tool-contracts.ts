@@ -8,7 +8,8 @@ export const VIDEO_TOOL_IDS = [
   'video-apply-script',
   'video-update-timeline',
   'video-render',
-  'video-render-status'
+  'video-render-status',
+  'video-render-cancel'
 ] as const
 
 export type VideoToolId = (typeof VIDEO_TOOL_IDS)[number]
@@ -31,11 +32,11 @@ const boundedOutput = {
 export const VIDEO_TOOL_DECLARATIONS = [
   {
     id: 'video-project',
-    description: 'Resolve the active project, or list, create, or read a bounded revision-aware Kun video project projection. Read the current revision before any edit.',
+    description: 'Resolve the active project, list projects, purely read one project, or explicitly create/select the authoritative workspace project. Read the current revision before any edit.',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['active', 'list', 'get', 'create'] },
+        action: { type: 'string', enum: ['active', 'list', 'get', 'create', 'select'] },
         projectId: stableId,
         name: { type: 'string', minLength: 1, maxLength: 160 },
         fps: { type: 'object' },
@@ -157,7 +158,7 @@ export const VIDEO_TOOL_DECLARATIONS = [
       properties: {
         projectId: stableId,
         expectedRevision: revision,
-        kind: { type: 'string', enum: ['proof-frame', 'preview', 'h264-mp4', 'audio-aac'] },
+        kind: { type: 'string', enum: ['proof-frame', 'preview', 'h264-mp4', 'audio-aac', 'subtitles'] },
         outputHandleId: opaqueHandle,
         proofFrame: revision,
         captionMode: { type: 'string', enum: ['none', 'burned', 'sidecar', 'both'] },
@@ -175,15 +176,32 @@ export const VIDEO_TOOL_DECLARATIONS = [
   },
   {
     id: 'video-render-status',
-    description: 'Inspect or cancel one owned durable render job and return only technically validated generated artifacts.',
+    description: 'Read one owned durable render job without side effects and return only project-matched, technically validated generated artifacts.',
     inputSchema: {
       type: 'object',
       properties: {
         jobId: { type: 'string', minLength: 8, maxLength: 512 },
-        action: { type: 'string', enum: ['get', 'cancel'] },
+        projectId: stableId
+      },
+      required: ['jobId'],
+      additionalProperties: false
+    },
+    outputSchema: boundedOutput,
+    sideEffects: 'read',
+    idempotent: true,
+    maxOutputBytes: 131_072
+  },
+  {
+    id: 'video-render-cancel',
+    description: 'Cancel one owned, tracked durable video render after verifying its optional project identity.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        jobId: { type: 'string', minLength: 8, maxLength: 512 },
+        projectId: stableId,
         reason: { type: 'string', minLength: 1, maxLength: 512 }
       },
-      required: ['jobId', 'action'],
+      required: ['jobId'],
       additionalProperties: false
     },
     outputSchema: boundedOutput,

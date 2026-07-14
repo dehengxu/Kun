@@ -14,10 +14,12 @@ import {
   JsonValueSchema,
   LocaleSchema,
   MANIFEST_CONTRIBUTION_PERMISSION_REQUIREMENTS,
+  ManifestLocaleTagSchema,
   MediaMetadataSchema,
   ProviderBindingSchema,
   ThemeSchema,
   hasPermission,
+  resolveExtensionManifestLocale,
   type AgentRun,
   type AgentRunEvent,
   type ExtensionContributions,
@@ -388,8 +390,12 @@ async function workbenchSnapshot(
   platform: ExtensionPlatformRuntime,
   request: Request
 ): Promise<JsonResponse> {
-  const query = parseQuery(request, z.strictObject({ workspace_root: WorkspaceRootSchema.optional() }), {
-    workspace_root: 'workspace_root'
+  const query = parseQuery(request, z.strictObject({
+    workspace_root: WorkspaceRootSchema.optional(),
+    locale: ManifestLocaleTagSchema.optional()
+  }), {
+    workspace_root: 'workspace_root',
+    locale: 'locale'
   })
   if (!query.ok) return query.response
   const workspaceRoot = query.data.workspace_root === undefined
@@ -408,16 +414,24 @@ async function workbenchSnapshot(
         compatibility.kunEngine.compatible &&
         compatibility.rpc.compatible &&
         compatibility.diagnostics.every((diagnostic) => diagnostic.compatible)
-      const contributes = sanitizeWorkbenchContributions(
+      const localizedManifest = resolveExtensionManifestLocale(
         resolved.selected.manifest,
+        query.data.locale
+      )
+      const contributes = sanitizeWorkbenchContributions(
+        localizedManifest,
         resolved.grantedPermissions
       )
+      const rightRailDiscovery = resolved.workspaceTrusted
+        ? { views: [], containers: [] }
+        : projectRightRailDiscovery(localizedManifest)
       const hasContribution = WORKBENCH_CONTRIBUTION_KEYS.some((key) => contributes[key].length > 0)
-      if (!hasContribution) return []
+      if (!hasContribution && rightRailDiscovery.views.length === 0) return []
       return [{
         id: entry.id,
         version: resolved.selected.manifest.version,
         contributes,
+        rightRailDiscovery,
         grantedPermissions: [...resolved.grantedPermissions],
         enabled: true,
         compatible,
@@ -1549,7 +1563,14 @@ async function postViewMessage(
       target.activationEvent,
       viewActivationOptions(platform, target)
     )
-    if (host) await platform.manager.notify(target.extensionId, 'ui.message', body.data as JsonValue)
+    if (host) {
+      await platform.manager.notify(
+        target.extensionId,
+        'ui.message',
+        body.data as JsonValue,
+        viewActivationOptions(platform, target)
+      )
+    }
     return jsonResponse({ schemaVersion: 1, accepted: true, delivered: Boolean(host) }, 202)
   } finally {
     release()
@@ -1642,7 +1663,14 @@ async function deliverViewMessageToHost(
     target.activationEvent,
     viewActivationOptions(platform, target)
   )
-  if (host) await platform.manager.notify(target.extensionId, 'ui.message', message as JsonValue)
+  if (host) {
+    await platform.manager.notify(
+      target.extensionId,
+      'ui.message',
+      message as JsonValue,
+      viewActivationOptions(platform, target)
+    )
+  }
   return Boolean(host)
 }
 
@@ -2113,6 +2141,49 @@ function sanitizeWorkbenchContributions(
       : []
   }
   return ExtensionContributionsSchema.parse(result)
+}
+
+/**
+ * Projects inert, Host-rendered rail metadata for an untrusted workspace.
+ * Entry paths and resource roots deliberately stay on the trusted runtime
+ * side so this projection can never be mistaken for an executable View.
+ */
+function projectRightRailDiscovery(manifest: ExtensionManifest): {
+  views: Array<{
+    id: string
+    title: string
+    icon?: string
+    container?: string
+    when?: string
+    order: number
+  }>
+  containers: Array<{
+    id: string
+    title: string
+    icon?: string
+    location: 'rightSidebar'
+    order: number
+  }>
+} {
+  return {
+    views: manifest.contributes['views.rightSidebar'].map((view) => ({
+      id: view.id,
+      title: view.title,
+      ...(view.icon ? { icon: view.icon } : {}),
+      ...(view.container ? { container: view.container } : {}),
+      ...(view.when ? { when: view.when } : {}),
+      order: view.order
+    })),
+    containers: manifest.contributes['views.containers']
+      .filter((container) => container.location === 'rightSidebar')
+      .map((container) => ({
+        id: container.id,
+        title: container.title,
+        ...(container.icon ? { icon: container.icon } : {}),
+        location: 'rightSidebar' as const,
+        order: container.order
+      }))
+  }
 }
 
 function hasContributionPermission(

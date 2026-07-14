@@ -263,7 +263,8 @@ export class ExtensionRegistry {
   async setWorkspacePermissionGrant(
     extensionId: string,
     workspaceKey: string,
-    permissions: string[] | undefined
+    permissions: string[] | undefined,
+    expectedVersion: string
   ): Promise<ExtensionRegistryEntry> {
     if (!/^[a-f0-9]{64}$/.test(workspaceKey)) {
       throw extensionError('EXTENSION_WORKSPACE_KEY_INVALID', 'Workspace key is invalid', {
@@ -273,10 +274,22 @@ export class ExtensionRegistry {
     let result: ExtensionRegistryEntry | undefined
     await this.mutate((registry) => {
       const entry = requireEntry(registry, extensionId)
+      const selected = resolveRegistrySelection(entry)
+      if (selected.manifest.version !== expectedVersion) {
+        throw extensionError(
+          'EXTENSION_VERSION_CONFLICT',
+          'Extension version changed; repeat the permission review',
+          {
+            extensionId,
+            expectedVersion,
+            currentVersion: selected.manifest.version
+          }
+        )
+      }
       if (permissions === undefined) {
         delete entry.workspacePermissionGrants[workspaceKey]
       } else {
-        const allowed = new Set(resolveRegistrySelection(entry).grantedPermissions)
+        const allowed = new Set(selected.grantedPermissions)
         const grant = [...new Set(permissions)].sort()
         if (grant.some((permission) => !allowed.has(permission))) {
           throw extensionError(

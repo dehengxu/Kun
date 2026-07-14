@@ -16,6 +16,30 @@ type WebviewElement = HTMLElement & {
 const MAX_INITIAL_VIEW_MESSAGES = 8
 const MAX_INITIAL_VIEW_MESSAGE_BYTES = 64 * 1024
 
+export function extensionViewSessionContractKey(
+  contribution: RegisteredContribution<
+    | 'views.leftSidebar'
+    | 'views.rightSidebar'
+    | 'views.auxiliaryPanel'
+    | 'views.editorTab'
+    | 'views.fullPage'
+    | 'message.resultPreviews'
+  >
+): string {
+  const owner = contribution.owner
+  return JSON.stringify([
+    contribution.id,
+    contribution.point,
+    owner.kind,
+    owner.kind === 'extension' ? owner.extensionId : '',
+    owner.kind === 'extension' ? owner.extensionVersion : '',
+    owner.kind === 'extension' ? owner.source ?? null : null,
+    owner.kind === 'extension' ? [...owner.grantedPermissions].sort() : [],
+    contribution.payload.entry,
+    [...contribution.payload.localResourceRoots].sort()
+  ])
+}
+
 export function validateExtensionViewSession(
   session: ExtensionViewSession,
   contribution: RegisteredContribution<
@@ -69,6 +93,11 @@ export function ExtensionWebview({
   const [failure, setFailure] = useState<string | null>(null)
   const webviewRef = useRef<WebviewElement | null>(null)
   const originFocusRef = useRef<HTMLElement | null>(null)
+  const contributionRef = useRef(contribution)
+  contributionRef.current = contribution
+  const contributionId = contribution.id
+  const sessionContractKey = extensionViewSessionContractKey(contribution)
+  const normalizedWorkspaceRoot = workspaceRoot?.trim() || undefined
   const initialMessagesJson = JSON.stringify(initialMessages)
   const boundedInitialMessages = useMemo(() => {
     let retainedBytes = 0
@@ -91,13 +120,13 @@ export function ExtensionWebview({
     setSession(null)
     setFailure(null)
     void extensionWorkbenchClient
-      .createViewSession(contribution.id, workspaceRoot)
+      .createViewSession(contributionId, normalizedWorkspaceRoot)
       .then((next) => {
         if (disposed) {
           void extensionWorkbenchClient.disposeViewSession(next.sessionId)
           return
         }
-        const invalid = validateExtensionViewSession(next, contribution)
+        const invalid = validateExtensionViewSession(next, contributionRef.current)
         if (invalid) {
           setFailure(invalid)
           void extensionWorkbenchClient.disposeViewSession(next.sessionId)
@@ -116,7 +145,7 @@ export function ExtensionWebview({
       const focusTarget = originFocusRef.current
       if (focusTarget?.isConnected) window.requestAnimationFrame(() => focusTarget.focus())
     }
-  }, [attempt, contribution, workspaceRoot])
+  }, [attempt, contributionId, normalizedWorkspaceRoot, sessionContractKey])
 
   useEffect(() => {
     const webview = webviewRef.current

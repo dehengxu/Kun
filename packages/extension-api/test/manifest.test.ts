@@ -10,7 +10,8 @@ import {
   SUPPORTED_EXTENSION_API_VERSIONS,
   negotiateApiVersion,
   parseExtensionManifest,
-  permissionMatches
+  permissionMatches,
+  resolveExtensionManifestLocale
 } from '../src/index.js'
 
 const manifest = {
@@ -37,6 +38,90 @@ describe('ExtensionManifestSchema', () => {
     expect(parsed.publisher).toBe('acme')
     expect(parsed.contributes['views.rightSidebar'][0].order).toBe(0)
     expect(parsed.contributes.tools[0].sideEffects).toBe('none')
+    expect(parsed.localizations).toBeUndefined()
+  })
+
+  it('resolves exact and language locale overlays without mutating executable manifest data', () => {
+    const parsed = parseExtensionManifest({
+      ...manifest,
+      displayName: 'Issue Assistant',
+      description: 'Base description',
+      localizations: {
+        zh: {
+          displayName: '问题助手',
+          contributes: {
+            'views.rightSidebar': { issues: { title: '问题' } },
+            tools: { 'create-issue': { description: '创建问题' } }
+          }
+        },
+        'zh-CN': {
+          displayName: '问题助手（简体）',
+          contributes: {
+            'views.rightSidebar': { issues: { title: '问题面板' } }
+          }
+        }
+      }
+    })
+
+    const exact = resolveExtensionManifestLocale(parsed, 'zh-CN')
+    expect(exact.displayName).toBe('问题助手（简体）')
+    expect(exact.description).toBe('Base description')
+    expect(exact.contributes['views.rightSidebar'][0].title).toBe('问题面板')
+    expect(exact.contributes.tools[0].description).toBe('Create an issue')
+
+    const languageFallback = resolveExtensionManifestLocale(parsed, 'zh-HK')
+    expect(languageFallback.displayName).toBe('问题助手')
+    expect(languageFallback.contributes['views.rightSidebar'][0].title).toBe('问题')
+    expect(languageFallback.contributes.tools[0].description).toBe('创建问题')
+
+    expect(resolveExtensionManifestLocale(parsed, 'fr-FR')).toBe(parsed)
+    expect(parsed.displayName).toBe('Issue Assistant')
+    expect(parsed.contributes['views.rightSidebar'][0].title).toBe('Issues')
+    expect(exact.main).toBe(parsed.main)
+    expect(exact.activationEvents).toEqual(parsed.activationEvents)
+    expect(exact.permissions).toEqual(parsed.permissions)
+  })
+
+  it('rejects invalid, duplicate, unbounded, or dangling locale overlays', () => {
+    expect(ExtensionManifestSchema.safeParse({
+      ...manifest,
+      localizations: { 'zh_CN': { displayName: '问题助手' } }
+    }).success).toBe(false)
+    expect(ExtensionManifestSchema.safeParse({
+      ...manifest,
+      localizations: {
+        'zh-CN': { displayName: '问题助手' },
+        'ZH-cn': { displayName: '重复' }
+      }
+    }).success).toBe(false)
+    expect(ExtensionManifestSchema.safeParse({
+      ...manifest,
+      localizations: {
+        'zh-CN': {
+          contributes: {
+            'views.rightSidebar': { missing: { title: '不存在' } }
+          }
+        }
+      }
+    }).success).toBe(false)
+    expect(ExtensionManifestSchema.safeParse({
+      ...manifest,
+      localizations: {
+        'zh-CN': {
+          contributes: {
+            'views.rightSidebar': {
+              issues: { title: '问题', entry: 'dist/other.html' }
+            }
+          }
+        }
+      }
+    }).success).toBe(false)
+    expect(ExtensionManifestSchema.safeParse({
+      ...manifest,
+      localizations: Object.fromEntries(
+        Array.from({ length: 33 }, (_, index) => [`aa-${index}`, { displayName: `Locale ${index}` }])
+      )
+    }).success).toBe(false)
   })
 
   it('requires an entrypoint and rejects unrecognized contribution keys', () => {

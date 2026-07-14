@@ -52,11 +52,24 @@ import {
 } from '../extensions/contribution-ids'
 import {
   isExtensionContributionSnapshotReady,
+  refreshExtensionContributionSnapshot,
+  useCommittedExtensionContributionLoadContext,
+  useExtensionRightRailContainerEntries,
+  useExtensionRightRailViewEntries,
   useExtensionContributionLoadState,
   useWorkbenchContributions,
   workbenchContextForRoute
 } from '../extensions/use-contributions'
-import { extensionWorkbenchClient } from '../extensions/extension-workbench-client'
+import {
+  sameExtensionContributionLoadContext,
+  type ExtensionContributionLoadContext
+} from '../extensions/contribution-load-coordinator'
+import {
+  extensionWorkbenchClient,
+  ExtensionWorkbenchClientError,
+  type ExtensionManagementEntry,
+  type ExtensionManagementVersion
+} from '../extensions/extension-workbench-client'
 import { resolveActiveExtensionWorkspaceRoot } from '../extensions/active-extension-workspace'
 import {
   canOpenHostContextMenuForTarget,
@@ -64,16 +77,18 @@ import {
   ExtensionViewOutlet
 } from '../extensions/ControlledContributionSurfaces'
 import {
-  firstViewForContainer,
+  firstRightRailEntryForContainer,
   isExtensionWorkbenchView,
   readStoredExtensionSurfaceId,
   resolveCommandOpenView,
   type ExtensionRightContainerTarget,
   type ExtensionWorkbenchView,
-  type ExtensionWorkbenchViewGroups,
   writeStoredExtensionSurfaceId
 } from '../extensions/ExtensionWorkbenchSurfaces'
-import { workbenchContributionRegistry } from '../extensions/contribution-registry'
+import {
+  workbenchContributionRegistry,
+  type ExtensionRightRailViewEntry
+} from '../extensions/contribution-registry'
 import { getSlashQuery } from './chat/floating-composer-commands'
 
 const FILE_TREE_SIDEBAR_WIDTH = 320
@@ -83,8 +98,15 @@ const extensionSurfaceLayoutStorage = {
   removeItem: removeBrowserStorageItem
 }
 
+function selectedExtensionVersion(
+  entry: ExtensionManagementEntry
+): ExtensionManagementVersion | undefined {
+  if (entry.useDevelopment) return entry.development
+  return entry.versions.find((version) => version.version === entry.selectedVersion)
+}
+
 export function Workbench(): ReactElement {
-  const { t } = useTranslation('common')
+  const { t, i18n } = useTranslation('common')
   const {
     threads, threadSearch, showArchivedThreads, activeThreadId, activeThreadRelation,
     activeThreadParentId, selectThread, createThread, createConversation, blocks,
@@ -105,6 +127,12 @@ export function Workbench(): ReactElement {
     () => resolveActiveExtensionWorkspaceRoot(activeThreadId, threads, workspaceRoot),
     [activeThreadId, threads, workspaceRoot]
   )
+  const extensionContributionLoadContext = useMemo<ExtensionContributionLoadContext>(() => ({
+    workspaceRoot: extensionWorkspaceRoot,
+    locale: i18n.language
+  }), [extensionWorkspaceRoot, i18n.language])
+  const extensionContributionLoadContextRef =
+    useCommittedExtensionContributionLoadContext(extensionContributionLoadContext)
   const [input, setInput] = useState('')
   const [useWorktreePool, setUseWorktreePool] = useState(false)
   const [worktreeBranch, setWorktreeBranch] = useState('')
@@ -121,13 +149,9 @@ export function Workbench(): ReactElement {
   const contributionLoadState = useExtensionContributionLoadState()
   const extensionContributionSnapshotReady = isExtensionContributionSnapshotReady(
     contributionLoadState,
-    extensionWorkspaceRoot
+    extensionWorkspaceRoot,
+    i18n.language
   )
-  const extensionViewContainers = useWorkbenchContributions(
-    'views.containers',
-    contributionContext,
-    extensionContributionSnapshotReady
-  ).filter((contribution) => contribution.owner.kind === 'extension')
   const extensionLeftSidebarItems = useWorkbenchContributions(
     'views.leftSidebar',
     contributionContext,
@@ -138,6 +162,14 @@ export function Workbench(): ReactElement {
     contributionContext,
     extensionContributionSnapshotReady
   ).filter((contribution) => contribution.owner.kind === 'extension')
+  const extensionRightRailItems = useExtensionRightRailViewEntries(
+    contributionContext,
+    extensionContributionSnapshotReady
+  )
+  const extensionRightRailContainers = useExtensionRightRailContainerEntries(
+    contributionContext,
+    extensionContributionSnapshotReady
+  )
   const extensionAuxiliaryPanelItems = useWorkbenchContributions(
     'views.auxiliaryPanel',
     contributionContext,
@@ -155,23 +187,14 @@ export function Workbench(): ReactElement {
   ).filter((contribution) => contribution.owner.kind === 'extension')
   const [activeExtensionSurfaceId, setActiveExtensionSurfaceId] = useState<string | null>(() =>
     readStoredExtensionSurfaceId(extensionSurfaceLayoutStorage))
+  const extensionAuthorizationInFlightRef = useRef<{
+    extensionId: string
+    context: ExtensionContributionLoadContext
+  } | null>(null)
   const selectExtensionSurface = useCallback((contributionId: string | null): void => {
     setActiveExtensionSurfaceId(contributionId)
     writeStoredExtensionSurfaceId(extensionSurfaceLayoutStorage, contributionId)
   }, [])
-  const extensionViewGroups = useMemo<ExtensionWorkbenchViewGroups>(() => ({
-    leftSidebar: extensionLeftSidebarItems,
-    rightSidebar: extensionRightPanelItems,
-    auxiliaryPanel: extensionAuxiliaryPanelItems,
-    editorTab: extensionEditorTabItems,
-    fullPage: extensionFullPageItems
-  }), [
-    extensionAuxiliaryPanelItems,
-    extensionEditorTabItems,
-    extensionFullPageItems,
-    extensionLeftSidebarItems,
-    extensionRightPanelItems
-  ])
   const extensionSurfaceItems = useMemo<ExtensionWorkbenchView[]>(() => [
     ...extensionLeftSidebarItems,
     ...extensionRightPanelItems,
@@ -186,11 +209,10 @@ export function Workbench(): ReactElement {
     extensionRightPanelItems
   ])
   const extensionRightContainerTargets = useMemo<ExtensionRightContainerTarget[]>(() =>
-    extensionViewContainers.flatMap((container) => {
-      if (container.payload.location !== 'rightSidebar') return []
-      const target = firstViewForContainer(container, extensionViewGroups)
-      return target?.point === 'views.rightSidebar' ? [{ container, target }] : []
-    }), [extensionViewContainers, extensionViewGroups])
+    extensionRightRailContainers.flatMap((container) => {
+      const target = firstRightRailEntryForContainer(container, extensionRightRailItems)
+      return target ? [{ container, target }] : []
+    }), [extensionRightRailContainers, extensionRightRailItems])
   const extensionTopBarActions = useWorkbenchContributions(
     'actions.topBar', contributionContext, extensionContributionSnapshotReady)
   const extensionComposerActions = useWorkbenchContributions(
@@ -350,13 +372,101 @@ export function Workbench(): ReactElement {
     toggleLeftSidebar
   ])
 
+  const selectRightRailExtension = useCallback((entry: ExtensionRightRailViewEntry): void => {
+    const runnable = workbenchContributionRegistry.get(entry.id, contributionContext)
+    if (isExtensionWorkbenchView(runnable) && runnable.point === 'views.rightSidebar') {
+      if (rightPanelMode === runnable.id) setRightPanelMode(null)
+      else openExtensionSurface(runnable)
+      return
+    }
+    if (
+      entry.owner.kind !== 'extension' ||
+      entry.workspaceTrusted ||
+      !extensionWorkspaceRoot
+    ) return
+
+    const extensionId = entry.owner.extensionId
+    const loadContext = extensionContributionLoadContext
+    const currentAuthorization = extensionAuthorizationInFlightRef.current
+    if (
+      currentAuthorization &&
+      sameExtensionContributionLoadContext(currentAuthorization.context, loadContext)
+    ) return
+    const authorization = { extensionId, context: loadContext }
+    extensionAuthorizationInFlightRef.current = authorization
+    const contextIsCurrent = (): boolean => sameExtensionContributionLoadContext(
+      loadContext,
+      extensionContributionLoadContextRef.current
+    )
+    void (async () => {
+      try {
+        const extensions = await extensionWorkbenchClient.listExtensions(
+          loadContext.workspaceRoot,
+          loadContext.locale
+        )
+        if (!contextIsCurrent()) return
+        const extension = extensions.find((candidate) =>
+          candidate.id === extensionId)
+        const selected = extension ? selectedExtensionVersion(extension) : undefined
+        if (!selected) throw new Error(t('extensionRailVersionUnavailable'))
+        await extensionWorkbenchClient.setPermissions(
+          extensionId,
+          selected.version,
+          selected.grantedPermissions,
+          loadContext.workspaceRoot
+        )
+        if (!contextIsCurrent()) return
+        const outcome = await refreshExtensionContributionSnapshot(
+          loadContext.workspaceRoot,
+          loadContext.locale
+        )
+        if (outcome !== 'applied' || !contextIsCurrent()) return
+        const authorized = workbenchContributionRegistry.get(entry.id, contributionContext)
+        if (!isExtensionWorkbenchView(authorized) || authorized.point !== 'views.rightSidebar') {
+          throw new Error(t('extensionRailRequiredPermissionsMissing'))
+        }
+        openExtensionSurface(authorized)
+      } catch (error) {
+        if (!contextIsCurrent()) return
+        if (
+          error instanceof ExtensionWorkbenchClientError &&
+          error.code === 'EXTENSION_CONSENT_DENIED'
+        ) return
+        const detail = error instanceof Error ? error.message : String(error)
+        setError(t('extensionRailAuthorizationFailed', { detail }))
+      } finally {
+        if (extensionAuthorizationInFlightRef.current === authorization) {
+          extensionAuthorizationInFlightRef.current = null
+        }
+      }
+    })()
+  }, [
+    contributionContext,
+    extensionContributionLoadContext,
+    extensionContributionLoadContextRef,
+    extensionWorkspaceRoot,
+    openExtensionSurface,
+    rightPanelMode,
+    setError,
+    setRightPanelMode,
+    t
+  ])
+
   const openManagedExtensionView = useCallback(async (contributionId: string): Promise<void> => {
     let contribution = workbenchContributionRegistry.get(contributionId, contributionContext)
     if (!isExtensionWorkbenchView(contribution)) {
-      const snapshot = await extensionWorkbenchClient.loadContributions(
-        extensionWorkspaceRoot || undefined
+      const loadContext = extensionContributionLoadContext
+      const outcome = await refreshExtensionContributionSnapshot(
+        loadContext.workspaceRoot,
+        loadContext.locale
       )
-      workbenchContributionRegistry.replaceExtensions(snapshot)
+      if (
+        outcome !== 'applied' ||
+        !sameExtensionContributionLoadContext(
+          loadContext,
+          extensionContributionLoadContextRef.current
+        )
+      ) return
       contribution = workbenchContributionRegistry.get(contributionId, contributionContext)
     }
     if (!isExtensionWorkbenchView(contribution)) {
@@ -369,7 +479,13 @@ export function Workbench(): ReactElement {
         : t('extensionViewOpenFailed'))
     }
     openExtensionSurface(contribution)
-  }, [contributionContext, extensionWorkspaceRoot, openExtensionSurface, t])
+  }, [
+    contributionContext,
+    extensionContributionLoadContext,
+    extensionContributionLoadContextRef,
+    openExtensionSurface,
+    t
+  ])
 
   useEffect(() => {
     setActiveExtensionSurfaceId(readStoredExtensionSurfaceId(extensionSurfaceLayoutStorage))
@@ -1012,8 +1128,9 @@ export function Workbench(): ReactElement {
             onToggleRightPanelMode: toggleRightPanelMode,
             planPanelEnabled: Boolean(activeGuiPlan),
             onToggleFileTree: toggleFileTreeSidePanel,
-            extensionItems: extensionRightPanelItems,
-            extensionContainers: extensionRightContainerTargets
+            extensionItems: extensionRightRailItems,
+            extensionContainers: extensionRightContainerTargets,
+            onSelectExtension: selectRightRailExtension
           }
         }}
         imageAnnotationHost={imageAnnotationHost}

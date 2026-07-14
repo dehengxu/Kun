@@ -4,6 +4,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
 import { AtomicJsonFile } from '../extensions/atomic-json.js'
+import { extensionWorkspaceKey } from '../extensions/paths.js'
 import type { ExtensionPrincipal } from './extension-agent-service.js'
 
 const MediaHandleModeSchema = z.enum(['read', 'write'])
@@ -661,6 +662,35 @@ export class ExtensionMediaHandleService {
       const revokedAt = this.now().toISOString()
       const handles = Object.fromEntries(Object.entries(document.handles).map(([id, record]) => {
         if (record.ownerExtensionId !== extensionId || record.revokedAt) return [id, record]
+        count += 1
+        return [id, { ...record, revokedAt }]
+      }))
+      return count === 0 ? document : { ...document, revision: document.revision + 1, handles }
+    })
+    return count
+  }
+
+  /** Revoke handles owned by one extension in one workspace, leaving peers intact. */
+  async revokeExtensionWorkspace(
+    extensionId: string,
+    workspaceId: string,
+    workspaceRoot?: string
+  ): Promise<number> {
+    const canonicalWorkspace = workspaceRoot === undefined
+      ? undefined
+      : await canonicalExistingDirectory(workspaceRoot)
+    let count = 0
+    await this.store.update(emptyDocument, (document) => {
+      const revokedAt = this.now().toISOString()
+      const handles = Object.fromEntries(Object.entries(document.handles).map(([id, record]) => {
+        if (
+          record.ownerExtensionId !== extensionId ||
+          (
+            extensionWorkspaceKey(record.workspaceRoot) !== workspaceId &&
+            record.workspaceRoot !== canonicalWorkspace
+          ) ||
+          record.revokedAt
+        ) return [id, record]
         count += 1
         return [id, { ...record, revokedAt }]
       }))

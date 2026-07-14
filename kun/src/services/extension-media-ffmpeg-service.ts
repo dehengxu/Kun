@@ -328,15 +328,17 @@ export class ExtensionMediaFfmpegService {
     let preserveBackups = false
     try {
       assertNotCancelled(controller.signal)
-      const run = await this.options.processService.runFfmpegForCore(
-        principal,
-        prepared.arguments,
-        { signal: controller.signal, onProgressChunk: (chunk) => progress.push(chunk) }
-      )
-      assertNotCancelled(controller.signal)
-      progress.finish()
-      if (run.exitCode !== 0) {
-        throw new ExtensionMediaFfmpegError('process_failed', 'Media export failed')
+      if (prepared.runFfmpeg) {
+        const run = await this.options.processService.runFfmpegForCore(
+          principal,
+          prepared.arguments,
+          { signal: controller.signal, onProgressChunk: (chunk) => progress.push(chunk) }
+        )
+        assertNotCancelled(controller.signal)
+        progress.finish()
+        if (run.exitCode !== 0) {
+          throw new ExtensionMediaFfmpegError('process_failed', 'Media export failed')
+        }
       }
       assertNotCancelled(controller.signal)
       await this.writeTextOutputs(prepared.outputs)
@@ -416,7 +418,7 @@ export class ExtensionMediaFfmpegService {
     operationId: string
   ): Promise<void> {
     requirePermissions(principal)
-    const outputHandleIds = recoveryOutputHandleIds(request, this.maxOutputs)
+    const outputHandleIds = recoveryOutputHandleIds(request, this.maxInputs, this.maxOutputs)
     const pending: Array<{
       state: PendingMediaOutputTransaction
       stagingDirectory: string
@@ -455,7 +457,7 @@ export class ExtensionMediaFfmpegService {
     operationId: string
   ): Promise<void> {
     requirePermissions(principal)
-    const outputHandleIds = recoveryOutputHandleIds(request, this.maxOutputs)
+    const outputHandleIds = recoveryOutputHandleIds(request, this.maxInputs, this.maxOutputs)
     const provisionalHandleIds: string[] = []
     for (const handleId of outputHandleIds) {
       let pending: PendingMediaOutputTransaction | undefined
@@ -509,18 +511,14 @@ export class ExtensionMediaFfmpegService {
     principal: ExtensionPrincipal,
     request: ExtensionFfmpegRequest,
     operationId: string
-  ): Promise<{ arguments: string[]; outputs: PreparedOutput[] }> {
-    validateBindings(request.inputs, 'input', this.maxInputs)
-    validateBindings(request.outputs, 'output', this.maxOutputs)
+  ): Promise<{ arguments: string[]; outputs: PreparedOutput[]; runFfmpeg: boolean }> {
     const textOutputs = validateTextOutputs(request.textOutputs, this.maxOutputs)
-    if (Object.keys(request.outputs).length + textOutputs.length > this.maxOutputs) {
-      throw invalidArgument('FFmpeg output binding count is outside the allowed limit')
-    }
-    for (const output of textOutputs) {
-      if (Object.hasOwn(request.outputs, output.name)) {
-        throw invalidArgument('FFmpeg and text output binding names must be distinct')
-      }
-    }
+    const runFfmpeg = validateRequestShape(
+      request,
+      textOutputs,
+      this.maxInputs,
+      this.maxOutputs
+    )
     const inputs = new Map<string, ResolvedMediaHandle>()
     for (const [name, handleId] of Object.entries(request.inputs)) {
       const input = await this.options.handleService.resolve(principal, handleId, 'read')
@@ -572,21 +570,22 @@ export class ExtensionMediaFfmpegService {
       const outputPaths = Object.fromEntries(outputs
         .filter((output) => output.source === 'ffmpeg')
         .map((output) => [output.name, output.stagingPath]))
-      const substituted = validateAndSubstituteFfmpegArguments(
-        request.arguments,
-        inputPaths,
-        outputPaths
-      )
+      const substituted = runFfmpeg
+        ? validateAndSubstituteFfmpegArguments(request.arguments, inputPaths, outputPaths)
+        : []
       return {
-        arguments: [
-          '-nostdin',
-          '-hide_banner',
-          '-nostats',
-          '-progress', 'pipe:1',
-          '-y',
-          ...substituted
-        ],
-        outputs
+        arguments: runFfmpeg
+          ? [
+              '-nostdin',
+              '-hide_banner',
+              '-nostats',
+              '-progress', 'pipe:1',
+              '-y',
+              ...substituted
+            ]
+          : [],
+        outputs,
+        runFfmpeg
       }
     } catch (error) {
       await cleanupStaging(outputs)
@@ -863,12 +862,17 @@ function splitFilterSyntax(value: string, separators: Set<string>): string[] {
   return result
 }
 
-function validateBindings(bindings: Record<string, string>, kind: string, max: number): void {
+function validateBindings(
+  bindings: Record<string, string>,
+  kind: string,
+  max: number,
+  allowEmpty = false
+): void {
   if (!bindings || Array.isArray(bindings) || typeof bindings !== 'object') {
     throw invalidArgument(`FFmpeg ${kind} bindings are invalid`)
   }
   const entries = Object.entries(bindings)
-  if (entries.length < 1 || entries.length > max) {
+  if ((!allowEmpty && entries.length < 1) || entries.length > max) {
     throw invalidArgument(`FFmpeg ${kind} binding count is outside the allowed limit`)
   }
   for (const [name, handleId] of entries) {
@@ -876,6 +880,44 @@ function validateBindings(bindings: Record<string, string>, kind: string, max: n
       throw invalidArgument(`FFmpeg ${kind} binding is invalid`)
     }
   }
+}
+
+function validateRequestShape(
+  request: ExtensionFfmpegRequest,
+  textOutputs: ReturnType<typeof validateTextOutputs>,
+  maxInputs: number,
+  maxOutputs: number
+): boolean {
+  if (!Array.isArray(request.arguments) || request.arguments.length > 1024) {
+    throw invalidArgument('FFmpeg arguments must contain at most 1024 entries')
+  }
+  validateBindings(request.inputs, 'input', maxInputs, true)
+  validateBindings(request.outputs, 'output', maxOutputs, true)
+  const inputCount = Object.keys(request.inputs).length
+  const ffmpegOutputCount = Object.keys(request.outputs).length
+  if (ffmpegOutputCount + textOutputs.length > maxOutputs) {
+    throw invalidArgument('FFmpeg output binding count is outside the allowed limit')
+  }
+  for (const output of textOutputs) {
+    if (Object.hasOwn(request.outputs, output.name)) {
+      throw invalidArgument('FFmpeg and text output binding names must be distinct')
+    }
+  }
+
+  if (ffmpegOutputCount === 0) {
+    if (textOutputs.length === 0) {
+      throw invalidArgument('A text-only media job requires at least one text output')
+    }
+    if (inputCount !== 0 || request.arguments.length !== 0) {
+      throw invalidArgument('A text-only media job cannot declare FFmpeg inputs or arguments')
+    }
+    return false
+  }
+
+  if (inputCount === 0 || request.arguments.length === 0) {
+    throw invalidArgument('An FFmpeg media job requires input, output, and argument bindings')
+  }
+  return true
 }
 
 function validateTextOutputs(
@@ -920,18 +962,11 @@ function validateTextOutputs(
 
 function recoveryOutputHandleIds(
   request: ExtensionFfmpegRequest,
+  maxInputs: number,
   maxOutputs: number
 ): string[] {
-  validateBindings(request.outputs, 'output', maxOutputs)
   const textOutputs = validateTextOutputs(request.textOutputs, maxOutputs)
-  if (Object.keys(request.outputs).length + textOutputs.length > maxOutputs) {
-    throw invalidArgument('FFmpeg output binding count is outside the allowed limit')
-  }
-  for (const output of textOutputs) {
-    if (Object.hasOwn(request.outputs, output.name)) {
-      throw invalidArgument('FFmpeg and text output binding names must be distinct')
-    }
-  }
+  validateRequestShape(request, textOutputs, maxInputs, maxOutputs)
   const handleIds = [
     ...Object.values(request.outputs),
     ...textOutputs.map(({ handleId }) => handleId)

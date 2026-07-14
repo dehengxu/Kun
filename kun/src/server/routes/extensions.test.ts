@@ -86,13 +86,38 @@ describe('extension management routes', () => {
       id: 'acme.demo',
       workspaceTrusted: false,
       versions: [{
-        views: [{ id: 'editor', title: 'Demo editor', point: 'views.fullPage' }]
+        views: [{ id: 'editor', title: 'Demo editor', point: 'views.rightSidebar' }]
       }]
     })
+
+    const localized = await dispatch(
+      router,
+      'GET',
+      `/v1/extensions?workspace_root=${encodeURIComponent(workspace)}&locale=zh-CN`,
+      undefined,
+      true
+    )
+    expect(localized.body.extensions[0].versions[0]).toMatchObject({
+      displayName: '演示扩展',
+      description: '本地化的演示扩展。',
+      views: [{ id: 'editor', title: '演示编辑器', point: 'views.rightSidebar' }]
+    })
+    expect((await dispatch(
+      router,
+      'GET',
+      '/v1/extensions?locale=not_a_locale',
+      undefined,
+      true
+    )).status).toBe(400)
   })
 
   it('installs, scopes permissions and enablement, rolls back, diagnoses, and uninstalls', async () => {
     const runtime = await createRuntime()
+    runtime.bundledSeedResults = [{
+      extensionId: 'acme.demo',
+      version: '3.0.0',
+      outcome: 'skipped-permission-change'
+    }]
     const beforePermissionChange = vi.fn(async () => undefined)
     runtime.packageManager.setLifecycle({
       ...runtime.manager.packageLifecycle(),
@@ -129,11 +154,12 @@ describe('extension management routes', () => {
 
     const permissions = await dispatch(router, 'PUT', '/v1/extensions/acme.demo/permissions', {
       workspaceRoot: workspace,
+      expectedVersion: '1.0.0',
       permissions: []
     }, true)
     expect(permissions.status).toBe(200)
     expect(permissions.body.extension.workspacePermissionGrants[workspaceKey]).toEqual([])
-    expect(beforePermissionChange).toHaveBeenCalledWith('acme.demo', workspaceKey)
+    expect(beforePermissionChange).toHaveBeenCalledWith('acme.demo', workspaceKey, workspace)
 
     await writeExtensionSource(source, '2.0.0', ['commands.register'])
     const v2Archive = join(cleanupRoots.at(-1)!, 'demo-2.kunx')
@@ -143,6 +169,27 @@ describe('extension management routes', () => {
       path: v2Archive,
       grantedPermissions: ['commands.register']
     }, true)
+    beforePermissionChange.mockClear()
+
+    const stalePermissions = await dispatch(
+      router,
+      'PUT',
+      '/v1/extensions/acme.demo/permissions',
+      {
+        workspaceRoot: workspace,
+        expectedVersion: '1.0.0',
+        permissions: ['commands.register']
+      },
+      true
+    )
+    expect(stalePermissions.status).toBe(409)
+    expect(stalePermissions.body).toMatchObject({
+      code: 'EXTENSION_VERSION_CONFLICT',
+      details: { expectedVersion: '1.0.0', currentVersion: '2.0.0' }
+    })
+    expect((await runtime.registry.get('acme.demo'))?.workspacePermissionGrants)
+      .not.toHaveProperty(workspaceKey)
+    expect(beforePermissionChange).not.toHaveBeenCalled()
 
     const rollback = await dispatch(router, 'POST', '/v1/extensions/acme.demo/rollback', {}, true)
     expect(rollback.status).toBe(200)
@@ -185,6 +232,11 @@ describe('extension management routes', () => {
       negotiatedApiVersion: '1.0.0',
       negotiatedRpcVersion: 1,
       compatibility: { api: { compatible: true, negotiatedApiVersion: '1.0.0' } }
+    })
+    expect(diagnosticList.body.diagnostics[0].seed).toEqual({
+      extensionId: 'acme.demo',
+      version: '3.0.0',
+      outcome: 'skipped-permission-change'
     })
 
     const list = await dispatch(router, 'GET', '/v1/extensions?limit=1', undefined, true)
@@ -256,6 +308,18 @@ async function writeExtensionSource(
     publisher: 'acme',
     name: 'demo',
     displayName: 'Demo',
+    description: 'Demo extension.',
+    ...(withView ? {
+      localizations: {
+        'zh-CN': {
+          displayName: '演示扩展',
+          description: '本地化的演示扩展。',
+          contributes: {
+            'views.rightSidebar': { editor: { title: '演示编辑器' } }
+          }
+        }
+      }
+    } : {}),
     version,
     manifestVersion: 1,
     apiVersion: '1.0.0',
@@ -264,7 +328,7 @@ async function writeExtensionSource(
     activationEvents: withView ? ['onView:editor'] : ['onStartup'],
     contributes: withView
       ? {
-          'views.fullPage': [{
+          'views.rightSidebar': [{
             id: 'editor',
             title: 'Demo editor',
             entry: 'dist/index.html',

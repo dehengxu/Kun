@@ -13,13 +13,15 @@ const {
 } = require('./lib/extension-native-media-smoke.cjs')
 const {
   SUCCESS_MARKER,
+  assertContent,
   assertCompletedArtifacts,
   assertH264Probe,
   assertPackagedReexecResult,
   assertReleaseArchive,
   assertSrtSidecar,
   createNpmInvocation,
-  createPackagedReexecInvocation
+  createPackagedReexecInvocation,
+  parseCaptionMode
 } = require('./smoke-packaged-video-editor-native.cjs')
 const {
   createNativeMediaSmokeInvocation
@@ -30,6 +32,13 @@ const PACKAGED_COMMAND = 'npm run smoke:packaged-video-editor-native'
 const NATIVE_BROKER_COMMAND = 'npm run smoke:extension-native-media'
 const EVIDENCE_COMMAND = 'npm run evidence:extension-native'
 const VIDEO_EDITOR_PACK_COMMAND = 'npm run pack:kun-video-editor'
+
+test('keeps burned captions strict by default and allows an explicit sidecar fallback', () => {
+  assert.equal(parseCaptionMode(undefined), 'both')
+  assert.equal(parseCaptionMode('both'), 'both')
+  assert.equal(parseCaptionMode('sidecar'), 'sidecar')
+  assert.throws(() => parseCaptionMode('none'), /must be both or sidecar/)
+})
 
 test('resolves an explicit host media executable and fails closed for missing paths', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kun-native-media-resolve-'))
@@ -151,6 +160,20 @@ test('validates post-export H.264 probe metadata', () => {
   }), /positive duration/)
 })
 
+test('compares structured tool content by value', () => {
+  assert.deepEqual(
+    assertContent({ content: { changedIds: [], state: { phase: 'ready' } } }, {
+      changedIds: [],
+      state: { phase: 'ready' }
+    }, 'structured content'),
+    { changedIds: [], state: { phase: 'ready' } }
+  )
+  assert.throws(
+    () => assertContent({ content: { changedIds: ['asset-a'] } }, { changedIds: [] }, 'mismatch'),
+    /expected content\.changedIds=\[\], got \["asset-a"\]/u
+  )
+})
+
 test('requires exactly one video and one ordered deterministic SRT artifact', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kun-native-subtitle-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
@@ -205,7 +228,7 @@ test('requires exactly one video and one ordered deterministic SRT artifact', as
 test('accepts only the exact non-empty release archive for byte-identical lifecycle smoke', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kun-native-release-archive-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const archive = join(directory, 'kun-video-editor-0.2.2.kunx')
+  const archive = join(directory, 'kun-video-editor-0.3.0.kunx')
   await writeFile(archive, 'release archive bytes')
   assert.doesNotThrow(() => assertReleaseArchive(archive))
   const wrong = join(directory, 'kun-video-editor-9.9.9.kunx')
@@ -227,16 +250,22 @@ test('source smoke covers the real packaged video editor lifecycle and media out
     "kind: 'proof-frame'",
     "kind: 'h264-mp4'",
     "'video-update-timeline'",
-    "captionMode: 'both'",
+    "captionMode = 'both'",
+    "captionMode: paths.captionMode",
+    "captionModeArgument('--caption-mode', 'both')",
     'subtitleOutputHandleId',
     "subtitleFormat: 'srt'",
     'application/x-subrip',
     'assertSrtSidecar',
-    "action: 'cancel'",
+    "'video-render-cancel'",
+    "approvalCount('video-render-status')",
+    "approvalCount('video-render-cancel')",
     'assertH264Probe',
     'generatedArtifacts',
     'artifacts.listOwned',
-    'ffprobe is not available on this host',
+    'smoke.workspaceKey',
+    "code: 'FFPROBE_UNAVAILABLE'",
+    'ffprobe is unavailable',
     'assertSourcePreserved',
     'source preservation',
     "argumentValue('--archive')",
@@ -245,6 +274,11 @@ test('source smoke covers the real packaged video editor lifecycle and media out
     'smoke archive changed during lifecycle validation',
     'ELECTRON_RUN_AS_NODE'
   ]) assert.ok(source.includes(marker), `packaged video smoke omits source marker: ${marker}`)
+  assert.match(
+    source,
+    /setWorkspacePermissionGrant\([\s\S]*?\[\.\.\.active\.grantedPermissions\],[\s\S]*?active\.manifest\.version[\s\S]*?\)/u,
+    'packaged video smoke must bind its workspace permission grant to the reviewed extension version'
+  )
   assert.doesNotMatch(source, /https?:\/\/(?!invalid\.example)/u)
 })
 
@@ -290,7 +324,7 @@ test('PR, release, and daily jobs run both native media smokes before evidence',
         assert.ok(packIndex < packagedIndex, `${label}/${jobId} smokes before packing release .kunx`)
         assert.match(
           commands[packagedIndex],
-          /--archive dist\/kun-video-editor-0\.2\.2\.kunx/u,
+          /--archive dist\/kun-video-editor-0\.3\.0\.kunx/u,
           `${label}/${jobId} does not smoke the uploaded release .kunx bytes`
         )
       }

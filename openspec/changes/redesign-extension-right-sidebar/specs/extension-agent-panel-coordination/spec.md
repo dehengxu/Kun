@@ -28,3 +28,28 @@ The extension SHALL publish bounded, attributable workspace events after success
 #### Scenario: Main Agent completes a timeline edit
 - **WHEN** an Agent tool commits a new revision for the project currently displayed by the panel
 - **THEN** the panel SHALL receive a bounded project-change event and reload that revision without reading conversation content
+
+### Requirement: Agent tools are isolated by workspace ownership
+Workspace-scoped extension Hosts and their registered Agent tools SHALL be discoverable and invokable only from the workspace that activated them. A failed or pending activation in another workspace MUST NOT reuse registrations or storage from the first workspace.
+
+#### Scenario: A second workspace activates the same extension
+- **WHEN** workspace B discovers or invokes the video tools after workspace A activated them
+- **THEN** Kun SHALL activate an independently scoped Host for B or fail closed, and SHALL never return or mutate workspace A's project data
+
+#### Scenario: Tool catalog is built after workspace activation fails
+- **WHEN** a workspace-scoped Host cannot activate for the calling workspace
+- **THEN** stale tool registrations from another workspace SHALL be absent from that Agent's catalog and rejected at invocation
+
+### Requirement: View events are isolated by workspace ownership
+Extension View events SHALL be routed by both extension identity and admitted workspace scope. A session SHALL receive only events published by its own scoped Host.
+
+#### Scenario: Two workspaces have an open video panel
+- **WHEN** the Host in workspace A publishes a project or active-project change
+- **THEN** only workspace A View Sessions SHALL receive it and workspace B SHALL remain unchanged
+
+### Requirement: Read-only Agent polling does not require destructive approval
+Read-only render status lookup SHALL be a separate non-side-effecting tool operation from render cancellation. Cancellation SHALL retain explicit side-effect metadata and approval behavior.
+
+#### Scenario: Agent polls a running export
+- **WHEN** the Agent reads render status repeatedly
+- **THEN** Kun SHALL execute the reads without requesting destructive approval, while a cancellation request SHALL still use the side-effecting tool

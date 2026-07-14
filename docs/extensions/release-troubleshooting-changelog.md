@@ -196,9 +196,9 @@ Changelog 记录公开 Extension API，而不是 Kun 内部重构。每项包含
 下面的 public surface 快照由文档门禁从 package 入口、公开 export 和可达 `.d.ts` 计算。只有在本节已经解释兼容性影响后才更新快照；不能把更新 hash 当成 Changelog 条目。
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.1.0 sha256:cdc0bd632da1bbcc647eee6d35153117384cc383a57836882d52240170044a4b -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.1.0 sha256:23d962fa42a44e9c1a14be639158b794cf659c3875a1c502dea272ada2f870a7 -->
 <!-- sdk-surface-snapshot @kun/extension-react@1.1.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
-<!-- sdk-surface-snapshot @kun/extension-test@1.1.0 sha256:33b2b05b8f258d9f56d4cba2b74ce080a498e2aa0880ae4402a09c79668985a3 -->
+<!-- sdk-surface-snapshot @kun/extension-test@1.1.0 sha256:c7937552f87d719626aa28df9f5e72bec325209636625fb1b78680aeec489ea5 -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
 
 ### v1.1.0 — Brokered media、durable job 与 generated artifact
@@ -207,12 +207,14 @@ Added:
 
 - `media.read`、`media.process`、`media.export` 和 `jobs.manage` 最小权限。
 - `MediaApi` 的受保护 picker、不透明 handle/stat、normalized probe、短期 View resource lease、release 和 brokered FFmpeg job 契约。
-- Brokered FFmpeg job 新增可选、有界的 `textOutputs`，用于 Host 授权的 UTF-8、SRT 与 WebVTT sidecar，并与媒体输出共同原子提交或回滚；既有调用无需迁移。
+- `MediaApi.readText()` 以不透明 handle 读取最多 512 KiB 的 Host 授权 UTF-8 文本；`MediaApi.getCapabilities()` 返回 FFmpeg、ffprobe、libx264、AAC 与可选字幕 filter 的有界能力快照，扩展可在 picker/job 前给出可执行的 fallback。
+- Brokered FFmpeg job 新增可选、有界的 `textOutputs`，用于 Host 授权的 UTF-8、SRT 与 WebVTT sidecar，并与媒体输出共同原子提交或回滚；没有 FFmpeg input/output/argument 时也可执行纯文本 durable job，因此 standalone subtitle export 不依赖 FFmpeg。既有调用无需迁移。
 - `JobsApi` 的自有 job get/list/cursor subscription/cancel 契约、bounded progress/event/result、显式 interrupted state；不提供通用 `jobs.start` 或扩展 worker 注册。
 - Tool 和 terminal job result 顶层 `generatedArtifacts`，以及不携带本地路径的 artifact/media-handle result-preview reference。
 - `media.performArtifactAction()`：由已认证交互式 View 发起，对可用 generated artifact 执行 open/reveal；既有 media 调用无需迁移。
-- `@kun/extension-test` 中确定性的 fake media/jobs、权限失败、restart/cancellation control、executable-unavailable 行为和 artifact fixture。
+- `@kun/extension-test` 中确定性的 fake media/jobs、可配置 media capability、纯文本 job、权限失败、restart/cancellation control、executable-unavailable 行为和 artifact fixture。
 - 公开且 fail-closed 的 View-safe method catalog，用于 Host boundary drift 检查。
+- 可选、有界的 Manifest `localizations` 覆盖和 `resolveExtensionManifestLocale()`，用于 Host 渲染的扩展 metadata 与声明式显示字段。既有 Manifest 仍有效，基础文案始终作为 fallback；覆盖不能改变身份、权限、激活事件、可执行路径、Schema 或 Agent instructions。
 
 Changed:
 

@@ -1,6 +1,7 @@
 import {
   HostContentScriptDiagnosticSchema,
   JsonValueSchema,
+  ManifestLocaleTagSchema,
   PermissionSchema
 } from '@kun/extension-api'
 import { z } from 'zod'
@@ -49,13 +50,17 @@ export const extensionListRequestSchema = z
   .object({
     limit: z.number().int().min(1).max(500).optional(),
     cursor: extensionIdSchema.optional(),
-    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH)
+    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    locale: ManifestLocaleTagSchema.optional()
   })
   .strict()
   .optional()
 
 export const extensionWorkspaceRequestSchema = z
-  .object({ workspaceRoot: absoluteWorkspaceRootSchema.optional() })
+  .object({
+    workspaceRoot: absoluteWorkspaceRootSchema.optional(),
+    locale: ManifestLocaleTagSchema.optional()
+  })
   .strict()
   .optional()
 
@@ -154,7 +159,7 @@ export const extensionUninstallRequestSchema = z
 export const extensionReloadRequestSchema = extensionRollbackRequestSchema
 
 export const extensionPermissionGrantRequestSchema = extensionScopedRequestSchema.extend({
-  extensionVersion: extensionVersionSchema,
+  expectedVersion: extensionVersionSchema,
   permissions: extensionPermissionListSchema.nullable(),
   consentRequestId: extensionConsentRequestIdSchema.optional()
 }).strict()

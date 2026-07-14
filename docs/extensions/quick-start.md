@@ -25,6 +25,21 @@ node --version
 
 ## 2. 创建项目
 
+下面是独立项目的公网 registry 路径。先检查脚手架和模板依赖是否真的已发布：
+
+```bash
+npm view create-kun-extension version
+npm view @kun/extension-api version
+npm view @kun/extension-react version
+npm view @kun/extension-test version
+```
+
+只有当前模板所需的命令都返回版本时才继续。`E404` 表示配置的 registry
+还没有独立开发所需的产物，此时请使用仓库内的
+[扩展示例](../../examples/extensions/README.md)，不要把仓库相对 `file:` 路径写进
+需要移植的项目。`kun` CLI 来自 Kun 安装；npm 上无 scope 的同名 `kun` 包不是
+Kun Agent CLI。
+
 ```bash
 npx create-kun-extension hello-sidebar \
   --template react \

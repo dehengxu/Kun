@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
+import { resolve } from 'node:path'
 import type { WebContents, WebFrameMain } from 'electron'
 import { parseKunExtensionUrl } from './extension-resource-protocol'
 
@@ -292,6 +293,18 @@ export class ExtensionViewSessionRegistry {
   disposeForExtension(extensionId: string): number {
     const sessionIds = [...this.records.values()]
       .filter((record) => record.extensionId === extensionId)
+      .map((record) => record.sessionId)
+    for (const sessionId of sessionIds) this.dispose(sessionId)
+    return sessionIds.length
+  }
+
+  disposeForExtensionWorkspace(extensionId: string, workspaceRoot: string): number {
+    const canonicalWorkspace = resolve(workspaceRoot)
+    const sessionIds = [...this.records.values()]
+      .filter((record) =>
+        record.extensionId === extensionId &&
+        record.workspaceRoot !== undefined &&
+        resolve(record.workspaceRoot) === canonicalWorkspace)
       .map((record) => record.sessionId)
     for (const sessionId of sessionIds) this.dispose(sessionId)
     return sessionIds.length

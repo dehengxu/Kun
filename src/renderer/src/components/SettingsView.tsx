@@ -148,7 +148,7 @@ type InlineNotice = {
   message: string
 }
 export function SettingsView(): ReactElement {
-  const { t } = useTranslation('settings')
+  const { t, i18n } = useTranslation('settings')
   const { t: tCommon } = useTranslation('common')
   const setRoute = useChatStore((s) => s.setRoute)
   const settingsReturnRoute = useChatStore((s) => s.settingsReturnRoute)
@@ -214,7 +214,8 @@ export function SettingsView(): ReactElement {
   const extensionContributionLoadState = useExtensionContributionLoadState()
   const extensionContributionSnapshotReady = isExtensionContributionSnapshotReady(
     extensionContributionLoadState,
-    extensionWorkspaceRoot
+    extensionWorkspaceRoot,
+    i18n.language
   )
   const extensionSettingsContributions = useWorkbenchContributions(
     'settings',

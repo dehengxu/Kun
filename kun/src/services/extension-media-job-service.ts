@@ -356,7 +356,8 @@ function safeProvenanceMetadata(
     metadata.pinnedRevision = Number(value.pinnedRevision)
   }
   if (value.renderKind === 'proof-frame' || value.renderKind === 'preview' ||
-    value.renderKind === 'h264-mp4' || value.renderKind === 'audio-aac') {
+    value.renderKind === 'h264-mp4' || value.renderKind === 'audio-aac' ||
+    value.renderKind === 'subtitles') {
     metadata.renderKind = value.renderKind
   }
   if (value.canvasPreset === '16:9' || value.canvasPreset === '9:16' ||

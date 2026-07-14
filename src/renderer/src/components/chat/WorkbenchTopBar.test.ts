@@ -1,5 +1,6 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { act, create as createRenderer } from 'react-test-renderer'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
 import { WorkbenchSideRail, WorkbenchTopActions } from './WorkbenchTopBar'
@@ -121,5 +122,45 @@ describe('WorkbenchSideRail', () => {
     expect(html).not.toContain(`data-tooltip="Terminal"`)
 
     expect(html.match(/ds-side-rail-button/g)?.length).toBeGreaterThanOrEqual(8)
+  })
+
+  it('routes an untrusted rail launcher to permission review without opening a panel', () => {
+    const registry = new ContributionRegistry()
+    registry.replaceExtensions(ExtensionWorkbenchSnapshotSchema.parse({
+      schemaVersion: 1,
+      revision: 1,
+      extensions: [{
+        id: 'acme.review',
+        version: '1.0.0',
+        workspaceTrusted: false,
+        grantedPermissions: [],
+        contributes: ExtensionContributionsSchema.parse({}),
+        rightRailDiscovery: {
+          views: [{ id: 'review', title: 'Review me', order: 20 }],
+          containers: []
+        }
+      }]
+    }))
+    const entry = registry.listRightRailViewEntries()[0]!
+    const onSelectExtension = vi.fn()
+    const onToggleRightPanelMode = vi.fn()
+    let renderer!: ReturnType<typeof createRenderer>
+    act(() => {
+      renderer = createRenderer(createElement(WorkbenchSideRail, {
+        rightPanelMode: null,
+        onToggleRightPanelMode,
+        extensionItems: [entry],
+        onSelectExtension
+      }))
+    })
+    const button = renderer.root.find((node) =>
+      node.type === 'button' &&
+      node.props['data-contribution-id'] === 'extension:acme.review/review')
+    expect(button.props['data-extension-trusted']).toBe('false')
+    expect(button.props['aria-label']).toBe('Review permissions to open Review me')
+    act(() => button.props.onClick())
+    expect(onSelectExtension).toHaveBeenCalledWith(entry)
+    expect(onToggleRightPanelMode).not.toHaveBeenCalled()
+    act(() => renderer.unmount())
   })
 })

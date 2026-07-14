@@ -116,7 +116,10 @@ export function buildRouter(runtime: ServerRuntime): Router {
       indexClient: runtime.extensionPlatform.indexClient,
       validation: runtime.extensionPlatform.validation,
       runtimeToken: runtime.runtimeToken,
-      insecure: runtime.insecure
+      insecure: runtime.insecure,
+      ...(runtime.extensionPlatform.bundledSeedResults
+        ? { bundledSeedResults: runtime.extensionPlatform.bundledSeedResults }
+        : {})
     })
   }
   router.add('GET', '/v1/runtime/info', async (request) => {

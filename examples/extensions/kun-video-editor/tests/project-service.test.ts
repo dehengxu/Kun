@@ -44,6 +44,19 @@ describe('ProjectService', () => {
     expect(timeline).toContain('Revision: `1`')
   })
 
+  it('isolates a damaged project while listing the remaining valid projects', async () => {
+    const root = await workspace()
+    const service = new ProjectService(root)
+    await service.createProject({ id: 'healthy', name: 'Healthy' })
+    await mkdir(join(root, '.kun-video/projects/damaged'), { recursive: true })
+    await writeFile(join(root, '.kun-video/projects/damaged/project.json'), '{broken json', 'utf8')
+
+    const listed = await service.listProjectsWithDiagnostics()
+    expect(listed.projects).toEqual([expect.objectContaining({ id: 'healthy' })])
+    expect(listed.diagnostics).toEqual([{ id: 'damaged', code: 'invalid_project' }])
+    await expect(service.loadProject('damaged')).rejects.toBeInstanceOf(SyntaxError)
+  })
+
   it('enforces optimistic revision checks without partial writes', async () => {
     const root = await workspace()
     const service = new ProjectService(root)

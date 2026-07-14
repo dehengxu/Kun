@@ -38,3 +38,50 @@ The migrated video editor SHALL continue to build, validate, test, and package o
 #### Scenario: Default bundle is rebuilt
 - **WHEN** the repository builds bundled extensions
 - **THEN** the catalog and `.kunx` archive SHALL contain the right-sidebar manifest, packaged icon, Host entry, Webview assets, and unchanged least-authority permission set under the new version
+
+### Requirement: Real media editing is executable across supported FFmpeg versions
+The video editor SHALL produce executable proof, preview, and H.264/AAC export plans for imported media. Duration arguments MUST use FFmpeg-supported values, media binding names MUST remain within the public API schema after repeated splits, crop and transform geometry MUST be valid, and an ordinary sequential timeline of at least 30 clips MUST remain within broker argument limits.
+
+#### Scenario: User exports a heavily cut interview
+- **WHEN** a supported video is split into at least 30 sequential timeline items and exported
+- **THEN** the render SHALL complete to a playable media artifact without invalid duration, binding-name, crop, or filter-graph errors
+
+#### Scenario: Optional caption rendering is unavailable
+- **WHEN** the selected FFmpeg binary lacks the filter needed for burned captions
+- **THEN** the editor SHALL report that capability before starting the render and SHALL offer a supported no-burn or sidecar workflow
+
+### Requirement: Transcript import is a complete panel workflow
+The docked editor SHALL let the user select and import SRT, WebVTT, and supported transcript JSON through the public native picker and bounded media text-read APIs. It SHALL show localized parsing and local-transcriber availability feedback and SHALL never require a user to type opaque asset identifiers or microsecond ranges manually for the normal workflow.
+
+#### Scenario: User imports subtitles from the panel
+- **WHEN** the user selects a valid SRT, VTT, or transcript JSON file
+- **THEN** the editor SHALL import its segments, release the temporary media handle, display the resulting transcript, and allow caption generation
+
+#### Scenario: Transcript input is invalid
+- **WHEN** the selected text is oversized, non-UTF-8, or cannot be parsed
+- **THEN** the editor SHALL preserve the current project and show an actionable error in Kun's current language
+
+### Requirement: Player represents the edited timeline
+The panel player SHALL map the project playhead to the correct timeline item, source asset, trimmed source time, playback speed, ordering, and cut boundary. It SHALL switch media leases as necessary and preview captions active at the current project time. A deterministic script projection SHALL be read-only unless a documented editable format is supported.
+
+#### Scenario: User previews reordered and trimmed clips
+- **WHEN** the playhead crosses between reordered clips with trims and speed changes
+- **THEN** the player SHALL load the corresponding source asset and seek to the mapped source time rather than treating project time as raw media time
+
+### Requirement: Project-scoped panel state never leaks across selections
+Selecting, creating, or receiving an Agent-selected project SHALL make that project authoritative and SHALL clear or filter media leases, scripts, jobs, artifacts, and edit state owned by the previous project. Late asynchronous responses MUST NOT overwrite a newer selection. Undo and redo controls SHALL use authoritative Host capability flags.
+
+#### Scenario: Agent changes the active project while the panel is open
+- **WHEN** an Agent tool creates or selects another active project
+- **THEN** the panel SHALL switch to that project, release stale media access, and ignore any late response for the previous project
+
+#### Scenario: One stored project is corrupt
+- **WHEN** project discovery encounters one unreadable project file
+- **THEN** healthy projects SHALL remain selectable and the corrupt entry SHALL produce an isolated diagnostic
+
+### Requirement: Result previews and artifacts are project aware
+Preview, proof, render jobs, caption sidecars, and result-preview Views SHALL use the current project, requested caption mode, and actual contribution identity. Jobs and artifacts shown in the workbench MUST be filtered or labeled by project and SHALL remain recoverable after closing and reopening the panel.
+
+#### Scenario: User requests a captioned proof
+- **WHEN** the current project uses burned captions and the required capability is available
+- **THEN** the proof frame SHALL include captions and the result-preview contribution SHALL open that artifact without rendering the entire editor workbench

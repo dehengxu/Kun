@@ -10,6 +10,7 @@ Kun currently exposes extension UI through a host-level launcher that mixes seve
 - Define a shared-workspace coordination model in which a main Kun Agent and an open extension panel use the extension's registered tools and workspace-scoped state rather than private renderer imports or cross-Webview DOM access.
 - Convert the bundled Kun Video Editor from a full-page contribution into a self-registered right-sidebar video workbench with a packaged icon, a useful docked layout, and the existing video tools as the Agent-facing control plane.
 - Update the reference documentation and tests so third-party authors can use the bundled video editor as the canonical right-sidebar extension example.
+- Close the real-media usability and isolation gaps discovered in desktop verification: workspace-owned Hosts/tools/events, executable FFmpeg plans for long edited timelines, transcript import, authoritative Agent/project synchronization, generic Host-chrome localization, and an end-to-end packaged View gate.
 
 ## Capabilities
 
@@ -27,5 +28,6 @@ None. The negotiated Extension API v1 schemas for existing non-right View locati
 
 - Renderer workbench contribution routing, right rail state, right-panel sizing, and extension View session rendering.
 - `@kun/extension-api` documentation and example guidance for UI contribution placement; no new privileged renderer bridge is introduced.
+- Public manifest localization and a bounded opaque-handle text-read method, both enforced by the existing broker and permission model.
 - The bundled `examples/extensions/kun-video-editor` manifest, Webview responsive layout, icon assets, Agent/tool coordination, packaging identity, and release fixtures.
-- Extension workbench tests, video editor component tests, public documentation, OpenSpec verification, and local `develop` migration behavior.
+- Workspace-scoped Extension Host/tool/event ownership, Extension workbench tests, executable video integration tests, real packaged View smoke, public documentation, OpenSpec verification, and local `develop` migration behavior.

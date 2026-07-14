@@ -344,6 +344,7 @@ export function registerExtensionIpcHandlers(
     )
     const query = new URLSearchParams()
     if (request?.workspaceRoot) query.set('workspace_root', request.workspaceRoot)
+    if (request?.locale) query.set('locale', request.locale)
     return options.runtimeRequest(
       `/v1/extensions/workbench${query.size ? `?${query}` : ''}`,
       'GET'
@@ -428,6 +429,7 @@ export function registerExtensionIpcHandlers(
     if (request?.limit !== undefined) query.set('limit', String(request.limit))
     if (request?.cursor) query.set('cursor', request.cursor)
     if (request?.workspaceRoot) query.set('workspace_root', request.workspaceRoot)
+    if (request?.locale) query.set('locale', request.locale)
     return options.runtimeRequest(`/v1/extensions${query.size ? `?${query}` : ''}`, 'GET')
   })
 
@@ -517,8 +519,14 @@ export function registerExtensionIpcHandlers(
       JSON.stringify(request.workspaceRoot ? { workspaceRoot: request.workspaceRoot } : {})
     )
     if (result.ok) {
-      options.viewSessions.disposeForExtension(request.extensionId)
-      await revokeContentScripts(options, event.sender, request.extensionId, 'disable')
+      disposeViewSessions(options, request.extensionId, request.workspaceRoot)
+      await revokeContentScripts(
+        options,
+        event.sender,
+        request.extensionId,
+        'disable',
+        request.workspaceRoot
+      )
     }
     return result
   })
@@ -530,29 +538,48 @@ export function registerExtensionIpcHandlers(
       extensionPermissionGrantRequestSchema,
       payload
     )
-    const { consentRequestId, extensionVersion, ...body } = request
+    const { consentRequestId, expectedVersion, ...body } = request
+    const extension = await options.descriptors.resolvePackage(
+      request.extensionId,
+      request.workspaceRoot
+    )
+    if (extension.extensionVersion !== expectedVersion) {
+      throw new Error('Extension version changed; review permissions again.')
+    }
+    const currentPermissions = [...extension.grantedPermissions].sort()
+    const nextPermissions = [...(request.permissions ?? [])].sort()
     const result = await performProtectedRuntimeOperation(options, event, {
       extensionId: request.extensionId,
-      extensionVersion,
+      extensionVersion: expectedVersion,
       operationKind: 'extension.permissions',
-      parameters: { extensionVersion, ...body },
+      parameters: { expectedVersion, ...body },
       workspaceRoot: request.workspaceRoot,
       senderId: event.sender.id
     }, consentRequestId, {
       title: 'Change extension permissions',
-      message: `Change permissions for ${request.extensionId} ${extensionVersion}?`,
-      detail: 'Permissions disclose broker access. Node code itself is not an operating-system sandbox.'
+      message: `Change permissions for ${request.extensionId} ${expectedVersion}?`,
+      detail: formatPermissionChangeReviewDetail(currentPermissions, nextPermissions)
     }, () => options.runtimeRequest(
       `/v1/extensions/${encodeURIComponent(request.extensionId)}/permissions`,
       'PUT',
-      JSON.stringify({ workspaceRoot: request.workspaceRoot, permissions: request.permissions })
+      JSON.stringify({
+        workspaceRoot: request.workspaceRoot,
+        permissions: request.permissions,
+        expectedVersion
+      })
     ))
     // Every effective permission change invalidates sender-bound principals;
     // retaining a View here could preserve revoked account/network/storage
     // grants until the next reload.
     if (result.ok) {
-      options.viewSessions.disposeForExtension(request.extensionId)
-      await revokeContentScripts(options, event.sender, request.extensionId, 'permission-change')
+      disposeViewSessions(options, request.extensionId, request.workspaceRoot)
+      await revokeContentScripts(
+        options,
+        event.sender,
+        request.extensionId,
+        'permission-change',
+        request.workspaceRoot
+      )
     }
     return result
   })
@@ -763,6 +790,21 @@ function registerViewIpcHandlers(
   const boundParentIds = new Set<number>()
   let lastTheme = ''
   let lastLocale = ''
+  const workbenchEnvironmentSync = createWorkbenchEnvironmentSyncQueue(
+    options,
+    (environment) => {
+      const theme = JSON.stringify(environment.theme)
+      const locale = JSON.stringify(environment.locale)
+      if (theme !== lastTheme) {
+        lastTheme = theme
+        options.viewSessions.broadcastToGuests('ui.themeChanged', environment.theme)
+      }
+      if (locale !== lastLocale) {
+        lastLocale = locale
+        options.viewSessions.broadcastToGuests('ui.localeChanged', environment.locale)
+      }
+    }
+  )
   const stopDisposeObserver = options.viewSessions.onDidDispose((record) => {
     options.viewProtocols.dispose(record.sessionId)
     eventPumps.get(record.sessionId)?.abort()
@@ -794,7 +836,7 @@ function registerViewIpcHandlers(
       identity.localId,
       request.workspaceRoot
     )
-    await syncWorkbenchEnvironmentToRuntime(options)
+    await workbenchEnvironmentSync.syncToRuntime()
     const result = await options.runtimeRequest(
       '/v1/extensions/view-sessions',
       'POST',
@@ -916,6 +958,7 @@ function registerViewIpcHandlers(
           viewSessions: options.viewSessions,
           getMainWindow: options.getMainWindow,
           runtimeRequest: options.runtimeRequest,
+          getWorkbenchLocale: async () => (await loadWorkbenchEnvironment(options)).locale,
           onCleanupFailure: (detail) => options.logError?.(
             'extension-media-picker',
             'Failed to confirm protected media selection rollback.',
@@ -930,6 +973,7 @@ function registerViewIpcHandlers(
           viewSessions: options.viewSessions,
           getMainWindow: options.getMainWindow,
           runtimeRequest: options.runtimeRequest,
+          getWorkbenchLocale: async () => (await loadWorkbenchEnvironment(options)).locale,
           onCleanupFailure: (detail) => options.logError?.(
             'extension-media-picker',
             'Failed to confirm protected media selection rollback.',
@@ -1111,21 +1155,11 @@ function registerViewIpcHandlers(
         options.viewSessions.disposeForParent(parentId)
       })
     },
-    async publishWorkbenchEnvironmentChanged(): Promise<void> {
-      const environment = await loadWorkbenchEnvironment(options)
-      await syncWorkbenchEnvironmentToRuntime(options, environment)
-      const theme = JSON.stringify(environment.theme)
-      const locale = JSON.stringify(environment.locale)
-      if (theme !== lastTheme) {
-        lastTheme = theme
-        options.viewSessions.broadcastToGuests('ui.themeChanged', environment.theme)
-      }
-      if (locale !== lastLocale) {
-        lastLocale = locale
-        options.viewSessions.broadcastToGuests('ui.localeChanged', environment.locale)
-      }
+    publishWorkbenchEnvironmentChanged(): Promise<void> {
+      return workbenchEnvironmentSync.publishChanged()
     },
     dispose(): void {
+      workbenchEnvironmentSync.dispose()
       const main = options.getMainWindow()
       if (main && !main.isDestroyed()) options.viewSessions.disposeForParent(main.webContents.id)
       for (const controller of eventPumps.values()) controller.abort()
@@ -1630,10 +1664,11 @@ async function revokeContentScripts(
   options: RegisterExtensionIpcHandlersOptions,
   sender: WebContents,
   extensionId: string,
-  reason: string
+  reason: string,
+  workspaceRoot?: string
 ): Promise<void> {
   try {
-    await options.contentScripts.revokeExtension(sender, extensionId, reason)
+    await options.contentScripts.revokeExtension(sender, extensionId, reason, workspaceRoot)
   } catch (error) {
     options.logError?.('extension-content-script', 'Failed to revoke Direct DOM content.', {
       extensionId,
@@ -1641,6 +1676,16 @@ async function revokeContentScripts(
       message: error instanceof Error ? error.message : String(error)
     })
   }
+}
+
+function disposeViewSessions(
+  options: RegisterExtensionIpcHandlersOptions,
+  extensionId: string,
+  workspaceRoot?: string
+): number {
+  return workspaceRoot === undefined
+    ? options.viewSessions.disposeForExtension(extensionId)
+    : options.viewSessions.disposeForExtensionWorkspace(extensionId, workspaceRoot)
 }
 
 function parsePayload<T>(
@@ -1835,6 +1880,24 @@ function contributionRiskLabels(manifest: ReturnType<typeof ExtensionManifestSch
 
 function permissionRiskLabels(permissions: readonly string[]): string[] {
   const labels = ['Runs Node code with your operating-system user privileges.']
+  if (permissions.some((permission) => permission === 'workspace.read' || permission === 'storage.workspace')) {
+    labels.push('Workspace read permission can expose files and extension state from the approved workspace.')
+  }
+  if (permissions.some((permission) => permission === 'workspace.write')) {
+    labels.push('Workspace write permission can create or modify files in the approved workspace.')
+  }
+  if (permissions.some((permission) => permission === 'media.read')) {
+    labels.push('Media read permission can inspect user-selected local media through opaque grants.')
+  }
+  if (permissions.some((permission) => permission === 'media.process' || permission === 'jobs.manage')) {
+    labels.push('Media processing and job permissions can run and manage durable local work.')
+  }
+  if (permissions.some((permission) => permission === 'media.export')) {
+    labels.push('Media export permission can write to user-approved output targets.')
+  }
+  if (permissions.some((permission) => permission === 'agent.run' || permission === 'tools.register')) {
+    labels.push('Agent and tool permissions can start private Agent runs and expose declared tools to Kun.')
+  }
   if (permissions.some((permission) => permission === 'hostDom')) {
     labels.push('Direct DOM permission can read and alter visible workbench content and may imitate ordinary UI.')
   }
@@ -1851,6 +1914,28 @@ function permissionRiskLabels(permissions: readonly string[]): string[] {
     labels.push('Shell permission can start external processes after applicable host policy and consent checks.')
   }
   return labels
+}
+
+function formatPermissionChangeReviewDetail(
+  currentPermissions: readonly string[],
+  nextPermissions: readonly string[]
+): string {
+  const current = new Set(currentPermissions)
+  const next = new Set(nextPermissions)
+  const added = [...next].filter((permission) => !current.has(permission)).sort()
+  const removed = [...current].filter((permission) => !next.has(permission)).sort()
+  const resulting = [...next].sort()
+  const list = (values: readonly string[]): string => values.length > 0
+    ? boundedReviewList(values, 40)
+    : '• none'
+  return [
+    'This permission change applies only to the selected workspace.',
+    `Added broker permissions:\n${list(added)}`,
+    `Removed broker permissions:\n${list(removed)}`,
+    `Resulting broker permissions:\n${list(resulting)}`,
+    `Host-authored risk summary:\n${boundedReviewList(permissionRiskLabels(resulting), 12)}`,
+    'Broker permissions are capability gates; the extension Node host itself is not an operating-system sandbox.'
+  ].join('\n\n').slice(0, 16_384)
 }
 
 function formatInstallReviewDetail(review: ExtensionInstallReview): string {
@@ -2072,6 +2157,7 @@ async function pumpExtensionViewEvents(
 
 const EXTENSION_VIEW_NOTIFICATION_METHODS = new Set([
   'agent.event',
+  'jobs.event',
   'modelProviders.statusChanged',
   'ui.localeChanged',
   'ui.themeChanged'
@@ -2091,16 +2177,71 @@ async function loadWorkbenchEnvironment(
   }
 }
 
+type WorkbenchEnvironmentSyncBatch = {
+  notifyGuests: boolean
+  promise: Promise<void>
+}
+
+function createWorkbenchEnvironmentSyncQueue(
+  options: RegisterExtensionIpcHandlersOptions,
+  notifyGuests: (environment: ExtensionWorkbenchEnvironment) => void
+): {
+    syncToRuntime(): Promise<void>
+    publishChanged(): Promise<void>
+    dispose(): void
+  } {
+  let disposed = false
+  let tail = Promise.resolve()
+  let pendingBatch: WorkbenchEnvironmentSyncBatch | undefined
+
+  const schedule = (shouldNotifyGuests: boolean): Promise<void> => {
+    if (disposed) return Promise.resolve()
+    if (pendingBatch) {
+      pendingBatch.notifyGuests ||= shouldNotifyGuests
+      return pendingBatch.promise
+    }
+
+    const batch: WorkbenchEnvironmentSyncBatch = {
+      notifyGuests: shouldNotifyGuests,
+      promise: Promise.resolve()
+    }
+    const run = tail.then(async () => {
+      if (pendingBatch === batch) pendingBatch = undefined
+      if (disposed) return
+
+      // Read the authoritative Host state only after every older PUT has settled.
+      // This keeps queued calls coalesced and makes the last requested state win.
+      const environment = await loadWorkbenchEnvironment(options)
+      await syncWorkbenchEnvironmentToRuntime(options, environment)
+      if (batch.notifyGuests && pendingBatch?.notifyGuests !== true && !disposed) {
+        notifyGuests(environment)
+      }
+    })
+    batch.promise = run
+    pendingBatch = batch
+    tail = run.catch(() => undefined)
+    return run
+  }
+
+  return {
+    syncToRuntime: () => schedule(false),
+    publishChanged: () => schedule(true),
+    dispose: () => {
+      disposed = true
+      pendingBatch = undefined
+    }
+  }
+}
+
 async function syncWorkbenchEnvironmentToRuntime(
   options: RegisterExtensionIpcHandlersOptions,
-  environment?: ExtensionWorkbenchEnvironment
+  environment: ExtensionWorkbenchEnvironment
 ): Promise<void> {
-  const value = environment ?? await loadWorkbenchEnvironment(options)
   try {
     const result = await options.runtimeRequest(
       '/v1/extensions/workbench/environment',
       'PUT',
-      JSON.stringify(value)
+      JSON.stringify(environment)
     )
     if (!result.ok) {
       options.logError?.('extension-workbench', 'Kun rejected the workbench environment update.', {

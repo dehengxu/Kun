@@ -50,7 +50,8 @@ import type {
   ExtensionPackageManager,
   ExtensionPaths,
   ExtensionRegistry,
-  ExtensionStateStore
+  ExtensionStateStore,
+  BundledExtensionSeedResult
 } from '../../extensions/index.js'
 import type { ExtensionHostBroker } from '../../services/extension-host-broker.js'
 import type { ExtensionAgentService } from '../../services/extension-agent-service.js'
@@ -120,6 +121,7 @@ export type ExtensionPlatformRuntime = {
   artifacts: ExtensionArtifactService
   viewSessions: ExtensionViewSessionService
   secretReveals: ExtensionSecretRevealConsentService
+  bundledSeedResults?: readonly BundledExtensionSeedResult[]
 }
 
 /**

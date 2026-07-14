@@ -24,7 +24,7 @@ The first release supports:
 - deterministic `16:9`, `9:16`, and `1:1` composition presets;
 - proof-frame, preview, H.264 MP4, AAC audio, SRT, and WebVTT render plans;
 - durable render status, cancellation, and technically validated artifacts; and
-- one private `video-editor` Agent profile with eight stable video tools.
+- one private `video-editor` Agent profile with nine stable video tools.
 
 This is intentionally not a Premiere or Resolve replacement. See
 [Limitations](#limitations) before planning a workflow.
@@ -32,7 +32,9 @@ This is intentionally not a Premiere or Resolve replacement. See
 ## Local requirements
 
 - Node.js 22 and npm (the versions used by this repository).
-- A built Kun Extension API and Kun CLI from this repository.
+- For repository commands, a built Kun Extension API and Kun CLI from this
+  checkout. For a standalone project, the CLI must come from the matching Kun
+  installation and the required `@kun` packages must exist in its npm registry.
 - `ffprobe` and `ffmpeg` on a Host-approved executable path for probing,
   thumbnails, proofs, previews, and exports. H.264 export requires `libx264`;
   burned captions additionally require the `drawtext` filter. Verify both with
@@ -67,15 +69,15 @@ given commit and manifest version. This keeps every capability demonstrated here
 available to third-party authors through documented Extension API surfaces.
 
 Each stable and daily Kun GitHub Release publishes the platform-independent
-`kun-video-editor-0.2.2.kunx` asset beside the desktop installers and the three
+`kun-video-editor-0.3.0.kunx` asset beside the desktop installers and the three
 native evidence JSON files. Download the `.kunx` from the same release as the
 Kun build you are running; do not copy an archive from an untrusted mirror.
 
 Validate and install the downloaded package with the Kun Extension CLI:
 
 ```bash
-kun extension validate ./kun-video-editor-0.2.2.kunx
-kun extension install ./kun-video-editor-0.2.2.kunx
+kun extension validate ./kun-video-editor-0.3.0.kunx
+kun extension install ./kun-video-editor-0.3.0.kunx
 ```
 
 Review and accept the declared permissions, enable the extension in a trusted
@@ -117,6 +119,25 @@ directory:
 npm run check:extension-examples
 ```
 
+The repository `validate` and `pack` commands resolve the checked-out
+`kun/dist/cli/serve-entry.js` through a helper anchored to its own file
+location. They therefore work through `npm --prefix` from any caller directory,
+but are intentionally repository-only.
+
+For a standalone extension, first verify the v1.1 packages used by this example:
+
+```bash
+kun extension --help
+npm view @kun/extension-api@1.1.0 version
+npm view @kun/extension-test@1.1.0 version
+```
+
+Only continue with a published scaffold and `npm install` when those checks
+return versions. An `E404` means the configured registry does not yet provide
+the standalone SDK artifacts; use this repository checkout instead. Do not use
+repository `file:` aliases in a portable project, and do not install the
+unrelated unscoped npm package named `kun` as the Kun Agent CLI.
+
 Generate the deterministic local audio/transcript fixture into a disposable
 directory when exercising a manual flow:
 
@@ -142,9 +163,11 @@ invoke a generative service.
 5. Import the deterministic fixture SRT/VTT/JSON or another timed transcript.
    Untimed prose is not enough for automatic destructive cuts.
 6. Edit manually, or ask the main Kun Agent to resolve `video-project` with
-   `action: "active"`, read `video-read-script`, and apply structured changes at
-   the current revision. The open panel refreshes through the extension's bounded
-   project-change event.
+   `action: "active"`, read that project with the pure `get` action, then read
+   `video-read-script` and apply structured changes at the current revision. To
+   move the shared panel context to another project, use the explicit `select`
+   action. The open panel refreshes through the extension's bounded project-change
+   event.
 7. Review the updated timeline and generate a proof frame or preview. A stale
    proof is not evidence for a newer revision.
 8. Select a protected save target and start an export. The durable job continues
@@ -154,7 +177,7 @@ invoke a generative service.
 
 ## Headless workflow
 
-The project engine and all eight Agent tools can run under `kun serve` without a
+The project engine and all nine Agent tools can run under `kun serve` without a
 Webview. Headless import, playback URL minting, or save-target selection does not
 open a dialog. A headless run must already have valid workspace-scoped media and
 output handles; otherwise the tool returns `interaction-required`.
@@ -169,7 +192,8 @@ A safe headless sequence is:
    `video-update-timeline` using that expected revision;
 6. call `video-render` with a pre-authorized media output handle and, for
    `sidecar` or `both`, a separate SRT/VTT output handle; and
-7. poll or cancel with `video-render-status`.
+7. poll without approval with read-only `video-render-status`; and
+8. cancel explicitly with destructive `video-render-cancel` when requested.
 
 Headless execution uses the same permission, revision, path, job, and artifact
 checks as desktop execution. It never fabricates picker consent.

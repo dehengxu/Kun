@@ -580,10 +580,17 @@ export class ExtensionJobService {
     )
   }
 
-  async handleExtensionHostCrash(extensionId: string): Promise<ExtensionJobLifecycleSummary> {
-    this.revokeSubscriptions((subscription) => subscription.ownerExtensionId === extensionId)
+  async handleExtensionHostCrash(
+    extensionId: string,
+    workspaceIds?: readonly string[]
+  ): Promise<ExtensionJobLifecycleSummary> {
+    const scopedWorkspaceIds = workspaceIds === undefined ? undefined : new Set(workspaceIds)
+    this.revokeSubscriptions((subscription) =>
+      subscription.ownerExtensionId === extensionId &&
+      (scopedWorkspaceIds === undefined || scopedWorkspaceIds.has(subscription.workspaceId)))
     return this.fenceOwnedJobs((snapshot) => {
       if (snapshot.ownerExtensionId !== extensionId) return false
+      if (scopedWorkspaceIds !== undefined && !scopedWorkspaceIds.has(snapshot.workspaceId)) return false
       return this.executors.get(snapshot.kind)?.connectionBound === true
     }, 'extension_host_crash')
   }

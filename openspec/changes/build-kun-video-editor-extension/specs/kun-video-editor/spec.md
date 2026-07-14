@@ -1,14 +1,14 @@
 ## ADDED Requirements
 
 ### Requirement: The video editor ships as a valid Kun extension
-The repository SHALL ship a runnable `kun-video-editor` `.kunx` package built only against documented Extension API surfaces. Its manifest MUST declare a Node `main` entry, a browser entry, one `views.fullPage` contribution for the editor, one namespaced video-editor Agent profile, every contributed video tool, the activation events for those contributions, and only the permissions required by those declared capabilities. The package SHALL NOT embed a multi-platform FFmpeg distribution.
+The repository SHALL ship a runnable `kun-video-editor` `.kunx` package built only against documented Extension API surfaces. Its manifest MUST declare a Node `main` entry, a browser entry, one `views.rightSidebar` contribution for the editor, one namespaced video-editor Agent profile, every contributed video tool, the activation events for those contributions, and only the permissions required by those declared capabilities. The package SHALL NOT embed a multi-platform FFmpeg distribution.
 
 #### Scenario: The extension package is validated
 - **WHEN** the video editor is built and passed to the Kun extension validator and packager
-- **THEN** its manifest, Node entry, browser entry, full-page contribution, Agent profile, tool declarations, permissions, and packaged resources SHALL validate and produce an installable `.kunx`
+- **THEN** its manifest, Node entry, browser entry, right-sidebar contribution, Agent profile, tool declarations, permissions, and packaged resources SHALL validate and produce an installable `.kunx`
 
 #### Scenario: The user opens the editor
-- **WHEN** the enabled extension's full-page contribution is opened in a trusted workspace
+- **WHEN** the enabled extension's right-sidebar contribution is opened from its self-registered right-rail icon in a trusted workspace
 - **THEN** Kun SHALL activate the extension, create an isolated View session, and render the video workbench without importing Kun renderer internals or exposing `window.kunGui`
 
 ### Requirement: The same standard package is Kun's local default and reference example
@@ -47,14 +47,14 @@ into Kun or register its contributions through a private built-in path.
 - **THEN** Kun SHALL fail or retain the bundle as unselected according to the documented safe-update policy and SHALL NOT broaden permissions or overwrite the user's selection
 
 ### Requirement: The workbench provides a transcript-first editing surface
-The full-page View SHALL provide a media library, video or audio player, synchronized transcript, ordered multi-track timeline, caption controls, project revision controls, preview controls, and export-job status. The first release MUST support manual editing of talking-head, interview, and podcast projects without requiring an Agent run.
+The right-sidebar View SHALL provide a media library, video or audio player, synchronized transcript, ordered multi-track timeline, caption controls, project revision controls, preview controls, Agent synchronization, and export-job status. The first release MUST support manual editing of talking-head, interview, and podcast projects without requiring an Agent run.
 
 #### Scenario: A user edits without the Agent
-- **WHEN** a user imports a supported recording and performs trim, split, delete, reorder, caption, or aspect-ratio operations in the full-page View
+- **WHEN** a user imports a supported recording and performs trim, split, delete, reorder, caption, or aspect-ratio operations in the right-sidebar View
 - **THEN** the workbench SHALL apply those operations through the project service, refresh the player, transcript, and timeline from the resulting revision, and remain usable without creating an Agent thread
 
 #### Scenario: No project is open
-- **WHEN** the full-page View opens without a selected project
+- **WHEN** the right-sidebar View opens without a selected project
 - **THEN** it SHALL present project creation and protected media-import actions and SHALL NOT fabricate a timeline or attempt to scan the workspace automatically
 
 ### Requirement: Projects use a durable explicit media-editing model
@@ -121,7 +121,7 @@ The extension SHALL generate `.kun-video/projects/<project-id>/timeline.md` dete
 - **THEN** the extension SHALL require explicit validation and application through the script operation and SHALL NOT silently overwrite `project.json` from arbitrary Markdown
 
 ### Requirement: The Agent profile exposes a bounded editing toolset
-The manifest-declared video-editor profile SHALL use Kun's single Agent runtime and SHALL limit video work to the extension tools `video-project`, `video-probe`, `video-transcribe`, `video-read-script`, `video-apply-script`, `video-update-timeline`, `video-render`, and `video-render-status`. Tool inputs MUST use bounded project, asset, revision, item, preset, render, or job identifiers and structured edit operations; they SHALL NOT accept arbitrary absolute paths, shell command text, FFmpeg argument strings, or caller-selected extension identities. Read-only tools SHALL be declared as reads, and project mutation, render start, and render cancellation operations MUST declare their actual write or destructive policy class.
+The manifest-declared video-editor profile SHALL use Kun's single Agent runtime and SHALL limit video work to the extension tools `video-project`, `video-probe`, `video-transcribe`, `video-read-script`, `video-apply-script`, `video-update-timeline`, `video-render`, `video-render-status`, and `video-render-cancel`. Tool inputs MUST use bounded project, asset, revision, item, preset, render, or job identifiers and structured edit operations; they SHALL NOT accept arbitrary absolute paths, shell command text, FFmpeg argument strings, or caller-selected extension identities. Read-only tools SHALL be declared as reads, while project mutation and render start SHALL declare write policy and render cancellation SHALL use its separate destructive tool.
 
 #### Scenario: The Agent opens an existing project
 - **WHEN** the profile calls `video-project` or `video-read-script` with a project ID in its granted workspace
@@ -139,7 +139,7 @@ The manifest-declared video-editor profile SHALL use Kun's single Agent runtime 
 The View, extension commands, and Agent tools SHALL read and mutate projects through the same revision-aware project service. Every mutation MUST provide the expected current revision and commit atomically as a new revision with `manual`, `agent`, or `system` provenance. The extension SHALL publish bounded project-change events so open Views refresh player, transcript, timeline, captions, and job affordances after either manual or Agent changes.
 
 #### Scenario: An Agent edit completes while the View is open
-- **WHEN** an Agent tool commits a new revision for the project displayed in a live full-page View
+- **WHEN** an Agent tool commits a new revision for the project displayed in a live right-sidebar View
 - **THEN** the View SHALL receive the revision event and render the authoritative new project state without requiring a reload or maintaining a divergent Webview-only timeline
 
 #### Scenario: Manual and Agent edits race
@@ -188,7 +188,7 @@ The extension SHALL support player playback through protected media resources an
 - **THEN** the operation SHALL report failure and SHALL NOT claim that the frame, captions, crop, or final composition was visually verified
 
 ### Requirement: Export uses cancellable background jobs
-`video-render` SHALL start or cancel an extension-owned background export job rather than block an Agent tool invocation or Webview request for the render duration. Starting a job MUST pin the project revision, output preset, caption mode, and destination grant and MUST return a job ID promptly. `video-render-status` and the View SHALL expose persisted state, bounded progress and diagnostics, cancellation state, and exactly one terminal outcome. Closing the View SHALL NOT by itself terminate an authorized export.
+`video-render` SHALL start an extension-owned background export job rather than block an Agent tool invocation or Webview request for the render duration. Starting a job MUST pin the project revision, output preset, caption mode, and destination grant and MUST return a job ID promptly. Read-only `video-render-status` and the View SHALL expose persisted state, bounded progress and diagnostics, cancellation state, and exactly one terminal outcome. Destructive `video-render-cancel` SHALL be the only Agent tool that requests cancellation. Closing the View SHALL NOT by itself terminate an authorized export.
 
 #### Scenario: An export starts
 - **WHEN** a valid current project revision and output preset are submitted to `video-render`
@@ -199,7 +199,7 @@ The extension SHALL support player playback through protected media resources an
 - **THEN** cancellation SHALL reach the brokered FFmpeg process tree, fence late success, remove or quarantine incomplete output, and persist one cancelled terminal outcome
 
 #### Scenario: The View closes during export
-- **WHEN** the full-page View is disposed while its export job is running
+- **WHEN** the right-sidebar View is disposed while its export job is running
 - **THEN** the job SHALL remain queryable and continue under background-job policy until completion, explicit cancellation, or another defined terminal failure
 
 ### Requirement: Completed exports become verified generated artifacts

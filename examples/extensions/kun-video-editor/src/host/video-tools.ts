@@ -6,6 +6,7 @@ import type {
   JsonObject,
   JsonValue,
   JobSnapshot,
+  MediaCapabilities,
   MediaMetadata,
   MediaProbeResult,
   ToolInvocationContext,
@@ -131,6 +132,8 @@ export class VideoEditorTools {
           return await this.videoRender(parsed, invocation)
         case 'video-render-status':
           return await this.videoRenderStatus(parsed)
+        case 'video-render-cancel':
+          return await this.videoRenderCancel(parsed)
         default:
           throw new ToolInputError(`Unknown video tool: ${toolId}`)
       }
@@ -156,6 +159,7 @@ export class VideoEditorTools {
       'project.list',
       'project.active',
       'project.get',
+      'project.select',
       'project.create',
       'project.update',
       'project.undo',
@@ -163,9 +167,12 @@ export class VideoEditorTools {
       'script.read',
       'script.apply',
       'media.import',
+      'media.reauthorize',
       'transcript.import',
+      'render.list',
       'render.start',
-      'render.status'
+      'render.status',
+      'render.cancel'
     ] as const, 'action')
     const payload = request.payload === undefined ? {} : asRecord(request.payload, 'payload')
     const invocation = this.commandInvocation(action)
@@ -175,13 +182,16 @@ export class VideoEditorTools {
         response = await this.videoProject({ ...payload, action: 'list' })
         break
       case 'project.active':
-        response = await this.videoProject({ ...payload, action: 'active' })
+        response = await this.videoProject({ ...payload, action: 'active' }, 'manual')
         break
       case 'project.get':
-        response = await this.videoProject({ ...payload, action: 'get' })
+        response = await this.videoProject({ ...payload, action: 'get' }, 'manual')
+        break
+      case 'project.select':
+        response = await this.videoProject({ ...payload, action: 'select' }, 'manual')
         break
       case 'project.create':
-        response = await this.videoProject({ ...payload, action: 'create' })
+        response = await this.videoProject({ ...payload, action: 'create' }, 'manual')
         break
       case 'project.update':
         response = await this.videoUpdateTimeline(payload, 'manual')
@@ -199,8 +209,14 @@ export class VideoEditorTools {
       case 'media.import':
         response = await this.videoProbe(payload, invocation, 'manual')
         break
+      case 'media.reauthorize':
+        response = await this.videoReauthorize(payload, invocation)
+        break
       case 'transcript.import':
         response = await this.videoTranscribe(payload, 'manual')
+        break
+      case 'render.list':
+        response = await this.videoRenderList(payload)
         break
       case 'render.start':
         response = await this.videoRender(payload, invocation)
@@ -208,22 +224,34 @@ export class VideoEditorTools {
       case 'render.status':
         response = await this.videoRenderStatus(payload)
         break
+      case 'render.cancel':
+        response = await this.videoRenderCancel(payload)
+        break
     }
     return response
   }
 
-  private async videoProject(input: ToolInput): Promise<ToolResult> {
+  private async videoProject(
+    input: ToolInput,
+    source: RevisionAuthor = 'agent'
+  ): Promise<ToolResult> {
     exactKeys(input, ['action', 'projectId', 'name', 'fps', 'canvasPreset', 'expectedRevision'])
-    const action = enumValue(input.action, ['active', 'list', 'get', 'create'] as const, 'action')
+    const action = enumValue(
+      input.action,
+      ['active', 'list', 'get', 'create', 'select'] as const,
+      'action'
+    )
     const service = this.service()
     if (action === 'active') return this.activeProject(service)
     if (action === 'list') {
-      const projects = await service.listProjects()
+      const listed = await service.listProjectsWithDiagnostics()
+      const projects = listed.projects
       const bounded = projects.slice(0, MAX_PROJECTS)
       return result({
         outcome: 'listed',
         workspaceId: this.workspaceId(),
         projects: bounded,
+        diagnostics: listed.diagnostics.slice(0, MAX_PROJECTS),
         truncated: projects.length > bounded.length
       }, `Listed ${bounded.length} video projects`)
     }
@@ -236,7 +264,7 @@ export class VideoEditorTools {
         ? undefined
         : enumValue(input.canvasPreset, ['16:9', '9:16', '1:1'] as const, 'canvasPreset')
       const project = await service.createProject({ id: projectId, name, fps, canvasPreset })
-      await this.setActiveProject(project.id)
+      await this.selectActiveProject(project, 'created', source)
       await this.publishProjectChange(project, 'project-created', ['project'])
       return result({
         outcome: 'created',
@@ -250,13 +278,15 @@ export class VideoEditorTools {
     if (input.expectedRevision !== undefined) {
       assertExpectedRevision(project, nonNegativeInteger(input.expectedRevision, 'expectedRevision'))
     }
-    await this.setActiveProject(project.id)
+    if (action === 'select') {
+      await this.selectActiveProject(project, 'selected', source)
+    }
     return result({
-      outcome: 'loaded',
+      outcome: action === 'select' ? 'selected' : 'loaded',
       workspaceId: this.workspaceId(),
       project: projectProjection(project),
       truncated: projectProjectionIsTruncated(project)
-    }, `Loaded video project ${project.id} revision ${project.currentRevision}`)
+    }, `${action === 'select' ? 'Selected' : 'Loaded'} video project ${project.id} revision ${project.currentRevision}`)
   }
 
   private async activeProject(service: ProjectService): Promise<ToolResult> {
@@ -289,13 +319,13 @@ export class VideoEditorTools {
     try {
       project = await service.loadProject(projectId)
     } catch (error) {
-      if (!(error instanceof VideoEngineError) || error.code !== 'project_not_found') throw error
       await this.context.storage.workspace.delete(ACTIVE_PROJECT_KEY)
       return result({
         outcome: 'stale-active-project',
         workspaceId: this.workspaceId(),
-        projectId
-      }, `The active video project ${projectId} no longer exists`)
+        projectId,
+        diagnosticCode: error instanceof VideoEngineError ? error.code : 'invalid_project'
+      }, `The active video project ${projectId} is unavailable and was cleared`)
     }
 
     return result({
@@ -306,11 +336,42 @@ export class VideoEditorTools {
     }, `Resolved active video project ${project.id} revision ${project.currentRevision}`)
   }
 
-  private async setActiveProject(projectId: string): Promise<void> {
+  private async selectActiveProject(
+    project: VideoProject,
+    transition: 'created' | 'selected',
+    source: RevisionAuthor
+  ): Promise<void> {
+    const previousProjectId = await this.storedActiveProjectId()
     await this.context.storage.workspace.set(ACTIVE_PROJECT_KEY, {
       schemaVersion: 1,
-      projectId
+      projectId: project.id
     })
+    await this.context.ui.postMessage({
+      channel: 'kun-video-editor.project-changed',
+      payload: {
+        schemaVersion: 1,
+        projectId: project.id,
+        activeProjectId: project.id,
+        previousProjectId: previousProjectId ?? null,
+        revision: project.currentRevision,
+        reason: 'active-project-changed',
+        transition,
+        source,
+        changedIds: ['active-project']
+      }
+    })
+  }
+
+  private async storedActiveProjectId(): Promise<string | undefined> {
+    const value = await this.context.storage.workspace.get<JsonValue>(ACTIVE_PROJECT_KEY)
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+    const stored = value as ToolInput
+    if (stored.schemaVersion !== 1) return undefined
+    try {
+      return stableId(stored.projectId, 'active projectId')
+    } catch {
+      return undefined
+    }
   }
 
   private async videoReadScript(input: ToolInput): Promise<ToolResult> {
@@ -354,6 +415,45 @@ export class VideoEditorTools {
     const expectedRevision = nonNegativeInteger(input.expectedRevision, 'expectedRevision')
     const current = await this.service().loadProject(projectId)
     assertExpectedRevision(current, expectedRevision)
+    let capabilities: MediaCapabilities
+    try {
+      capabilities = await this.context.media.getCapabilities()
+    } catch {
+      return result({
+        outcome: 'unavailable',
+        code: 'MEDIA_CAPABILITIES_UNAVAILABLE',
+        projectId,
+        currentRevision: expectedRevision,
+        changedIds: [],
+        retryable: true,
+        message: 'Kun could not inspect local ffprobe availability. Install or configure the local media tools and retry; no project data was changed.'
+      }, 'Media capability inspection unavailable')
+    }
+    if (!capabilities.ffprobe.available) {
+      return result({
+        outcome: 'unavailable',
+        code: 'FFPROBE_UNAVAILABLE',
+        projectId,
+        currentRevision: expectedRevision,
+        changedIds: [],
+        retryable: true,
+        message: 'Kun cannot import this media because ffprobe is unavailable. Install or configure ffprobe and retry; no project data was changed.'
+      }, 'ffprobe is unavailable for media import')
+    }
+    if (
+      !capabilities.ffmpeg.available &&
+      (input.thumbnailOutputHandleId !== undefined || input.waveformOutputHandleId !== undefined)
+    ) {
+      return result({
+        outcome: 'unavailable',
+        code: 'FFMPEG_UNAVAILABLE',
+        projectId,
+        currentRevision: expectedRevision,
+        changedIds: [],
+        retryable: true,
+        message: 'Kun cannot generate the requested thumbnail or waveform because FFmpeg is unavailable. Retry without derived outputs, or install or configure FFmpeg; no project data was changed.'
+      }, 'FFmpeg is unavailable for derived media')
+    }
     let metadata: MediaMetadata
     if (input.mediaHandleId === undefined) {
       let selection
@@ -447,6 +547,57 @@ export class VideoEditorTools {
       metadata: probeProjection(probe),
       jobs
     }, `Imported ${asset.name} at revision ${saved.currentRevision}`)
+  }
+
+  private async videoReauthorize(
+    input: ToolInput,
+    invocation: ToolInvocationContext
+  ): Promise<ToolResult> {
+    exactKeys(input, ['projectId', 'expectedRevision', 'assetId', 'mediaHandleId'])
+    const projectId = stableId(input.projectId, 'projectId')
+    const expectedRevision = nonNegativeInteger(input.expectedRevision, 'expectedRevision')
+    const assetId = stableId(input.assetId, 'assetId')
+    const mediaHandleId = opaqueHandle(input.mediaHandleId, 'mediaHandleId')
+    const current = await this.service().loadProject(projectId)
+    assertExpectedRevision(current, expectedRevision)
+    const assetIndex = current.assets.findIndex(({ id }) => id === assetId)
+    if (assetIndex < 0) throw new ToolInputError(`Asset ${assetId} does not exist.`)
+    const previous = current.assets[assetIndex]!
+    const metadata = await this.context.media.stat({ handleId: mediaHandleId })
+    assertNotCancelled(invocation)
+    await invocation.reportProgress({ message: 'Probing replacement media grant', fraction: 0.25 })
+    const probe = await this.context.media.probe({ handleId: mediaHandleId })
+    const replacement = {
+      ...assetFromProbe(assetId, metadata, probe),
+      name: previous.name,
+      transcriptIds: [...previous.transcriptIds]
+    }
+    if (replacement.kind !== previous.kind) {
+      throw new ToolInputError(
+        `Replacement media kind ${replacement.kind} does not match ${previous.kind} asset ${assetId}.`
+      )
+    }
+    const candidate = structuredClone(current)
+    candidate.assets[assetIndex] = replacement
+    const saved = await this.service().saveProject(candidate, expectedRevision, {
+      author: 'manual',
+      sourceOperation: 'media.reauthorize',
+      summary: `Reauthorized ${previous.name}`
+    })
+    await this.publishProjectChange(saved, 'asset-reauthorized', [assetId])
+    if (previous.mediaHandleId && previous.mediaHandleId !== mediaHandleId) {
+      await this.context.media.release({
+        resource: 'handle',
+        handleId: previous.mediaHandleId
+      }).catch(() => undefined)
+    }
+    await invocation.reportProgress({ message: 'Replacement media grant saved', fraction: 1 })
+    return result({
+      outcome: 'reauthorized',
+      projectId,
+      currentRevision: saved.currentRevision,
+      asset: assetProjection(replacement)
+    }, `Reauthorized ${previous.name} at revision ${saved.currentRevision}`)
   }
 
   private async videoTranscribe(
@@ -610,12 +761,18 @@ export class VideoEditorTools {
     const expectedRevision = nonNegativeInteger(input.expectedRevision, 'expectedRevision')
     const kind = enumValue(
       input.kind,
-      ['proof-frame', 'preview', 'h264-mp4', 'audio-aac'] as const,
+      ['proof-frame', 'preview', 'h264-mp4', 'audio-aac', 'subtitles'] as const,
       'kind'
     )
+    const subtitleFormat = input.subtitleFormat === undefined
+      ? 'srt'
+      : enumValue(input.subtitleFormat, ['srt', 'vtt'] as const, 'subtitleFormat')
     const captionMode = input.captionMode === undefined
       ? 'none'
       : enumValue(input.captionMode, ['none', 'burned', 'sidecar', 'both'] as const, 'captionMode')
+    if (kind === 'subtitles' && captionMode !== 'none') {
+      throw new ToolInputError('Standalone subtitle export does not accept a media caption mode.')
+    }
     if ((captionMode === 'sidecar' || captionMode === 'both') && kind !== 'h264-mp4') {
       throw new ToolInputError('Caption sidecars are supported only for the final H.264 video export.')
     }
@@ -624,14 +781,17 @@ export class VideoEditorTools {
     }
     const project = await this.service().loadProject(projectId)
     assertExpectedRevision(project, expectedRevision)
+    const capabilityFailure = await this.renderCapabilityFailure(project, kind, captionMode)
+    if (capabilityFailure) return capabilityFailure
 
     let outputHandleId: string
+    let ownsOutputHandle = false
     if (input.outputHandleId === undefined) {
       let selection
       try {
         selection = await this.context.media.pickSaveTarget({
-          suggestedName: renderFileName(project, kind),
-          filters: [renderFilter(kind)]
+          suggestedName: renderFileName(project, kind, subtitleFormat),
+          filters: [renderFilter(kind, subtitleFormat)]
         })
       } catch (error) {
         const interaction = interactionRequired(error, 'Choose an export target in the Kun desktop editor, then retry with its outputHandleId.')
@@ -642,16 +802,17 @@ export class VideoEditorTools {
         return result({ outcome: 'cancelled', code: 'MEDIA_CANCELLED', message: 'Export target selection was cancelled.' }, 'Export selection cancelled')
       }
       outputHandleId = selection.target.handleId
+      ownsOutputHandle = true
     } else {
       outputHandleId = opaqueHandle(input.outputHandleId, 'outputHandleId')
     }
 
     let subtitleOutputHandleId: string | undefined
+    let ownsSubtitleOutputHandle = false
+    let renderStarted = false
+    try {
     if (captionMode === 'sidecar' || captionMode === 'both') {
       if (input.subtitleOutputHandleId === undefined) {
-        const subtitleFormat = input.subtitleFormat === undefined
-          ? 'srt'
-          : enumValue(input.subtitleFormat, ['srt', 'vtt'] as const, 'subtitleFormat')
         let selection
         try {
           selection = await this.context.media.pickSaveTarget({
@@ -671,15 +832,16 @@ export class VideoEditorTools {
           return result({ outcome: 'cancelled', code: 'MEDIA_CANCELLED', message: 'Subtitle export target selection was cancelled.' }, 'Subtitle export selection cancelled')
         }
         subtitleOutputHandleId = selection.target.handleId
+        ownsSubtitleOutputHandle = true
       } else {
         subtitleOutputHandleId = opaqueHandle(input.subtitleOutputHandleId, 'subtitleOutputHandleId')
       }
-    } else if (input.subtitleOutputHandleId !== undefined || input.subtitleFormat !== undefined) {
+    } else if (
+      input.subtitleOutputHandleId !== undefined ||
+      (kind !== 'subtitles' && input.subtitleFormat !== undefined)
+    ) {
       throw new ToolInputError('Subtitle output fields require captionMode sidecar or both.')
     }
-    const subtitleFormat = input.subtitleFormat === undefined
-      ? 'srt'
-      : enumValue(input.subtitleFormat, ['srt', 'vtt'] as const, 'subtitleFormat')
     if (kind !== 'proof-frame' && input.proofFrame !== undefined) {
       throw new ToolInputError('proofFrame is supported only for proof-frame renders.')
     }
@@ -703,7 +865,13 @@ export class VideoEditorTools {
     const ffmpegSteps = plan.steps.filter(
       (step): step is FfmpegRenderStep => step.kind === 'ffmpeg'
     )
-    if (textSteps.length > 1 || ffmpegSteps.length !== 1) {
+    const standaloneSubtitles = kind === 'subtitles'
+    if (
+      textSteps.length > 1 ||
+      (standaloneSubtitles
+        ? textSteps.length !== 1 || ffmpegSteps.length !== 0
+        : ffmpegSteps.length !== 1)
+    ) {
       throw new ToolInputError(
         'This render plan exceeds the supported single-media/single-sidecar export transaction.'
       )
@@ -713,20 +881,22 @@ export class VideoEditorTools {
         'The generated subtitle sidecar exceeds the 192 KiB durable-job limit; shorten or split the caption export.'
       )
     }
-    const step = ffmpegSteps[0]!
     const inputs: Record<string, string> = {}
-    for (const [name, reference] of Object.entries(step.inputs)) {
-      if (reference.kind !== 'media-handle') {
-        throw new ToolInputError(`Render input ${name} is not backed by a durable media handle.`)
+    const step = ffmpegSteps[0]
+    if (step) {
+      for (const [name, reference] of Object.entries(step.inputs)) {
+        if (reference.kind !== 'media-handle') {
+          throw new ToolInputError(`Render input ${name} is not backed by a durable media handle.`)
+        }
+        inputs[name] = opaqueHandle(reference.reference, `render input ${name}`)
       }
-      inputs[name] = opaqueHandle(reference.reference, `render input ${name}`)
     }
     assertNotCancelled(invocation)
     await invocation.reportProgress({ message: 'Submitting durable media job', fraction: 0.5 })
     const started = await this.context.media.startFfmpegJob({
-      arguments: step.args,
+      arguments: step?.args ?? [],
       inputs,
-      outputs: step.outputs,
+      outputs: step?.outputs ?? {},
       ...(textSteps.length === 1 ? {
         textOutputs: {
           [textSteps[0]!.id]: {
@@ -749,6 +919,7 @@ export class VideoEditorTools {
         proofFrame: proofFrame ?? null
       }
     })
+    renderStarted = true
     const record: RenderRecord = {
       schemaVersion: 1,
       jobId: started.job.jobId,
@@ -800,6 +971,130 @@ export class VideoEditorTools {
       technicallyValidated: false,
       artifacts: []
     }, `Queued ${kind} render for revision ${expectedRevision}`)
+    } finally {
+      if (!renderStarted) {
+        const ownedHandles = [
+          ...(ownsOutputHandle ? [outputHandleId] : []),
+          ...(ownsSubtitleOutputHandle && subtitleOutputHandleId ? [subtitleOutputHandleId] : [])
+        ]
+        await Promise.all(ownedHandles.map((handleId) =>
+          this.context.media.release({ resource: 'handle', handleId }).catch(() => undefined)
+        ))
+      }
+    }
+  }
+
+  private async renderCapabilityFailure(
+    project: VideoProject,
+    kind: RenderKind,
+    captionMode: RenderRecord['captionMode']
+  ): Promise<ToolResult | undefined> {
+    // Standalone subtitle exports are durable bounded text writes. They do not
+    // execute or validate media and must remain available without FFmpeg.
+    if (kind === 'subtitles') return undefined
+
+    let capabilities: MediaCapabilities
+    try {
+      capabilities = await this.context.media.getCapabilities()
+    } catch {
+      return result({
+        outcome: 'unavailable',
+        code: 'MEDIA_CAPABILITIES_UNAVAILABLE',
+        projectId: project.id,
+        currentRevision: project.currentRevision,
+        changedIds: [],
+        retryable: true,
+        renderKind: kind,
+        captionMode,
+        missingCapabilities: ['capability-inspection'],
+        message: `Kun could not inspect local FFmpeg and ffprobe capabilities for the ${kind} render. ` +
+          'Install or configure both media executables and retry. No output target was selected and no render job was started.'
+      }, 'Media capability inspection unavailable; no render was started')
+    }
+
+    const missing: Array<{
+      code: string
+      id: string
+      label: string
+      guidance: string
+    }> = []
+    if (!capabilities.ffprobe.available) {
+      missing.push({
+        code: 'FFPROBE_UNAVAILABLE',
+        id: 'ffprobe',
+        label: 'ffprobe executable',
+        guidance: 'Install or configure ffprobe so Kun can validate generated media.'
+      })
+    }
+    if (!capabilities.ffmpeg.available) {
+      missing.push({
+        code: 'FFMPEG_UNAVAILABLE',
+        id: 'ffmpeg',
+        label: 'FFmpeg executable',
+        guidance: 'Install or configure FFmpeg for media rendering.'
+      })
+    }
+
+    const features = new Set(capabilities.ffmpeg.features)
+    if (
+      capabilities.ffmpeg.available &&
+      (kind === 'preview' || kind === 'h264-mp4') &&
+      !features.has('libx264-encoder')
+    ) {
+      missing.push({
+        code: 'LIBX264_ENCODER_UNAVAILABLE',
+        id: 'libx264-encoder',
+        label: 'libx264 encoder',
+        guidance: 'Use an FFmpeg build that includes the libx264 encoder.'
+      })
+    }
+    const timelineHasAudio = project.items.some((item) =>
+      project.assets.some((asset) => asset.id === item.assetId && asset.audio !== undefined)
+    )
+    if (
+      capabilities.ffmpeg.available &&
+      (kind === 'audio-aac' ||
+        ((kind === 'preview' || kind === 'h264-mp4') && timelineHasAudio)) &&
+      !features.has('aac-encoder')
+    ) {
+      missing.push({
+        code: 'AAC_ENCODER_UNAVAILABLE',
+        id: 'aac-encoder',
+        label: 'AAC encoder',
+        guidance: 'Use an FFmpeg build that includes the AAC encoder.'
+      })
+    }
+    if (
+      capabilities.ffmpeg.available &&
+      (captionMode === 'burned' || captionMode === 'both') &&
+      !features.has('drawtext-filter')
+    ) {
+      missing.push({
+        code: 'DRAWTEXT_FILTER_UNAVAILABLE',
+        id: 'drawtext-filter',
+        label: 'drawtext filter',
+        guidance: "Retry with captionMode 'none' or 'sidecar', or use an FFmpeg build that includes drawtext."
+      })
+    }
+
+    if (missing.length > 0) {
+      const labels = missing.map(({ label }) => label)
+      const guidance = missing.map(({ guidance: item }) => item)
+      return result({
+        outcome: 'unavailable',
+        code: missing[0]!.code,
+        projectId: project.id,
+        currentRevision: project.currentRevision,
+        changedIds: [],
+        retryable: true,
+        renderKind: kind,
+        captionMode,
+        missingCapabilities: missing.map(({ id }) => id),
+        message: `Cannot start the ${kind} render; missing media capability: ${labels.join(', ')}. ` +
+          `${guidance.join(' ')} No output target was selected and no render job was started.`
+      }, `Render unavailable: missing ${labels.join(', ')}`)
+    }
+    return undefined
   }
 
   private async cancelAfterRenderTrackingFailure(
@@ -863,22 +1158,77 @@ export class VideoEditorTools {
   }
 
   private async videoRenderStatus(input: ToolInput): Promise<ToolResult> {
-    exactKeys(input, ['jobId', 'action', 'reason'])
+    exactKeys(input, ['jobId', 'projectId'])
     const jobId = boundedString(input.jobId, 'jobId', 8, 512)
-    const action = enumValue(input.action, ['get', 'cancel'] as const, 'action')
-    let snapshot: JobSnapshot
-    if (action === 'cancel') {
-      const cancellation = await this.context.jobs.cancel({
-        jobId,
-        ...(input.reason === undefined
-          ? {}
-          : { reason: boundedString(input.reason, 'reason', 1, 512) })
-      })
-      snapshot = cancellation.snapshot
-    } else {
-      snapshot = await this.context.jobs.get(jobId)
+    const projectId = input.projectId === undefined
+      ? undefined
+      : stableId(input.projectId, 'projectId')
+    const snapshot = await this.context.jobs.get(jobId)
+    const record = await this.scopedRenderRecord(snapshot, projectId)
+    return await this.renderStatusResult(snapshot, record)
+  }
+
+  private async videoRenderList(input: ToolInput): Promise<ToolResult> {
+    exactKeys(input, [])
+    const page = await this.context.jobs.list({
+      filter: { kinds: ['media.ffmpeg'], workspaceId: this.workspaceId() },
+      limit: 200
+    })
+    const records: JsonObject[] = []
+    let untrackedCount = 0
+    for (const snapshot of page.items) {
+      try {
+        this.assertOwnedRenderSnapshot(snapshot)
+        const record = await this.loadOrRecoverRenderRecord(snapshot)
+        if (!record) {
+          untrackedCount += 1
+          continue
+        }
+        records.push({
+          jobId: record.jobId,
+          projectId: record.projectId,
+          pinnedRevision: record.pinnedRevision,
+          renderKind: record.renderKind,
+          createdAt: record.createdAt
+        })
+      } catch {
+        untrackedCount += 1
+      }
     }
-    const record = await this.loadOrRecoverRenderRecord(snapshot)
+    return result({
+      outcome: 'listed',
+      records,
+      truncated: page.page.hasMore,
+      untrackedCount
+    }, `Listed ${records.length} tracked video renders`)
+  }
+
+  private async videoRenderCancel(input: ToolInput): Promise<ToolResult> {
+    exactKeys(input, ['jobId', 'projectId', 'reason'])
+    const jobId = boundedString(input.jobId, 'jobId', 8, 512)
+    const projectId = input.projectId === undefined
+      ? undefined
+      : stableId(input.projectId, 'projectId')
+    const snapshot = await this.context.jobs.get(jobId)
+    const record = await this.scopedRenderRecord(snapshot, projectId)
+    if (!record) {
+      throw new ToolInputError(
+        'The durable job has no verified video-render tracking record and cannot be cancelled by this tool.'
+      )
+    }
+    const cancellation = await this.context.jobs.cancel({
+      jobId,
+      ...(input.reason === undefined
+        ? {}
+        : { reason: boundedString(input.reason, 'reason', 1, 512) })
+    })
+    return await this.renderStatusResult(cancellation.snapshot, record)
+  }
+
+  private async renderStatusResult(
+    snapshot: JobSnapshot,
+    record: RenderRecord | undefined
+  ): Promise<ToolResult> {
     const currentRevision = record
       ? await this.currentRevision(record.projectId)
       : undefined
@@ -893,10 +1243,17 @@ export class VideoEditorTools {
       outcome,
       jobId: snapshot.id,
       state: snapshot.state,
+      tracked: record !== undefined,
       ...(record ? {
         projectId: record.projectId,
         pinnedRevision: record.pinnedRevision,
-        renderKind: record.renderKind
+        renderKind: record.renderKind,
+        captionMode: record.captionMode,
+        subtitleFormat: record.subtitleFormat,
+        canvasPreset: record.canvasPreset,
+        proofFrame: record.proofFrame ?? null,
+        currentRevision: currentRevision ?? null,
+        projectAvailable: currentRevision !== undefined
       } : {}),
       proofStale,
       technicallyValidated: validation.valid,
@@ -916,6 +1273,37 @@ export class VideoEditorTools {
       ...(validation.valid && validation.artifacts.length > 0
         ? { generatedArtifacts: validation.artifacts }
         : {})
+    }
+  }
+
+  private async scopedRenderRecord(
+    snapshot: JobSnapshot,
+    expectedProjectId: string | undefined
+  ): Promise<RenderRecord | undefined> {
+    this.assertOwnedRenderSnapshot(snapshot)
+    const record = await this.loadOrRecoverRenderRecord(snapshot)
+    if (expectedProjectId !== undefined && record?.projectId !== expectedProjectId) {
+      throw new ToolInputError(
+        'The durable job could not be verified as a render for the requested project.'
+      )
+    }
+    return record
+  }
+
+  private assertOwnedRenderSnapshot(snapshot: JobSnapshot): void {
+    if (
+      snapshot.ownerExtensionId !== this.context.extension.id ||
+      snapshot.ownerExtensionVersion !== this.context.extension.version ||
+      snapshot.workspaceId !== this.workspaceId() ||
+      snapshot.kind !== 'media.ffmpeg' ||
+      snapshot.initiatingOperation !== 'media.startFfmpegJob'
+    ) {
+      throw new ExtensionApiError({
+        code: 'PERMISSION_DENIED',
+        message: 'The durable job is not an owned video render in this workspace.',
+        operation: 'video-render-status',
+        retryable: false
+      })
     }
   }
 
@@ -999,40 +1387,14 @@ export class VideoEditorTools {
     } catch {
       return undefined
     }
-    if (value === undefined) return undefined
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
-    const record = value as ToolInput
-    if (
-      record.schemaVersion !== 1 ||
-      typeof record.jobId !== 'string' ||
-      record.jobId !== jobId ||
-      typeof record.projectId !== 'string' ||
-      !Number.isSafeInteger(record.pinnedRevision) ||
-      !['proof-frame', 'preview', 'h264-mp4', 'audio-aac'].includes(String(record.renderKind)) ||
-      !['none', 'burned', 'sidecar', 'both'].includes(String(record.captionMode)) ||
-      (record.subtitleFormat !== 'srt' && record.subtitleFormat !== 'vtt') ||
-      !['16:9', '9:16', '1:1'].includes(String(record.canvasPreset)) ||
-      (record.proofFrame !== undefined &&
-        (!Number.isSafeInteger(record.proofFrame) || Number(record.proofFrame) < 0)) ||
-      !Array.isArray(record.expectedArtifacts) ||
-      !record.expectedArtifacts.every((artifact) => {
-        if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) return false
-        const candidate = artifact as Record<string, unknown>
-        return ['image', 'video', 'audio', 'subtitle'].includes(String(candidate.mediaKind)) &&
-          typeof candidate.mimeType === 'string'
-      }) ||
-      typeof record.createdAt !== 'string'
-    ) {
-      return undefined
-    }
-    return record as RenderRecord
+    return storedRenderRecord(value, jobId)
   }
 
   private async loadOrRecoverRenderRecord(snapshot: JobSnapshot): Promise<RenderRecord | undefined> {
     const stored = await this.loadRenderRecord(snapshot.id)
-    if (stored) return stored
     const recovered = recoverRenderRecord(snapshot)
-    if (!recovered) return undefined
+    if (stored && (!recovered || sameRenderTrackingRecord(stored, recovered))) return stored
+    if (!recovered) return stored
     try {
       await this.context.storage.workspace.set(renderKey(snapshot.id), recovered)
     } catch {
@@ -1159,6 +1521,8 @@ function projectProjection(project: VideoProject): JsonObject {
     fps: project.fps,
     canvas: project.canvas,
     currentRevision: project.currentRevision,
+    canUndo: project.undoStack.length > 0,
+    canRedo: project.redoStack.length > 0,
     updatedAt: project.updatedAt,
     durationFrames: projectDurationFrames(project),
     counts: {
@@ -1312,14 +1676,30 @@ function normalizeRotation(value: number): 0 | 90 | 180 | 270 {
   )
 }
 
-function renderFileName(project: VideoProject, kind: RenderKind): string {
-  const suffix = kind === 'proof-frame' ? 'proof.png' : kind === 'audio-aac' ? 'audio.m4a' : 'video.mp4'
+function renderFileName(
+  project: VideoProject,
+  kind: RenderKind,
+  subtitleFormat: 'srt' | 'vtt' = 'srt'
+): string {
+  const suffix = kind === 'proof-frame'
+    ? 'proof.png'
+    : kind === 'audio-aac'
+      ? 'audio.m4a'
+      : kind === 'subtitles'
+        ? `captions.${subtitleFormat}`
+        : 'video.mp4'
   return `${project.id}-revision-${project.currentRevision}-${suffix}`
 }
 
-function renderFilter(kind: RenderKind): { name: string; extensions: string[]; mimeTypes: string[] } {
+function renderFilter(
+  kind: RenderKind,
+  subtitleFormat: 'srt' | 'vtt' = 'srt'
+): { name: string; extensions: string[]; mimeTypes: string[] } {
   if (kind === 'proof-frame') return { name: 'PNG image', extensions: ['png'], mimeTypes: ['image/png'] }
   if (kind === 'audio-aac') return { name: 'AAC audio', extensions: ['m4a'], mimeTypes: ['audio/mp4'] }
+  if (kind === 'subtitles') return subtitleFormat === 'srt'
+    ? { name: 'SubRip captions', extensions: ['srt'], mimeTypes: ['application/x-subrip'] }
+    : { name: 'WebVTT captions', extensions: ['vtt'], mimeTypes: ['text/vtt'] }
   return { name: 'H.264 video', extensions: ['mp4'], mimeTypes: ['video/mp4'] }
 }
 
@@ -1332,6 +1712,50 @@ function jobReferenceProjection(
 
 function renderKey(jobId: string): string {
   return `${RENDER_RECORD_PREFIX}${jobId}`
+}
+
+function storedRenderRecord(value: JsonValue | undefined, jobId: string): RenderRecord | undefined {
+  if (value === undefined || value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+  const record = value as ToolInput
+  if (
+    record.schemaVersion !== 1 ||
+    record.jobId !== jobId ||
+    typeof record.projectId !== 'string' ||
+    !/^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/u.test(record.projectId) ||
+    record.projectId === '.' ||
+    record.projectId === '..' ||
+    !Number.isSafeInteger(record.pinnedRevision) ||
+    Number(record.pinnedRevision) < 0 ||
+    !['proof-frame', 'preview', 'h264-mp4', 'audio-aac', 'subtitles'].includes(String(record.renderKind)) ||
+    !['none', 'burned', 'sidecar', 'both'].includes(String(record.captionMode)) ||
+    (record.subtitleFormat !== 'srt' && record.subtitleFormat !== 'vtt') ||
+    !['16:9', '9:16', '1:1'].includes(String(record.canvasPreset)) ||
+    (record.proofFrame !== undefined &&
+      (!Number.isSafeInteger(record.proofFrame) || Number(record.proofFrame) < 0)) ||
+    (record.renderKind === 'proof-frame') !== (record.proofFrame !== undefined) ||
+    typeof record.createdAt !== 'string' ||
+    !Number.isFinite(Date.parse(record.createdAt)) ||
+    !Array.isArray(record.expectedArtifacts) ||
+    record.expectedArtifacts.length < 1 ||
+    record.expectedArtifacts.length > 2
+  ) {
+    return undefined
+  }
+  const candidate = record as RenderRecord
+  const expected = expectedArtifactsFromRenderRecordFields(candidate)
+  if (
+    !expected ||
+    expected.length !== candidate.expectedArtifacts.length ||
+    !expected.every((artifact, index) => {
+      const actual = candidate.expectedArtifacts[index]
+      return actual?.mediaKind === artifact.mediaKind && actual.mimeType === artifact.mimeType
+    })
+  ) {
+    return undefined
+  }
+  return candidate
 }
 
 function recoverRenderRecord(snapshot: JobSnapshot): RenderRecord | undefined {
@@ -1377,16 +1801,17 @@ function renderRecordFieldsFromArtifact(
   const captionMode = metadata.captionMode
   const subtitleFormat = metadata.subtitleFormat
   const canvasPreset = metadata.canvasPreset
-  const proofFrame = metadata.proofFrame
+  const proofFrame = metadata.proofFrame === null ? undefined : metadata.proofFrame
   if (
     typeof projectId !== 'string' ||
     !/^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/u.test(projectId) ||
     !Number.isSafeInteger(pinnedRevision) || Number(pinnedRevision) < 0 ||
-    !['proof-frame', 'preview', 'h264-mp4', 'audio-aac'].includes(String(renderKind)) ||
+    !['proof-frame', 'preview', 'h264-mp4', 'audio-aac', 'subtitles'].includes(String(renderKind)) ||
     !['none', 'burned', 'sidecar', 'both'].includes(String(captionMode)) ||
     (subtitleFormat !== 'srt' && subtitleFormat !== 'vtt') ||
     !['16:9', '9:16', '1:1'].includes(String(canvasPreset)) ||
-    (proofFrame !== undefined && (!Number.isSafeInteger(proofFrame) || Number(proofFrame) < 0))
+    (proofFrame !== undefined && (!Number.isSafeInteger(proofFrame) || Number(proofFrame) < 0)) ||
+    (renderKind === 'proof-frame') !== (proofFrame !== undefined)
   ) return undefined
   return {
     projectId,
@@ -1427,6 +1852,13 @@ function expectedArtifactsFromRenderRecordFields(
     if (fields.captionMode !== 'none') return undefined
     return [{ mediaKind: 'audio', mimeType: 'audio/mp4' }]
   }
+  if (fields.renderKind === 'subtitles') {
+    if (fields.captionMode !== 'none') return undefined
+    return [{
+      mediaKind: 'subtitle',
+      mimeType: fields.subtitleFormat === 'srt' ? 'application/x-subrip' : 'text/vtt'
+    }]
+  }
   const expected: RenderRecord['expectedArtifacts'] = []
   if (fields.captionMode === 'sidecar' || fields.captionMode === 'both') {
     expected.push({
@@ -1441,6 +1873,7 @@ function expectedArtifactsFromRenderRecordFields(
 function sameRenderTrackingRecord(left: RenderRecord, right: RenderRecord): boolean {
   return left.schemaVersion === right.schemaVersion &&
     left.jobId === right.jobId &&
+    left.createdAt === right.createdAt &&
     sameRenderRecordFields(left, right) &&
     left.expectedArtifacts.length === right.expectedArtifacts.length &&
     left.expectedArtifacts.every((expected, index) => {

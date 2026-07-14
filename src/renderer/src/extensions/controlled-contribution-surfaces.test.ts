@@ -19,7 +19,11 @@ import {
   isSecretLikeSettingKey,
   matchingResultPreviewContributions
 } from './ControlledContributionSurfaces'
-import { validateExtensionViewSession } from './ExtensionWebview'
+import {
+  extensionViewSessionContractKey,
+  validateExtensionViewSession
+} from './ExtensionWebview'
+import { extensionWorkbenchClient } from './extension-workbench-client'
 
 function registryWithContributions(): ContributionRegistry {
   const registry = new ContributionRegistry()
@@ -283,6 +287,124 @@ describe('controlled workbench contribution rendering', () => {
     expect(validateExtensionViewSession(validSession, contribution)).toBeNull()
     expect(validateExtensionViewSession({ ...validSession, partition: 'persist:shared' }, contribution)).toContain('non-persistent')
     expect(validateExtensionViewSession({ ...validSession, src: 'https://evil.example/' }, contribution)).toContain('origin mismatch')
+  })
+
+  it('keeps an opening View session across equivalent contribution snapshot replacements', async () => {
+    const contribution = registryWithContributions().list('views.rightSidebar')
+      .find((item) => item.id === 'extension:acme.ui/dashboard')!
+    const equivalent = {
+      ...contribution,
+      payload: { ...contribution.payload },
+      owner: contribution.owner.kind === 'extension'
+        ? {
+            ...contribution.owner,
+            grantedPermissions: [...contribution.owner.grantedPermissions]
+          }
+        : contribution.owner
+    }
+    expect(equivalent).not.toBe(contribution)
+    expect(extensionViewSessionContractKey(equivalent)).toBe(
+      extensionViewSessionContractKey(contribution)
+    )
+    expect(extensionViewSessionContractKey({
+      ...equivalent,
+      payload: { ...equivalent.payload, entry: 'dist/next.html' }
+    })).not.toBe(extensionViewSessionContractKey(contribution))
+    expect(extensionViewSessionContractKey({
+      ...equivalent,
+      payload: { ...equivalent.payload, localResourceRoots: ['dist', 'assets'] }
+    })).not.toBe(extensionViewSessionContractKey(contribution))
+    expect(extensionViewSessionContractKey({
+      ...equivalent,
+      owner: equivalent.owner.kind === 'extension'
+        ? { ...equivalent.owner, extensionVersion: '2.0.0' }
+        : equivalent.owner
+    })).not.toBe(extensionViewSessionContractKey(contribution))
+
+    let resolveSession!: (session: Awaited<ReturnType<
+      typeof extensionWorkbenchClient.createViewSession
+    >>) => void
+    const opening = new Promise<Awaited<ReturnType<
+      typeof extensionWorkbenchClient.createViewSession
+    >>>((resolve) => {
+      resolveSession = resolve
+    })
+    const createSession = vi.spyOn(extensionWorkbenchClient, 'createViewSession')
+      .mockReturnValue(opening)
+    const disposeSession = vi.spyOn(extensionWorkbenchClient, 'disposeViewSession')
+      .mockResolvedValue(undefined)
+    vi.stubGlobal('HTMLElement', class {})
+    vi.stubGlobal('document', { activeElement: null })
+    vi.stubGlobal('window', { requestAnimationFrame: vi.fn() })
+    let renderer!: ReturnType<typeof createRenderer>
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(ExtensionViewOutlet, {
+          contribution,
+          workspaceRoot: ' /workspace '
+        }))
+      })
+      expect(createSession).toHaveBeenCalledTimes(1)
+      expect(createSession).toHaveBeenCalledWith(contribution.id, '/workspace')
+
+      await act(async () => {
+        renderer.update(createElement(ExtensionViewOutlet, {
+          contribution: equivalent,
+          workspaceRoot: '/workspace'
+        }))
+      })
+      expect(createSession).toHaveBeenCalledTimes(1)
+      expect(disposeSession).not.toHaveBeenCalled()
+
+      await act(async () => {
+        resolveSession({
+          sessionId: 'session-0123456789',
+          nonce: 'nonce-0123456789',
+          contributionId: contribution.id,
+          extensionId: 'acme.ui',
+          extensionVersion: '1.0.0',
+          src: 'kun-extension://acme.ui/dist/index.html',
+          partition: 'kun-extension-acme-ui-session'
+        })
+        await opening
+      })
+      expect(renderer.root.findAllByType('webview')).toHaveLength(1)
+      expect(disposeSession).not.toHaveBeenCalled()
+
+      const changedEntry = {
+        ...equivalent,
+        payload: { ...equivalent.payload, entry: 'dist/next.html' }
+      }
+      createSession.mockResolvedValueOnce({
+        sessionId: 'session-9876543210',
+        nonce: 'nonce-9876543210',
+        contributionId: contribution.id,
+        extensionId: 'acme.ui',
+        extensionVersion: '1.0.0',
+        src: 'kun-extension://acme.ui/dist/next.html',
+        partition: 'kun-extension-acme-ui-session-next'
+      })
+      await act(async () => {
+        renderer.update(createElement(ExtensionViewOutlet, {
+          contribution: changedEntry,
+          workspaceRoot: '/workspace'
+        }))
+      })
+      expect(createSession).toHaveBeenCalledTimes(2)
+      expect(disposeSession).toHaveBeenCalledTimes(1)
+      expect(disposeSession).toHaveBeenCalledWith('session-0123456789')
+      expect(renderer.root.findAllByProps({
+        'data-extension-view-session': 'session-9876543210'
+      })).toHaveLength(1)
+
+      await act(async () => renderer.unmount())
+      expect(disposeSession).toHaveBeenCalledTimes(2)
+      expect(disposeSession).toHaveBeenLastCalledWith('session-9876543210')
+    } finally {
+      if (renderer) act(() => renderer.unmount())
+      vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+    }
   })
 
   it('renders Host-owned extension View status in the active Kun language', async () => {

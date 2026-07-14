@@ -5,7 +5,8 @@ import {
   MediaPickSaveTargetResultSchema,
   type MediaPickFilesResult,
   type MediaPickSaveTargetResult,
-  type MediaPickerFilter
+  type MediaPickerFilter,
+  type Locale
 } from '@kun/extension-api'
 import { dialog, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { randomBytes } from 'node:crypto'
@@ -44,12 +45,16 @@ export class ExtensionMediaPickerError extends Error {
   }
 }
 
-export type ExtensionMediaPickerContext = {
+type ExtensionMediaBindingContext = {
   event: IpcMainInvokeEvent
   record: ExtensionViewSessionRecord
   viewSessions: ExtensionViewSessionRegistry
   getMainWindow: () => BrowserWindow | null
   runtimeRequest: RuntimeRequest
+}
+
+export type ExtensionMediaPickerContext = ExtensionMediaBindingContext & {
+  getWorkbenchLocale: () => Promise<Locale>
   onCleanupFailure?: (detail: { selectionCount: number }) => void
 }
 
@@ -64,8 +69,10 @@ export async function pickExtensionMediaFiles(
   const request = MediaPickFilesRequestSchema.parse(requestInput ?? {})
   const binding = requireProtectedViewBinding(context)
   const parent = requireMainWindow(context.getMainWindow)
+  const locale = await context.getWorkbenchLocale()
+  assertProtectedViewBindingCurrent(context, binding)
   const selected = await dialog.showOpenDialog(parent, {
-    title: `Select media files for ${context.record.extensionId}`,
+    title: mediaPickerTitle(locale, 'import', context.record.extensionId),
     properties: request.multiple ? ['openFile', 'multiSelections'] : ['openFile'],
     ...(request.filters.length > 0 ? { filters: electronFilters(request.filters) } : {})
   })
@@ -105,8 +112,10 @@ export async function pickExtensionMediaSaveTarget(
   const suggestedName = request.suggestedName === undefined
     ? undefined
     : requireSafeSuggestedName(request.suggestedName)
+  const locale = await context.getWorkbenchLocale()
+  assertProtectedViewBindingCurrent(context, binding)
   const selected = await dialog.showSaveDialog(parent, {
-    title: `Choose export destination for ${context.record.extensionId}`,
+    title: mediaPickerTitle(locale, 'export', context.record.extensionId),
     ...(suggestedName && context.record.workspaceRoot
       ? { defaultPath: join(context.record.workspaceRoot, suggestedName) }
       : suggestedName ? { defaultPath: suggestedName } : {}),
@@ -140,7 +149,7 @@ export async function pickExtensionMediaSaveTarget(
 }
 
 export function requireProtectedViewBinding(
-  context: ExtensionMediaPickerContext
+  context: ExtensionMediaBindingContext
 ): ExtensionMediaViewBinding {
   const { event } = context
   const frame = event.senderFrame
@@ -194,7 +203,7 @@ export function requireProtectedViewBinding(
 
 /** Rechecks the original document binding after an asynchronous Host action. */
 export function assertProtectedViewBindingCurrent(
-  context: ExtensionMediaPickerContext,
+  context: ExtensionMediaBindingContext,
   binding: ExtensionMediaViewBinding
 ): void {
   const current = requireProtectedViewBinding(context)
@@ -226,6 +235,22 @@ function electronFilters(filters: readonly MediaPickerFilter[]): Electron.FileFi
     name: filter.name,
     extensions: [...filter.extensions]
   }))
+}
+
+function mediaPickerTitle(
+  locale: Locale,
+  operation: 'import' | 'export',
+  extensionId: string
+): string {
+  const simplifiedChinese = /^zh(?:-|$)/i.test(locale.language)
+  if (simplifiedChinese) {
+    return operation === 'import'
+      ? `为 ${extensionId} 选择媒体文件`
+      : `为 ${extensionId} 选择导出位置`
+  }
+  return operation === 'import'
+    ? `Select media files for ${extensionId}`
+    : `Choose export destination for ${extensionId}`
 }
 
 function requireSafeSuggestedName(value: string): string {

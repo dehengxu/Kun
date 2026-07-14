@@ -11,11 +11,11 @@ import {
 } from './extension-tool-provider.js'
 import { LocalToolHost } from './local-tool-host.js'
 
-const principal = (extensionId: string): ExtensionPrincipal => ({
+const principal = (extensionId: string, workspaceRoot = '/tmp/workspace'): ExtensionPrincipal => ({
   extensionId,
   extensionVersion: '1.0.0',
   permissions: ['tools.register'],
-  workspaceRoots: ['/tmp/workspace'],
+  workspaceRoots: [workspaceRoot],
   workspaceTrusted: true
 })
 
@@ -69,6 +69,60 @@ describe('ExtensionToolRegistry', () => {
     }, context())
     expect(firstHandler).toHaveBeenCalledTimes(1)
     expect(result.item).toMatchObject({ output: { text: 'hello' }, isError: false })
+  })
+
+  it('discovers and invokes one independently registered handler per workspace', async () => {
+    const capabilities = new CapabilityRegistry()
+    const tools = new ExtensionToolRegistry({ registry: capabilities })
+    const workspaceA = '/tmp/workspace-a'
+    const workspaceB = '/tmp/workspace-b'
+    const workspaceC = '/tmp/workspace-c'
+    const first = await tools.register(
+      principal('com.example.scoped', workspaceA),
+      echoDeclaration,
+      async () => ({ output: { owner: 'a' } })
+    )
+    const second = await tools.register(
+      principal('com.example.scoped', workspaceB),
+      echoDeclaration,
+      async () => ({ output: { owner: 'b' } })
+    )
+    const host = new LocalToolHost({ registry: capabilities })
+
+    expect(first.modelAlias).toBe(second.modelAlias)
+    await expect(host.listTools(context({ workspace: workspaceA }))).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: first.modelAlias })])
+    )
+    await expect(host.listTools(context({ workspace: workspaceB }))).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: first.modelAlias })])
+    )
+    await expect(host.listTools(context({ workspace: workspaceC }))).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: first.modelAlias })])
+    )
+
+    const invoke = (workspace: string, callId: string) => host.execute({
+      callId,
+      toolName: first.modelAlias,
+      providerId: 'extension:com.example.scoped',
+      arguments: { text: 'hello' }
+    }, context({ workspace }))
+    await expect(invoke(workspaceA, 'call_scoped_a')).resolves.toMatchObject({
+      item: { output: { owner: 'a' } }
+    })
+    await expect(invoke(workspaceB, 'call_scoped_b')).resolves.toMatchObject({
+      item: { output: { owner: 'b' } }
+    })
+
+    second.dispose()
+    await expect(host.listTools(context({ workspace: workspaceB }))).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: first.modelAlias })])
+    )
+    await expect(invoke(workspaceB, 'call_scoped_b_after_dispose')).rejects.toThrow(
+      /unknown tool|unavailable|not advertised/u
+    )
+    await expect(invoke(workspaceA, 'call_scoped_a_after_dispose')).resolves.toMatchObject({
+      item: { output: { owner: 'a' } }
+    })
   })
 
   it('rejects reserved names, undeclared tools, invalid schemas, and invalid arguments', async () => {

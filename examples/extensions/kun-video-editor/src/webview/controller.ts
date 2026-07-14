@@ -1,5 +1,6 @@
 import {
   ExtensionApiError,
+  ResultPreviewOpenPayloadSchema,
   type AgentRunEvent,
   type ExtensionHostClient,
   type GeneratedArtifact,
@@ -30,17 +31,34 @@ import { formatMessage, messagesFor, type MessageKey } from './i18n.js'
 
 const TERMINAL_AGENT_STATES = new Set(['completed', 'failed', 'cancelled', 'budget-exhausted'])
 const TERMINAL_JOB_STATES = new Set(['completed', 'failed', 'cancelled', 'interrupted'])
+const JOB_STATUS_RECONCILE_INTERVAL_MS = 1_000
 const EDITOR_COMMAND = 'editor-request'
+const COMMAND_PROGRESS_MESSAGE_KEYS: Readonly<Record<string, MessageKey>> = {
+  'Probing Host-granted media': 'commandProgressProbingMedia',
+  'Persisted probed asset metadata': 'commandProgressMediaMetadataSaved',
+  'Media import complete': 'commandProgressImportComplete',
+  'Probing replacement media grant': 'commandProgressProbingReplacement',
+  'Replacement media grant saved': 'commandProgressReplacementSaved',
+  'Submitting durable media job': 'commandProgressSubmittingJob',
+  'Durable media job queued': 'commandProgressJobQueued'
+}
 
 export type EditorController = {
   state: EditorState
   refreshAll(): Promise<void>
-  createProject(name: string, preset: CanvasPreset): Promise<void>
+  createProject(
+    name: string,
+    preset: CanvasPreset,
+    fps?: { numerator: number; denominator: number }
+  ): Promise<void>
   openProject(projectId: string): Promise<void>
   importMedia(): Promise<void>
+  importTranscript(): Promise<void>
+  checkLocalTranscriber(): Promise<void>
+  generateCaptions(): Promise<void>
   openAsset(assetId: string): Promise<void>
   refreshActiveLease(): Promise<void>
-  recoverMedia(): Promise<void>
+  recoverMedia(assetId?: string): Promise<void>
   applyOperations(operations: TimelineOperation[], summary: string): Promise<void>
   undo(): Promise<void>
   redo(): Promise<void>
@@ -72,6 +90,9 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
   const stateRef = useRef(state)
   const localeRef = useRef(state.locale)
   const ownedLeaseIds = useRef(new Set<string>())
+  const projectLoadGeneration = useRef(0)
+  const activeProjectResolutionGeneration = useRef(0)
+  const openMediaHandleRef = useRef<((handleId: string) => Promise<void>) | undefined>(undefined)
   stateRef.current = state
 
   const copy = useCallback((key: MessageKey, values?: Readonly<Record<string, string | number>>): string => {
@@ -91,27 +112,77 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
     return isRecord(outer.content) ? outer.content : outer
   }, [client, copy])
 
+  const releaseAllLeases = useCallback(async (): Promise<void> => {
+    const leaseIds = [...ownedLeaseIds.current]
+    ownedLeaseIds.current.clear()
+    await Promise.all(leaseIds.map((leaseId) =>
+      client.media.release({ resource: 'lease', leaseId }).catch(() => undefined)
+    ))
+    dispatch({ type: 'active-media', handleId: undefined, url: undefined })
+  }, [client])
+
   const loadProject = useCallback(async (projectId: string): Promise<ProjectProjection> => {
+    const generation = ++projectLoadGeneration.current
     const content = await execute('project.get', { projectId })
     const project = projectFrom(content, copy('invalidProjectProjection'))
+    if (generation !== projectLoadGeneration.current) return project
+    if (stateRef.current.project && stateRef.current.project.id !== project.id) {
+      await releaseAllLeases()
+      if (generation !== projectLoadGeneration.current) return project
+    }
     dispatch({ type: 'project', value: project })
     return project
-  }, [copy, execute])
+  }, [copy, execute, releaseAllLeases])
 
   const loadProjects = useCallback(async (): Promise<ProjectSummary[]> => {
     const content = await execute('project.list')
     const projects = Array.isArray(content.projects)
       ? content.projects.filter(isProjectSummary).slice(0, VIEW_LIMITS.projects)
       : []
+    const invalidProjectIds = Array.isArray(content.diagnostics)
+      ? content.diagnostics
+        .filter((value): value is Record<string, unknown> => isRecord(value) && typeof value.id === 'string')
+        .map(({ id }) => String(id))
+        .slice(0, VIEW_LIMITS.projects)
+      : []
+    if (invalidProjectIds.length > 0) {
+      const values = {
+        count: invalidProjectIds.length,
+        projects: invalidProjectIds.join(', ')
+      }
+      pushNotice({
+        id: 'invalid-projects-skipped',
+        severity: 'warning',
+        message: formatMessage(copy('invalidProjectsSkipped'), values),
+        messageKey: 'invalidProjectsSkipped',
+        messageValues: values
+      })
+    }
     dispatch({ type: 'projects', value: projects })
     return projects
-  }, [execute])
+  }, [copy, execute, pushNotice])
+
+  const loadActiveProject = useCallback(async (): Promise<ProjectProjection | null | undefined> => {
+    const generation = ++activeProjectResolutionGeneration.current
+    const active = await execute('project.active')
+    if (generation !== activeProjectResolutionGeneration.current) return undefined
+    if (!isRecord(active.project)) return null
+    return await loadProject(projectFrom(active, copy('invalidProjectProjection')).id)
+  }, [copy, execute, loadProject])
 
   const refreshJobs = useCallback(async (): Promise<JobSnapshot[]> => {
-    const page = await client.jobs.list({ limit: VIEW_LIMITS.jobs })
+    const [page, tracked] = await Promise.all([
+      client.jobs.list({ limit: VIEW_LIMITS.jobs }),
+      execute('render.list')
+    ])
+    if (Array.isArray(tracked.records)) {
+      for (const record of tracked.records) {
+        if (isRenderTicket(record)) dispatch({ type: 'render-ticket', value: record })
+      }
+    }
     dispatch({ type: 'jobs', value: page.items })
     return page.items
-  }, [client])
+  }, [client, execute])
 
   const restoreRun = useCallback(async (runId: string | undefined): Promise<void> => {
     if (!runId) return
@@ -121,7 +192,8 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
       pushNotice({
         id: 'run-unavailable',
         severity: 'warning',
-        message: copy('previousAgentUnavailable')
+        message: copy('previousAgentUnavailable'),
+        messageKey: 'previousAgentUnavailable'
       })
     }
   }, [client, copy, pushNotice])
@@ -132,15 +204,26 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
       await Promise.all([
         loadProjects(),
         refreshJobs(),
-        stateRef.current.project ? loadProject(stateRef.current.project.id) : Promise.resolve()
+        loadActiveProject().then(async (project) => {
+          if (project === null) {
+            await releaseAllLeases()
+            dispatch({ type: 'clear-project' })
+          }
+        })
       ])
       if (stateRef.current.agentRun) await restoreRun(stateRef.current.agentRun.id)
       dispatch({ type: 'connection', value: 'online' })
     } catch (error) {
       dispatch({ type: 'connection', value: 'offline' })
-      pushNotice(classifyError(error, copy('reconnectFailed'), copy('completeProtectedInteraction'), true))
+      pushNotice(classifyError(
+        error,
+        copy('reconnectFailed'),
+        copy('completeProtectedInteraction'),
+        true,
+        'reconnectFailed'
+      ))
     }
-  }, [copy, loadProject, loadProjects, pushNotice, refreshJobs, restoreRun])
+  }, [copy, loadActiveProject, loadProjects, pushNotice, refreshJobs, releaseAllLeases, restoreRun])
 
   useEffect(() => {
     let disposed = false
@@ -158,14 +241,26 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
     void client.ui.getTheme().then((value) => {
       if (!disposed && !themeChanged) dispatch({ type: 'theme', value })
     }).catch((error) => {
-      if (!disposed) pushNotice(classifyError(error, copy('hostClientError'), copy('completeProtectedInteraction'), true))
+      if (!disposed) pushNotice(classifyError(
+        error,
+        copy('hostClientError'),
+        copy('completeProtectedInteraction'),
+        true,
+        'hostClientError'
+      ))
     })
     void client.ui.getLocale().then((value) => {
       if (disposed || localeChanged) return
       localeRef.current = value
       dispatch({ type: 'locale', value })
     }).catch((error) => {
-      if (!disposed) pushNotice(classifyError(error, copy('hostClientError'), copy('completeProtectedInteraction'), true))
+      if (!disposed) pushNotice(classifyError(
+        error,
+        copy('hostClientError'),
+        copy('completeProtectedInteraction'),
+        true,
+        'hostClientError'
+      ))
     })
     return () => {
       disposed = true
@@ -176,9 +271,25 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
 
   useEffect(() => {
     let disposed = false
+    void client.media.getCapabilities().then((value) => {
+      if (!disposed) dispatch({ type: 'media-capabilities', value })
+    }).catch((error) => {
+      if (!disposed) pushNotice(classifyError(
+        error,
+        copy('mediaCapabilitiesUnavailable'),
+        copy('completeProtectedInteraction'),
+        true,
+        'mediaCapabilitiesUnavailable'
+      ))
+    })
+    return () => { disposed = true }
+  }, [client, copy, pushNotice])
+
+  useEffect(() => {
+    let disposed = false
     void (async () => {
       try {
-        const [restored, projects] = await Promise.all([
+        const [restored] = await Promise.all([
           client.ui.getViewState<JsonValue>(),
           loadProjects()
         ])
@@ -186,25 +297,32 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
         const persisted = persistedState(restored)
         dispatch({ type: 'initialized', ...(persisted ? { persisted } : {}) })
         await refreshJobs()
-        if (persisted?.projectId && projects.some(({ id }) => id === persisted.projectId)) {
-          await loadProject(persisted.projectId)
-        } else {
-          const active = await execute('project.active')
-          if (isRecord(active.project)) dispatch({ type: 'project', value: projectFrom(active, copy('invalidProjectProjection')) })
-        }
+        await loadActiveProject()
         await restoreRun(persisted?.activeRunId)
       } catch (error) {
         if (disposed) return
         dispatch({ type: 'initialized' })
         dispatch({ type: 'connection', value: 'offline' })
-        pushNotice(classifyError(error, copy('editorInitializeFailed'), copy('completeProtectedInteraction'), true))
+        pushNotice(classifyError(
+          error,
+          copy('editorInitializeFailed'),
+          copy('completeProtectedInteraction'),
+          true,
+          'editorInitializeFailed'
+        ))
       }
     })()
     return () => { disposed = true }
-  }, [client, copy, execute, loadProject, loadProjects, pushNotice, refreshJobs, restoreRun])
+  }, [client, copy, loadActiveProject, loadProjects, pushNotice, refreshJobs, restoreRun])
 
   useEffect(() => {
-    const errorSubscription = client.onDidError((error) => pushNotice(classifyError(error, copy('hostClientError'), copy('completeProtectedInteraction'), true)))
+    const errorSubscription = client.onDidError((error) => pushNotice(classifyError(
+      error,
+      copy('hostClientError'),
+      copy('completeProtectedInteraction'),
+      true,
+      'hostClientError'
+    )))
     const messageSubscription = client.ui.onDidReceiveMessage((message) => {
       if (message.channel === 'kun.extension.view.overflow') {
         void refreshAll()
@@ -213,13 +331,44 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
       if (message.channel === 'kun-video-editor.project-changed') {
         const change = projectChange(message.payload, copy('projectChanged'))
         if (change) dispatch({ type: 'project-change', value: change })
-        if (change && change.projectId === stateRef.current.project?.id) void loadProject(change.projectId)
+        if (
+          change &&
+          (change.projectId === stateRef.current.project?.id || change.reason === 'active-project-changed')
+        ) {
+          if (change.reason === 'active-project-changed') activeProjectResolutionGeneration.current += 1
+          void loadProject(change.projectId)
+        }
+        return
+      }
+      if (message.channel === 'kun-video-editor.active-project-changed') {
+        const change = projectChange(message.payload, copy('projectChanged'))
+        if (change) {
+          activeProjectResolutionGeneration.current += 1
+          dispatch({ type: 'project-change', value: change })
+          void loadProject(change.projectId)
+        }
+        return
+      }
+      if (message.channel === 'kun.resultPreview.open') {
+        const preview = ResultPreviewOpenPayloadSchema.safeParse(message.payload)
+        if (preview.success) {
+          dispatch({ type: 'result-preview', value: preview.data })
+          if (preview.data.result.mediaHandleId) {
+            void openMediaHandleRef.current?.(preview.data.result.mediaHandleId)
+          }
+        }
         return
       }
       if (message.channel === 'kun-video-editor.command-progress') {
         const progress = isRecord(message.payload) ? message.payload : {}
         if (typeof progress.message === 'string') {
-          pushNotice({ id: 'command-progress', severity: 'info', message: progress.message })
+          const key = COMMAND_PROGRESS_MESSAGE_KEYS[progress.message] ?? 'commandProgressGeneric'
+          pushNotice({
+            id: 'command-progress',
+            severity: 'info',
+            message: copy(key),
+            messageKey: key
+          })
         }
       }
     })
@@ -233,7 +382,13 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
     if (!state.initialized) return
     const timeout = setTimeout(() => {
       void client.ui.setViewState(toPersistedState(stateRef.current)).catch((error) => {
-        pushNotice(classifyError(error, copy('viewStateSaveFailed'), copy('completeProtectedInteraction'), true))
+        pushNotice(classifyError(
+          error,
+          copy('viewStateSaveFailed'),
+          copy('completeProtectedInteraction'),
+          true,
+          'viewStateSaveFailed'
+        ))
       })
     }, 180)
     return () => clearTimeout(timeout)
@@ -260,7 +415,13 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
           void loadProject(stateRef.current.project.id)
         }
       })
-    }).catch((error) => pushNotice(classifyError(error, copy('agentStreamDisconnected'), copy('completeProtectedInteraction'), true)))
+    }).catch((error) => pushNotice(classifyError(
+      error,
+      copy('agentStreamDisconnected'),
+      copy('completeProtectedInteraction'),
+      true,
+      'agentStreamDisconnected'
+    )))
     return () => {
       disposed = true
       void eventSubscription?.dispose()
@@ -278,10 +439,14 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
     const active = state.jobs.filter(({ state: jobState }) => !TERMINAL_JOB_STATES.has(jobState))
     const disposables: Array<{ dispose(): void | Promise<void> }> = []
     let disposed = false
+    let reconcileInFlight = false
     for (const job of active) {
       void client.jobs.subscribe({ jobId: job.id, afterCursor: job.latestCursor }).then((subscription) => {
         if (disposed) return void subscription.dispose()
         disposables.push(subscription)
+        // Register first: the SDK delivers buffered/replayed events synchronously
+        // from onEvent() and folds them into the subscription snapshot.
+        disposables.push(subscription.onEvent((event) => dispatch({ type: 'job-event', value: event })))
         dispatch({
           type: 'jobs',
           value: [
@@ -293,14 +458,51 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
           pushNotice({
             id: `job-gap-${job.id}`,
             severity: 'warning',
-            message: copy('jobProgressExpired')
+            message: copy('jobProgressExpired'),
+            messageKey: 'jobProgressExpired'
           })
         }
-        disposables.push(subscription.onEvent((event) => dispatch({ type: 'job-event', value: event })))
-      }).catch((error) => pushNotice(classifyError(error, `${copy('jobDisconnected')} ${job.id}`, copy('completeProtectedInteraction'), true)))
+      }).catch((error) => {
+        const values = { id: job.id }
+        pushNotice(classifyError(
+          error,
+          formatMessage(copy('jobDisconnected'), values),
+          copy('completeProtectedInteraction'),
+          true,
+          'jobDisconnected',
+          values
+        ))
+      })
     }
+    const reconcileTimer = active.length > 0
+      ? setInterval(() => {
+        if (disposed || reconcileInFlight) return
+        const tracked = stateRef.current.jobs.filter(({ state: jobState }) =>
+          !TERMINAL_JOB_STATES.has(jobState)
+        )
+        if (tracked.length === 0) return
+        reconcileInFlight = true
+        void Promise.all(tracked.map(async (job) => {
+          try {
+            return await client.jobs.get(job.id)
+          } catch {
+            // The live subscription remains the primary path. A transient status
+            // read must not disconnect it or spam the user with duplicate errors.
+            return job
+          }
+        })).then((snapshots) => {
+          if (disposed) return
+          const refreshed = new Map(snapshots.map((snapshot) => [snapshot.id, snapshot]))
+          dispatch({
+            type: 'jobs',
+            value: stateRef.current.jobs.map((job) => refreshed.get(job.id) ?? job)
+          })
+        }).finally(() => { reconcileInFlight = false })
+      }, JOB_STATUS_RECONCILE_INTERVAL_MS)
+      : undefined
     return () => {
       disposed = true
+      if (reconcileTimer !== undefined) clearInterval(reconcileTimer)
       for (const disposable of disposables) void disposable.dispose()
     }
   }, [activeJobsKey, client, copy, pushNotice, state.reconnectToken])
@@ -329,32 +531,55 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
         error,
         copy('editorOperationFailed'),
         copy('completeProtectedInteraction'),
-        isOpaqueHostError(error)
+        isOpaqueHostError(error) || error instanceof ExtensionApiError,
+        'editorOperationFailed'
       ))
     } finally {
       dispatch({ type: 'busy', value: false })
     }
   }, [copy, loadProject, pushNotice])
 
-  const createProject = useCallback(async (name: string, preset: CanvasPreset): Promise<void> => {
+  const createProject = useCallback(async (
+    name: string,
+    preset: CanvasPreset,
+    fps: { numerator: number; denominator: number } = { numerator: 30, denominator: 1 }
+  ): Promise<void> => {
     await withBusy(async () => {
       const normalized = name.trim().slice(0, 160)
       if (!normalized) throw new Error(copy('projectNameRequired'))
       const idBase = normalized.toLowerCase().replace(/[^a-z0-9._~-]+/gu, '-').replace(/^-|-$/gu, '') || 'video'
       const projectId = `${idBase.slice(0, 96)}-${Date.now().toString(36)}`
-      const content = await execute('project.create', { projectId, name: normalized, canvasPreset: preset })
-      dispatch({ type: 'project', value: projectFrom(content, copy('invalidProjectProjection')) })
+      const content = await execute('project.create', {
+        projectId,
+        name: normalized,
+        canvasPreset: preset,
+        fps
+      })
+      const created = projectFrom(content, copy('invalidProjectProjection'))
+      await loadProject(created.id)
       await loadProjects()
     })
-  }, [copy, execute, loadProjects, withBusy])
+  }, [copy, execute, loadProject, loadProjects, withBusy])
 
   const openProject = useCallback(async (projectId: string): Promise<void> => {
-    await withBusy(async () => { await loadProject(projectId) })
-  }, [loadProject, withBusy])
+    await withBusy(async () => {
+      await execute('project.select', { projectId })
+      await loadProject(projectId)
+    })
+  }, [execute, loadProject, withBusy])
 
   const importMedia = useCallback(async (): Promise<void> => {
     await withBusy(async () => {
       const project = requiredProject(stateRef.current, copy('openProjectFirst'))
+      if (stateRef.current.mediaCapabilities?.ffprobe.available === false) {
+        pushNotice({
+          id: 'ffprobe-unavailable',
+          severity: 'warning',
+          message: copy('ffprobeUnavailable'),
+          messageKey: 'ffprobeUnavailable'
+        })
+        return
+      }
       const selection = await client.media.pickFiles({
         multiple: true,
         maxFiles: 8,
@@ -365,21 +590,207 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
         }]
       })
       if (selection.outcome === 'cancelled') return
-      dispatch({ type: 'media', value: selection.files })
       let revision = project.currentRevision
-      for (const file of selection.files) {
-        const content = await execute('media.import', {
-          projectId: project.id,
-          expectedRevision: revision,
-          mediaHandleId: file.handleId,
-          addToTimeline: true
-        })
-        revision = safeInteger(content.currentRevision) ?? revision + 1
+      let attemptedIndex = -1
+      let importedCount = 0
+      try {
+        for (const [index, file] of selection.files.entries()) {
+          attemptedIndex = index
+          const content = await execute('media.import', {
+            projectId: project.id,
+            expectedRevision: revision,
+            mediaHandleId: file.handleId,
+            addToTimeline: true
+          })
+          if (content.outcome === 'unavailable') {
+            const messageKey: MessageKey = content.code === 'FFPROBE_UNAVAILABLE'
+              ? 'ffprobeUnavailable'
+              : 'mediaCapabilitiesUnavailable'
+            pushNotice({
+              id: 'media-import-unavailable',
+              severity: 'warning',
+              message: copy(messageKey),
+              messageKey
+            })
+            await Promise.all(selection.files.slice(index).map(({ handleId }) =>
+              client.media.release({ resource: 'handle', handleId }).catch(() => undefined)
+            ))
+            await loadProject(project.id)
+            await loadProjects()
+            return
+          }
+          if (content.outcome !== 'imported') throw new Error(copy('invalidHostResponse'))
+          const currentRevision = safeInteger(content.currentRevision)
+          if (currentRevision === undefined || currentRevision <= revision) {
+            throw new Error(copy('invalidHostResponse'))
+          }
+          revision = currentRevision
+          importedCount += 1
+          dispatch({ type: 'media', value: [file] })
+        }
+      } catch (error) {
+        const authoritative = await loadProject(project.id).catch(() => undefined)
+        const retainedHandles = new Set(authoritative?.assets
+          .map(({ mediaHandleId }) => mediaHandleId)
+          .filter((handleId): handleId is string => typeof handleId === 'string'))
+        const unattemptedStart = Math.max(0, attemptedIndex + 1)
+        const releasable = selection.files.filter(({ handleId }, index) =>
+          index >= unattemptedStart || (authoritative !== undefined && !retainedHandles.has(handleId))
+        )
+        await Promise.all(releasable.map(({ handleId }) =>
+          client.media.release({ resource: 'handle', handleId }).catch(() => undefined)
+        ))
+        if (importedCount > 0) {
+          const values = { count: importedCount }
+          pushNotice({
+            id: 'media-import-partial',
+            severity: 'warning',
+            message: formatMessage(copy('mediaImportPartial'), values),
+            messageKey: 'mediaImportPartial',
+            messageValues: values
+          })
+          await loadProjects().catch(() => undefined)
+        }
+        throw error
       }
       await loadProject(project.id)
       await loadProjects()
     })
-  }, [client, copy, execute, loadProject, loadProjects, withBusy])
+  }, [client, copy, execute, loadProject, loadProjects, pushNotice, withBusy])
+
+  const importTranscript = useCallback(async (): Promise<void> => {
+    await withBusy(async () => {
+      const project = requiredProject(stateRef.current, copy('openProjectFirst'))
+      const assetId = stateRef.current.selectedAssetId
+      if (!assetId || !project.assets.some(({ id }) => id === assetId)) {
+        throw new Error(copy('selectAssetForTranscript'))
+      }
+      const selection = await client.media.pickFiles({
+        multiple: false,
+        maxFiles: 1,
+        filters: [{
+          name: copy('chooseTranscript'),
+          extensions: ['srt', 'vtt', 'json'],
+          mimeTypes: ['application/x-subrip', 'text/vtt', 'application/json', 'text/plain']
+        }]
+      })
+      if (selection.outcome === 'cancelled') return
+      const file = selection.files[0]!
+      try {
+        const text = await client.media.readText({ handleId: file.handleId, maxBytes: 512 * 1024 })
+        const format = transcriptFormat(
+          text.displayName,
+          text.mimeType,
+          copy('unsupportedTranscriptFormat')
+        )
+        const content = await execute('transcript.import', {
+          projectId: project.id,
+          expectedRevision: project.currentRevision,
+          assetId,
+          transcriptId: `transcript-${Date.now().toString(36)}`,
+          mode: 'import',
+          format,
+          source: text.content
+        })
+        const values = { count: transcriptSegmentCount(content) }
+        pushNotice({
+          id: 'transcript-imported',
+          severity: 'info',
+          message: formatMessage(copy('transcriptImported'), values),
+          messageKey: 'transcriptImported',
+          messageValues: values
+        })
+        await loadProject(project.id)
+        await loadProjects()
+      } finally {
+        await client.media.release({ resource: 'handle', handleId: file.handleId }).catch(() => undefined)
+      }
+    })
+  }, [client, copy, execute, loadProject, loadProjects, pushNotice, withBusy])
+
+  const checkLocalTranscriber = useCallback(async (): Promise<void> => {
+    await withBusy(async () => {
+      const project = requiredProject(stateRef.current, copy('openProjectFirst'))
+      const assetId = stateRef.current.selectedAssetId
+      if (!assetId) throw new Error(copy('selectAssetForTranscript'))
+      const content = await execute('transcript.import', {
+        projectId: project.id,
+        expectedRevision: project.currentRevision,
+        assetId,
+        transcriptId: `transcript-check-${Date.now().toString(36)}`,
+        mode: 'local-asr'
+      })
+      pushNotice({
+        id: 'local-transcriber-status',
+        severity: content.outcome === 'unavailable' ? 'warning' : 'info',
+        message: content.outcome === 'unavailable'
+          ? copy('localTranscriberUnavailable')
+          : copy('localTranscriberAvailable'),
+        messageKey: content.outcome === 'unavailable'
+          ? 'localTranscriberUnavailable'
+          : 'localTranscriberAvailable'
+      })
+    })
+  }, [copy, execute, pushNotice, withBusy])
+
+  const generateCaptions = useCallback(async (): Promise<void> => {
+    await withBusy(async () => {
+      const project = requiredProject(stateRef.current, copy('openProjectFirst'))
+      const selectedAssetId = stateRef.current.selectedAssetId
+      const transcripts = selectedAssetId
+        ? project.transcripts.filter(({ assetId }) => assetId === selectedAssetId)
+        : project.transcripts
+      const captionTrack = project.tracks.find(({ kind }) => kind === 'caption')
+      if (!captionTrack || transcripts.length === 0) throw new Error(copy('transcriptRequiredForCaptions'))
+      const prefix = `caption-auto-${Date.now().toString(36)}`
+      const operations: TimelineOperation[] = []
+      for (const transcript of transcripts) {
+        const items = project.items.filter(({ assetId }) => assetId === transcript.assetId)
+        for (const segment of transcript.segments) {
+          for (const item of items) {
+            const startUs = Math.max(segment.startUs, item.sourceStartUs)
+            const endUs = Math.min(segment.endUs, item.sourceEndUs)
+            if (endUs <= startUs) continue
+            const startFrame = sourceUsToProjectFrame(project, item, startUs)
+            const endFrame = Math.max(startFrame + 1, sourceUsToProjectFrame(project, item, endUs))
+            operations.push({
+              type: 'add-caption',
+              caption: {
+                id: `${prefix}-${operations.length}`.slice(0, 128),
+                trackId: captionTrack.id,
+                startFrame,
+                endFrame,
+                text: segment.text,
+                placement: 'bottom'
+              }
+            })
+          }
+        }
+      }
+      if (operations.length === 0) throw new Error(copy('transcriptRequiredForCaptions'))
+      let revision = project.currentRevision
+      for (let offset = 0; offset < operations.length; offset += 200) {
+        const chunk = operations.slice(offset, offset + 200)
+        const content = await execute('project.update', {
+          projectId: project.id,
+          expectedRevision: revision,
+          operations: chunk as unknown as JsonValue,
+          summary: formatMessage(copy('generatedCaptionsSummary'), { count: chunk.length })
+        })
+        revision = safeInteger(content.currentRevision) ?? revision + 1
+      }
+      const values = { count: operations.length }
+      pushNotice({
+        id: 'captions-generated',
+        severity: 'info',
+        message: formatMessage(copy('generatedCaptions'), values),
+        messageKey: 'generatedCaptions',
+        messageValues: values
+      })
+      await loadProject(project.id)
+      await loadProjects()
+    })
+  }, [copy, execute, loadProject, loadProjects, pushNotice, withBusy])
 
   const openMediaHandle = useCallback(async (handleId: string): Promise<void> => {
     const existing = stateRef.current.leases[handleId]
@@ -396,7 +807,7 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
           await client.media.release({ resource: 'lease', leaseId: lease.leaseId }).catch(() => undefined)
         }
       }
-      const lease = await client.media.openViewResource({ handleId, contributionId: 'editor' })
+      const lease = await client.media.openViewResource({ handleId })
       ownedLeaseIds.current.add(lease.leaseId)
       dispatch({ type: 'lease', value: lease })
       dispatch({ type: 'active-media', handleId, url: lease.url })
@@ -405,12 +816,18 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
       throw error
     }
   }, [client])
+  openMediaHandleRef.current = openMediaHandle
 
   const openAsset = useCallback(async (assetId: string): Promise<void> => {
     const project = requiredProject(stateRef.current, copy('openProjectFirst'))
     const asset = project.assets.find(({ id }) => id === assetId)
     if (!asset?.mediaHandleId) {
-      pushNotice({ id: 'asset-unavailable', severity: 'warning', message: copy('assetUnavailable') })
+      pushNotice({
+        id: 'asset-unavailable',
+        severity: 'warning',
+        message: copy('assetUnavailable'),
+        messageKey: 'assetUnavailable'
+      })
       return
     }
     dispatch({ type: 'selection', assetId })
@@ -429,9 +846,52 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
     await withBusy(() => openMediaHandle(handleId))
   }, [client, openMediaHandle, withBusy])
 
-  const recoverMedia = useCallback(async (): Promise<void> => {
-    await importMedia()
-  }, [importMedia])
+  const recoverMedia = useCallback(async (requestedAssetId?: string): Promise<void> => {
+    await withBusy(async () => {
+      const project = requiredProject(stateRef.current, copy('openProjectFirst'))
+      const assetId = requestedAssetId ?? stateRef.current.selectedAssetId
+      const asset = project.assets.find(({ id }) => id === assetId)
+      if (!asset) throw new Error(copy('assetUnavailable'))
+      const selection = await client.media.pickFiles({
+        multiple: false,
+        maxFiles: 1,
+        filters: [{
+          name: copy('chooseReplacementMedia'),
+          extensions: asset.kind === 'video'
+            ? ['mp4', 'mov', 'mkv', 'webm']
+            : ['m4a', 'mp3', 'wav'],
+          mimeTypes: [`${asset.kind}/*`]
+        }]
+      })
+      if (selection.outcome === 'cancelled') return
+      const replacement = selection.files[0]!
+      dispatch({ type: 'media', value: [replacement] })
+      try {
+        await releaseAllLeases()
+        await execute('media.reauthorize', {
+          projectId: project.id,
+          expectedRevision: project.currentRevision,
+          assetId: asset.id,
+          mediaHandleId: replacement.handleId
+        })
+      } catch (error) {
+        await client.media.release({
+          resource: 'handle',
+          handleId: replacement.handleId
+        }).catch(() => undefined)
+        throw error
+      }
+      const values = { name: asset.name }
+      pushNotice({
+        id: `asset-reauthorized-${asset.id}`,
+        severity: 'info',
+        message: formatMessage(copy('mediaReauthorized'), values),
+        messageKey: 'mediaReauthorized',
+        messageValues: values
+      })
+      await loadProject(project.id)
+    })
+  }, [client, copy, execute, loadProject, pushNotice, releaseAllLeases, withBusy])
 
   const applyOperations = useCallback(async (operations: TimelineOperation[], summary: string): Promise<void> => {
     await withBusy(async () => {
@@ -476,8 +936,25 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
   ): Promise<void> => {
     await withBusy(async () => {
       const project = requiredProject(stateRef.current, copy('openProjectFirst'))
-      const script = stateRef.current.script
-      if (!script) throw new Error(copy('readScriptFirst'))
+      let script = stateRef.current.script
+      if (!script) {
+        const content = await execute('script.read', {
+          projectId: project.id,
+          expectedRevision: project.currentRevision
+        })
+        script = {
+          revision: safeInteger(content.currentRevision) ?? project.currentRevision,
+          digest: typeof content.digest === 'string' ? content.digest : '',
+          markdown: typeof content.timelineMarkdown === 'string' ? content.timelineMarkdown : '',
+          dirty: false
+        }
+        dispatch({
+          type: 'script',
+          revision: script.revision,
+          digest: script.digest,
+          markdown: script.markdown
+        })
+      }
       if (ranges.length === 0 || ranges.length > 2_000) throw new Error(copy('rangesRequired'))
       await execute('script.apply', {
         projectId: project.id,
@@ -486,10 +963,19 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
         ranges: ranges as unknown as JsonValue,
         summary: copy('scriptApplySummary')
       })
-      await loadProject(project.id)
-      await readScript()
+      const updated = await loadProject(project.id)
+      const content = await execute('script.read', {
+        projectId: updated.id,
+        expectedRevision: updated.currentRevision
+      })
+      dispatch({
+        type: 'script',
+        revision: safeInteger(content.currentRevision) ?? updated.currentRevision,
+        digest: typeof content.digest === 'string' ? content.digest : '',
+        markdown: typeof content.timelineMarkdown === 'string' ? content.timelineMarkdown : ''
+      })
     })
-  }, [copy, execute, loadProject, readScript, withBusy])
+  }, [copy, execute, loadProject, withBusy])
 
   const startAgent = useCallback(async (prompt: string): Promise<void> => {
     await withBusy(async () => {
@@ -534,44 +1020,97 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
   ): Promise<void> => {
     await withBusy(async () => {
       const project = requiredProject(stateRef.current, copy('openProjectFirst'))
-      const extension = kind === 'proof-frame' ? 'png' : kind === 'audio-aac' ? 'm4a' : 'mp4'
-      const mimeType = kind === 'proof-frame' ? 'image/png' : kind === 'audio-aac' ? 'audio/mp4' : 'video/mp4'
+      assertRenderCapabilities(stateRef.current, kind, captionMode, copy)
+      const extension = kind === 'proof-frame'
+        ? 'png'
+        : kind === 'audio-aac'
+          ? 'm4a'
+          : kind === 'subtitles'
+            ? subtitleFormat
+            : 'mp4'
+      const mimeType = kind === 'proof-frame'
+        ? 'image/png'
+        : kind === 'audio-aac'
+          ? 'audio/mp4'
+          : kind === 'subtitles'
+            ? subtitleFormat === 'srt' ? 'application/x-subrip' : 'text/vtt'
+            : 'video/mp4'
       const picked = await client.media.pickSaveTarget({
         suggestedName: `${project.id}-revision-${project.currentRevision}.${extension}`,
         filters: [{ name: copy('chooseRenderedMedia'), extensions: [extension], mimeTypes: [mimeType] }]
       })
       if (picked.outcome === 'cancelled') return
+      const selectedTargets = [picked.target]
+      const releaseSelectedTargets = async (): Promise<void> => {
+        await Promise.all(selectedTargets.map(({ handleId }) =>
+          client.media.release({ resource: 'handle', handleId }).catch(() => undefined)
+        ))
+      }
       let subtitleTarget: typeof picked.target | undefined
       if (captionMode === 'sidecar' || captionMode === 'both') {
-        const subtitle = await client.media.pickSaveTarget({
-          suggestedName: `${project.id}-revision-${project.currentRevision}.${subtitleFormat}`,
-          filters: [{
-            name: subtitleFormat === 'srt' ? copy('chooseSubRipCaptions') : copy('chooseWebVttCaptions'),
-            extensions: [subtitleFormat],
-            mimeTypes: [subtitleFormat === 'srt' ? 'application/x-subrip' : 'text/vtt']
-          }]
-        })
+        let subtitle
+        try {
+          subtitle = await client.media.pickSaveTarget({
+            suggestedName: `${project.id}-revision-${project.currentRevision}.${subtitleFormat}`,
+            filters: [{
+              name: subtitleFormat === 'srt' ? copy('chooseSubRipCaptions') : copy('chooseWebVttCaptions'),
+              extensions: [subtitleFormat],
+              mimeTypes: [subtitleFormat === 'srt' ? 'application/x-subrip' : 'text/vtt']
+            }]
+          })
+        } catch (error) {
+          await releaseSelectedTargets()
+          throw error
+        }
         if (subtitle.outcome === 'cancelled') {
-          await client.media.release({ resource: 'handle', handleId: picked.target.handleId }).catch(() => undefined)
+          await releaseSelectedTargets()
           return
         }
         subtitleTarget = subtitle.target
+        selectedTargets.push(subtitle.target)
       }
-      dispatch({ type: 'media', value: [picked.target, ...(subtitleTarget ? [subtitleTarget] : [])] })
-      const content = await execute('render.start', {
-        projectId: project.id,
-        expectedRevision: project.currentRevision,
-        kind,
-        outputHandleId: picked.target.handleId,
-        ...(kind === 'proof-frame' ? { proofFrame: stateRef.current.playheadFrame } : {}),
-        captionMode,
-        ...(subtitleTarget ? {
-          subtitleOutputHandleId: subtitleTarget.handleId,
-          subtitleFormat
-        } : {}),
-        idempotencyKey: `${project.id}-${project.currentRevision}-${kind}-${Date.now().toString(36)}`
-      })
-      if (typeof content.jobId !== 'string') throw new Error(copy('renderJobMissing'))
+      let content: Record<string, unknown>
+      try {
+        content = await execute('render.start', {
+          projectId: project.id,
+          expectedRevision: project.currentRevision,
+          kind,
+          outputHandleId: picked.target.handleId,
+          ...(kind === 'proof-frame' ? { proofFrame: stateRef.current.playheadFrame } : {}),
+          captionMode,
+          ...(kind === 'subtitles' ? { subtitleFormat } : {}),
+          ...(subtitleTarget ? {
+            subtitleOutputHandleId: subtitleTarget.handleId,
+            subtitleFormat
+          } : {}),
+          idempotencyKey: `${project.id}-${project.currentRevision}-${kind}-${Date.now().toString(36)}`
+        })
+      } catch (error) {
+        // An opaque transport failure may have happened after the durable job
+        // accepted these handles. Keep them alive so recovery/status can work.
+        if (!isOpaqueHostError(error)) await releaseSelectedTargets()
+        throw error
+      }
+      if (content.outcome === 'unavailable') {
+        await releaseSelectedTargets()
+        const messageKey = renderCapabilityMessageKey(content.code)
+        pushNotice({
+          id: 'render-capability-unavailable',
+          severity: 'warning',
+          message: copy(messageKey),
+          messageKey
+        })
+        return
+      }
+      if (content.outcome === 'cancelled') {
+        await releaseSelectedTargets()
+        return
+      }
+      if (content.outcome !== 'queued' || typeof content.jobId !== 'string') {
+        await releaseSelectedTargets()
+        throw new Error(copy('renderJobMissing'))
+      }
+      dispatch({ type: 'media', value: selectedTargets })
       const ticket: RenderTicket = {
         jobId: content.jobId,
         projectId: project.id,
@@ -583,18 +1122,32 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
       const snapshot = await client.jobs.get(ticket.jobId)
       dispatch({ type: 'jobs', value: [...stateRef.current.jobs, snapshot] })
     })
-  }, [client, copy, execute, withBusy])
+  }, [client, copy, execute, pushNotice, withBusy])
 
   const cancelJob = useCallback(async (jobId: string): Promise<void> => {
     await withBusy(async () => {
-      const result = await client.jobs.cancel({ jobId, reason: copy('renderCanceledByUser') })
-      dispatch({ type: 'jobs', value: stateRef.current.jobs.map((job) => job.id === jobId ? result.snapshot : job) })
+      const project = requiredProject(stateRef.current, copy('openProjectFirst'))
+      await execute('render.cancel', {
+        jobId,
+        projectId: project.id,
+        reason: copy('renderCanceledByUser')
+      })
+      const snapshot = await client.jobs.get(jobId)
+      dispatch({
+        type: 'jobs',
+        value: stateRef.current.jobs.map((job) => job.id === jobId ? snapshot : job)
+      })
     })
-  }, [client, copy, withBusy])
+  }, [client, copy, execute, withBusy])
 
   const openArtifact = useCallback(async (artifact: GeneratedArtifact): Promise<void> => {
     if (artifact.availability !== 'available') {
-      pushNotice({ id: `artifact-${artifact.artifactId}`, severity: 'warning', message: copy('artifactUnavailable') })
+      pushNotice({
+        id: `artifact-${artifact.artifactId}`,
+        severity: 'warning',
+        message: copy('artifactUnavailable'),
+        messageKey: 'artifactUnavailable'
+      })
       return
     }
     if (artifactUsesPlayer(artifact)) {
@@ -611,7 +1164,8 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
       pushNotice({
         id: `artifact-${artifact.artifactId}`,
         severity: 'warning',
-        message: copy('artifactUnavailable')
+        message: copy('artifactUnavailable'),
+        messageKey: 'artifactUnavailable'
       })
       return
     }
@@ -626,6 +1180,9 @@ export function useEditorController(client: ExtensionHostClient): EditorControll
     createProject,
     openProject,
     importMedia,
+    importTranscript,
+    checkLocalTranscriber,
+    generateCaptions,
     openAsset,
     refreshActiveLease,
     recoverMedia,
@@ -661,16 +1218,23 @@ export function classifyError(
   error: unknown,
   fallback: string,
   interactionGuidance = 'Complete the protected desktop interaction and retry.',
-  preferFallback = false
+  preferFallback = false,
+  fallbackKey?: MessageKey,
+  fallbackValues?: Readonly<Record<string, string | number>>
 ): Omit<EditorNotice, 'id'> {
   const api = error instanceof ExtensionApiError ? error : undefined
   const code = api?.code ?? (isRecord(error) && typeof error.code === 'string' ? error.code : '')
   const rawMessage = error instanceof Error && error.message ? error.message.slice(0, 1_000) : ''
-  const message = preferFallback || !rawMessage ? fallback : rawMessage
+  const usesFallback = preferFallback || !rawMessage
+  const message = usesFallback ? fallback : rawMessage
   const interactionRequired = /INTERACTION_REQUIRED|interaction.required/iu.test(code) || /interaction required/iu.test(rawMessage)
   return {
     severity: interactionRequired ? 'warning' : 'error',
     message: interactionRequired ? `${message} ${interactionGuidance}` : message,
+    ...(usesFallback && fallbackKey ? {
+      messageKey: fallbackKey,
+      ...(fallbackValues ? { messageValues: fallbackValues } : {})
+    } : {}),
     interactionRequired,
     retryable: api?.retryable ?? true
   }
@@ -742,7 +1306,7 @@ function isProjectSummary(value: unknown): value is ProjectSummary {
 }
 
 function isRenderKind(value: unknown): value is RenderTicket['renderKind'] {
-  return ['proof-frame', 'preview', 'h264-mp4', 'audio-aac'].includes(String(value))
+  return ['proof-frame', 'preview', 'h264-mp4', 'audio-aac', 'subtitles'].includes(String(value))
 }
 
 function isRenderTicket(value: unknown): value is RenderTicket {
@@ -778,6 +1342,73 @@ function isOpaqueHostError(error: unknown): boolean {
 function agentEventChangesProject(event: AgentRunEvent): boolean {
   if (event.type !== 'message' && event.type !== 'progress') return false
   return JSON.stringify(event).includes('currentRevision') || JSON.stringify(event).includes('project-changed')
+}
+
+function transcriptFormat(
+  displayName: string,
+  mimeType: string,
+  unsupportedMessage: string
+): 'srt' | 'vtt' | 'json' {
+  const normalized = displayName.toLowerCase()
+  if (normalized.endsWith('.srt') || mimeType === 'application/x-subrip') return 'srt'
+  if (normalized.endsWith('.vtt') || mimeType === 'text/vtt') return 'vtt'
+  if (normalized.endsWith('.json') || mimeType === 'application/json') return 'json'
+  throw new Error(unsupportedMessage)
+}
+
+function transcriptSegmentCount(content: Record<string, unknown>): number {
+  const details = isRecord(content.details) ? content.details : undefined
+  return details && Number.isSafeInteger(details.segmentCount)
+    ? Number(details.segmentCount)
+    : Array.isArray(details?.segments)
+      ? details.segments.length
+      : 0
+}
+
+function sourceUsToProjectFrame(
+  project: ProjectProjection,
+  item: ProjectProjection['items'][number],
+  sourceUs: number
+): number {
+  const sourceDeltaUs = Math.max(0, sourceUs - item.sourceStartUs)
+  const frameDelta = sourceDeltaUs * project.fps.numerator * item.speed.denominator /
+    (1_000_000 * project.fps.denominator * item.speed.numerator)
+  return item.timelineStartFrame + Math.round(frameDelta)
+}
+
+function assertRenderCapabilities(
+  state: EditorState,
+  kind: RenderTicket['renderKind'],
+  captionMode: 'none' | 'burned' | 'sidecar' | 'both',
+  copy: (key: MessageKey, values?: Readonly<Record<string, string | number>>) => string
+): void {
+  const capabilities = state.mediaCapabilities
+  if ((kind === 'subtitles' || captionMode !== 'none') && !state.project?.captions.length) {
+    throw new Error(copy('captionsRequiredForExport'))
+  }
+  if (!capabilities?.ffprobe.available) throw new Error(copy('ffprobeUnavailable'))
+  if (kind !== 'subtitles' && !capabilities.ffmpeg.available) throw new Error(copy('ffmpegUnavailable'))
+  const features = new Set(capabilities.ffmpeg.features)
+  if ((kind === 'preview' || kind === 'h264-mp4') && !features.has('libx264-encoder')) {
+    throw new Error(copy('h264EncoderUnavailable'))
+  }
+  if ((kind === 'audio-aac' || kind === 'h264-mp4') && !features.has('aac-encoder')) {
+    throw new Error(copy('aacEncoderUnavailable'))
+  }
+  if ((captionMode === 'burned' || captionMode === 'both') && !features.has('drawtext-filter')) {
+    throw new Error(copy('burnedCaptionsUnavailable'))
+  }
+}
+
+function renderCapabilityMessageKey(code: unknown): MessageKey {
+  switch (code) {
+    case 'FFPROBE_UNAVAILABLE': return 'ffprobeUnavailable'
+    case 'FFMPEG_UNAVAILABLE': return 'ffmpegUnavailable'
+    case 'LIBX264_ENCODER_UNAVAILABLE': return 'h264EncoderUnavailable'
+    case 'AAC_ENCODER_UNAVAILABLE': return 'aacEncoderUnavailable'
+    case 'DRAWTEXT_FILTER_UNAVAILABLE': return 'burnedCaptionsUnavailable'
+    default: return 'mediaCapabilitiesUnavailable'
+  }
 }
 
 export function artifactsForJobs(jobs: readonly JobSnapshot[]): GeneratedArtifact[] {

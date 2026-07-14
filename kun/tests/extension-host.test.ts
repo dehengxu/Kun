@@ -597,12 +597,14 @@ export async function migrateState(state, context) {
       const deniedActivation = manager.activate('acme.concurrent-trust', 'onStartup', {
         workspaceRoot: deniedRoot
       })
+      const deniedOutcome = expect(deniedActivation).rejects.toMatchObject({
+        code: 'EXTENSION_WORKSPACE_UNTRUSTED'
+      })
+      await eventually(() => expect(resolvedKeys).toEqual([trustedKey, deniedKey]))
       releaseTrusted()
 
       await expect(trustedActivation).resolves.toBeUndefined()
-      await expect(deniedActivation).rejects.toMatchObject({
-        code: 'EXTENSION_WORKSPACE_UNTRUSTED'
-      })
+      await deniedOutcome
       expect(resolvedKeys).toEqual([trustedKey, deniedKey])
       await manager.shutdown()
     } finally {
@@ -714,6 +716,92 @@ export async function migrateState(state, context) {
       await expect(manager.diagnostic('acme.pending-invalidation')).resolves.toMatchObject({
         active: false
       })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('deactivates only the Host admitted for the revoked workspace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-extension-manager-workspace-stop-'))
+    try {
+      const runnerPath = await writeFixtureRunner(root)
+      const extension = await writeResolvedExtension(root, 'acme.workspace-stop')
+      const paths = new ExtensionPaths({
+        packageRoot: join(root, 'extensions'),
+        dataRoot: join(root, 'data')
+      })
+      const workspaceA = join(root, 'workspace-a')
+      const workspaceB = join(root, 'workspace-b')
+      const manager = new ExtensionManager({
+        packageManager: fixturePackageManager(new Map([[extension.id, extension]])),
+        paths,
+        runnerPath,
+        hostLimits: { operationTimeoutMs: 1_000, shutdownTimeoutMs: 500 }
+      })
+
+      await Promise.all([
+        manager.activate(extension.id, 'onCommand:demo-run', { workspaceRoot: workspaceA }),
+        manager.activate(extension.id, 'onCommand:demo-run', { workspaceRoot: workspaceB })
+      ])
+      const generationB = manager.activeHostGeneration(extension.id, { workspaceRoot: workspaceB })
+      expect(manager.activeHostGeneration(extension.id, { workspaceRoot: workspaceA })).toBeTruthy()
+      expect(generationB).toBeTruthy()
+
+      await manager.deactivateWorkspace(extension.id, paths.workspaceKey(workspaceA))
+
+      expect(manager.activeHostGeneration(extension.id, { workspaceRoot: workspaceA })).toBeUndefined()
+      expect(manager.activeHostGeneration(extension.id, { workspaceRoot: workspaceB })).toBe(generationB)
+      await expect(manager.notify(extension.id, 'ui.message', null, { workspaceRoot: workspaceA }))
+        .rejects.toMatchObject({ code: 'EXTENSION_NOT_ACTIVE' })
+      await expect(manager.notify(extension.id, 'ui.message', null, { workspaceRoot: workspaceB }))
+        .resolves.toBeUndefined()
+      await manager.shutdown()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('invalidates only the pending activation for the revoked workspace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-extension-manager-workspace-pending-stop-'))
+    try {
+      const extension = await writeResolvedExtension(root, 'acme.workspace-pending-stop', {
+        activationEvents: ['onStartup'],
+        browserOnly: true
+      })
+      const paths = new ExtensionPaths({
+        packageRoot: join(root, 'extensions'),
+        dataRoot: join(root, 'data')
+      })
+      const workspaceA = join(root, 'workspace-a')
+      const workspaceB = join(root, 'workspace-b')
+      const gates = new Map<string, () => void>()
+      const packageManager = {
+        async resolveForActivation(_extensionId: string, workspaceKey?: string) {
+          await new Promise<void>((resolvePromise) => {
+            gates.set(workspaceKey!, resolvePromise)
+          })
+          return extension
+        },
+        admitManifest: (manifest: ResolvedExtension['manifest']) =>
+          manifestCompatibilityReport(manifest, hostCompatibility),
+        async compatibilityReportForExtension() {
+          return admissionFor(extension)
+        }
+      } as unknown as ExtensionPackageManager
+      const manager = new ExtensionManager({ packageManager, paths })
+      const keyA = paths.workspaceKey(workspaceA)
+      const keyB = paths.workspaceKey(workspaceB)
+      const activationA = manager.activate(extension.id, 'onStartup', { workspaceRoot: workspaceA })
+      const activationB = manager.activate(extension.id, 'onStartup', { workspaceRoot: workspaceB })
+      await eventually(() => expect([...gates.keys()].sort()).toEqual([keyA, keyB].sort()))
+
+      await manager.deactivateWorkspace(extension.id, keyA)
+      gates.get(keyA)!()
+      gates.get(keyB)!()
+
+      await expect(activationA).rejects.toMatchObject({ code: 'EXTENSION_ACTIVATION_CANCELLED' })
+      await expect(activationB).resolves.toBeUndefined()
+      await manager.shutdown()
     } finally {
       await rm(root, { recursive: true, force: true })
     }

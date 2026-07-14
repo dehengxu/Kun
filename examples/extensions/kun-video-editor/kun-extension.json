@@ -4,9 +4,84 @@
   "apiVersion": "1.1.0",
   "name": "kun-video-editor",
   "publisher": "kun-examples",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "displayName": "Kun Video Editor",
   "description": "Local transcript-oriented editing for talking-head, interview, and podcast media.",
+  "localizations": {
+    "zh": {
+      "displayName": "Kun 视频编辑器",
+      "description": "面向口播、访谈和播客媒体的本地转录文本剪辑工具。",
+      "contributes": {
+        "commands": {
+          "editor-request": {
+            "title": "视频编辑器请求",
+            "category": "视频",
+            "description": "Kun 视频编辑器视图使用的私有、有边界的 RPC。"
+          }
+        },
+        "views.rightSidebar": {
+          "editor": { "title": "Kun 视频编辑器" }
+        },
+        "message.resultPreviews": {
+          "render-preview": { "title": "视频渲染结果" }
+        },
+        "settings": {
+          "video-editor": {
+            "title": "Kun 视频编辑器",
+            "properties": {
+              "defaultRenderPreset": {
+                "title": "默认渲染预设",
+                "description": "新渲染任务使用的默认类型。"
+              },
+              "defaultCaptionMode": {
+                "title": "默认字幕模式",
+                "description": "媒体渲染任务默认使用的字幕处理方式。"
+              },
+              "localTranscriber": {
+                "title": "本地转录器",
+                "description": "仅使用本地 ASR；没有可用的本地 Broker 时会明确报告不可用。"
+              }
+            }
+          }
+        },
+        "agentProfiles": {
+          "video-editor": {
+            "title": "视频编辑器",
+            "description": "用于口播、访谈和播客项目的私有本地转录文本剪辑 Agent。"
+          }
+        },
+        "tools": {
+          "video-project": {
+            "description": "解析当前项目、列出项目、以只读方式获取项目，或显式创建、选择工作区中的权威项目。任何编辑前都必须读取当前版本。"
+          },
+          "video-probe": {
+            "description": "导入或检测由 Host 授权的媒体句柄，持久化规范化的素材元数据，并可选请求缩略图或波形任务。绝不接受文件路径。"
+          },
+          "video-transcribe": {
+            "description": "为素材导入有边界的带时间戳逐字稿；本地 ASR 不可用时如实报告，不编造文本，也不上传媒体。"
+          },
+          "video-read-script": {
+            "description": "读取与确定版本绑定的 timeline.md 投影，用于逐字稿优先的审阅。"
+          },
+          "video-apply-script": {
+            "description": "对未变更且绑定版本的 timeline.md 投影，作为单个事务应用明确的带时间源范围 Agent 剪辑。"
+          },
+          "video-update-timeline": {
+            "description": "在预期版本上应用有边界的类型化时间线、字幕、变换、轨道放置或画布操作。"
+          },
+          "video-render": {
+            "description": "启动由 Broker 持久处理的校样、预览、音频或 H.264 导出任务；可选烧录字幕及导出 SRT/VTT 外挂字幕，并绑定项目版本和不透明输出授权。"
+          },
+          "video-render-status": {
+            "description": "无副作用地读取一个自有持久化渲染任务，仅返回与项目匹配且已通过技术校验的生成产物。"
+          },
+          "video-render-cancel": {
+            "description": "验证可选的项目身份后，取消一个自有、受跟踪的持久化视频渲染任务。"
+          }
+        }
+      }
+    }
+  },
   "license": "MIT",
   "engines": { "kun": ">=0.1.0" },
   "main": "dist/host/extension.js",
@@ -23,7 +98,8 @@
     "onTool:video-apply-script",
     "onTool:video-update-timeline",
     "onTool:video-render",
-    "onTool:video-render-status"
+    "onTool:video-render-status",
+    "onTool:video-render-cancel"
   ],
   "contributes": {
     "commands": [
@@ -41,6 +117,7 @@
                 "project.list",
                 "project.active",
                 "project.get",
+                "project.select",
                 "project.create",
                 "project.update",
                 "project.undo",
@@ -48,9 +125,12 @@
                 "script.read",
                 "script.apply",
                 "media.import",
+                "media.reauthorize",
                 "transcript.import",
+                "render.list",
                 "render.start",
-                "render.status"
+                "render.status",
+                "render.cancel"
               ]
             },
             "payload": { "type": "object" }
@@ -99,18 +179,21 @@
             "type": "string",
             "enum": ["proof-frame", "preview", "h264-mp4", "audio-aac"],
             "default": "preview",
+            "title": "Default render preset",
             "description": "Default render kind."
           },
           "defaultCaptionMode": {
             "type": "string",
             "enum": ["none", "burned", "sidecar", "both"],
             "default": "none",
+            "title": "Default caption mode",
             "description": "Default caption behavior for brokered media renders."
           },
           "localTranscriber": {
             "type": "string",
             "enum": ["disabled", "whisper-cli"],
             "default": "disabled",
+            "title": "Local transcriber",
             "description": "Local-only ASR preference. API v1.1 imports timed transcripts and reports unavailable when no supported local broker exists."
           }
         }
@@ -121,7 +204,7 @@
         "id": "video-editor",
         "title": "Video Editor",
         "description": "Private local transcript-first editing Agent for talking-head, interview, and podcast projects.",
-        "instructions": "You are the private Kun Video Editor Agent for local transcript-oriented editing of talking-head, interview, and podcast projects.\n\nBefore writing, ask for or confirm the creative goal, audience, target duration, aspect ratio, caption preference, and whether the user wants a review checkpoint or an export.\n\nFirst call video-project with action active to resolve the project currently selected in the right-sidebar editor. If there is no active project, ask the user to select or create one. Then call video-project with action get and video-read-script to read the current revision before a mutation. Treat revision conflicts as a request to refresh; never guess a merge.\n\nEdit structure first: remove only explicitly identified timed ranges, order the story, and keep source media immutable. Add captions, composition, or decoration only when requested.\n\nDo not introduce unrequested music, B-roll, stock media, generative video or images, motion graphics, face tracking, or subject-aware reframing.\n\nThis MVP has transcript and timing evidence, not arbitrary visual-scene understanding. Never infer unseen actions or claim visual inspection from transcript text or a successful command.\n\nUse proof-frame or preview renders to create an inspectable review artifact. Distinguish FFmpeg/ffprobe technical validation from actual visual review, and report stale proof when the project revision changed.\n\nStop at an editable review checkpoint unless export was requested. For export, pin the current revision and preset, observe the durable job with video-render-status, and surface cancellation or invalid artifacts honestly.\n\nProtected media import and save-target selection require a Kun desktop interaction unless the caller already supplies valid opaque handles. In headless mode, return interaction-required instead of choosing a path or fabricating approval.",
+        "instructions": "You are the private Kun Video Editor Agent for local transcript-oriented editing of talking-head, interview, and podcast projects. Respond in the user's current language unless the user explicitly asks for another language.\n\nBefore writing, ask for or confirm the creative goal, audience, target duration, aspect ratio, caption preference, and whether the user wants a review checkpoint or an export.\n\nFirst call video-project with action active to resolve the project currently selected in the right-sidebar editor. If there is no active project, ask the user to select or create one. Call video-project with action select only when the user explicitly changes the active project. Then call video-project with action get and video-read-script to read the current revision before a mutation. Treat revision conflicts as a request to refresh; never guess a merge.\n\nEdit structure first: remove only explicitly identified timed ranges, order the story, and keep source media immutable. Add captions, composition, or decoration only when requested.\n\nDo not introduce unrequested music, B-roll, stock media, generative video or images, motion graphics, face tracking, or subject-aware reframing.\n\nThis MVP has transcript and timing evidence, not arbitrary visual-scene understanding. Never infer unseen actions or claim visual inspection from transcript text or a successful command.\n\nUse proof-frame or preview renders to create an inspectable review artifact. Distinguish FFmpeg/ffprobe technical validation from actual visual review, and report stale proof when the project revision changed.\n\nStop at an editable review checkpoint unless export was requested. For export, pin the current revision and preset, poll the durable job with the read-only video-render-status tool, and use video-render-cancel only for an explicit cancellation request. Surface cancellation or invalid artifacts honestly.\n\nProtected media import and save-target selection require a Kun desktop interaction unless the caller already supplies valid opaque handles. In headless mode, return interaction-required instead of choosing a path or fabricating approval.",
         "allowedTools": [
           "video-project",
           "video-probe",
@@ -130,7 +213,8 @@
           "video-apply-script",
           "video-update-timeline",
           "video-render",
-          "video-render-status"
+          "video-render-status",
+          "video-render-cancel"
         ],
         "budget": {
           "maxTokens": 32768,
@@ -145,11 +229,11 @@
     "tools": [
       {
         "id": "video-project",
-        "description": "Resolve the active project, or list, create, or read a bounded revision-aware Kun video project projection. Read the current revision before any edit.",
+        "description": "Resolve the active project, list projects, purely read one project, or explicitly create/select the authoritative workspace project. Read the current revision before any edit.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "action": { "type": "string", "enum": ["active", "list", "get", "create"] },
+            "action": { "type": "string", "enum": ["active", "list", "get", "create", "select"] },
             "projectId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$" },
             "name": { "type": "string", "minLength": 1, "maxLength": 160 },
             "fps": { "type": "object" },
@@ -274,7 +358,7 @@
           "properties": {
             "projectId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$" },
             "expectedRevision": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-            "kind": { "type": "string", "enum": ["proof-frame", "preview", "h264-mp4", "audio-aac"] },
+                "kind": { "type": "string", "enum": ["proof-frame", "preview", "h264-mp4", "audio-aac", "subtitles"] },
             "outputHandleId": { "type": "string", "minLength": 16, "maxLength": 512, "pattern": "^[A-Za-z0-9_-]+$" },
             "proofFrame": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
             "captionMode": { "type": "string", "enum": ["none", "burned", "sidecar", "both"] },
@@ -292,15 +376,32 @@
       },
       {
         "id": "video-render-status",
-        "description": "Inspect or cancel one owned durable render job and return only technically validated generated artifacts.",
+        "description": "Read one owned durable render job without side effects and return only project-matched, technically validated generated artifacts.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "jobId": { "type": "string", "minLength": 8, "maxLength": 512 },
-            "action": { "type": "string", "enum": ["get", "cancel"] },
+            "projectId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$" }
+          },
+          "required": ["jobId"],
+          "additionalProperties": false
+        },
+        "outputSchema": { "type": "object", "properties": { "outcome": { "type": "string", "minLength": 1, "maxLength": 64 } }, "required": ["outcome"], "additionalProperties": true },
+        "sideEffects": "read",
+        "idempotent": true,
+        "maxOutputBytes": 131072
+      },
+      {
+        "id": "video-render-cancel",
+        "description": "Cancel one owned, tracked durable video render after verifying its optional project identity.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "jobId": { "type": "string", "minLength": 8, "maxLength": 512 },
+            "projectId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$" },
             "reason": { "type": "string", "minLength": 1, "maxLength": 512 }
           },
-          "required": ["jobId", "action"],
+          "required": ["jobId"],
           "additionalProperties": false
         },
         "outputSchema": { "type": "object", "properties": { "outcome": { "type": "string", "minLength": 1, "maxLength": 64 } }, "required": ["outcome"], "additionalProperties": true },

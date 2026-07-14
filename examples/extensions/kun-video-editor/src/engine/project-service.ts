@@ -10,7 +10,7 @@ import {
   rm
 } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { engineError } from './errors.js'
+import { VideoEngineError, engineError, type VideoEngineErrorCode } from './errors.js'
 import {
   MAX_PROJECT_HISTORY,
   PROJECT_SCHEMA_VERSION,
@@ -46,6 +46,16 @@ export type ProjectSummary = {
   currentRevision: number
   updatedAt: string
   durationFrames: number
+}
+
+export type ProjectDiagnostic = {
+  id: string
+  code: VideoEngineErrorCode
+}
+
+export type ProjectListResult = {
+  projects: ProjectSummary[]
+  diagnostics: ProjectDiagnostic[]
 }
 
 export type ProjectServiceOptions = {
@@ -166,13 +176,27 @@ export class ProjectService {
   }
 
   async listProjects(): Promise<ProjectSummary[]> {
+    return (await this.listProjectsWithDiagnostics()).projects
+  }
+
+  async listProjectsWithDiagnostics(): Promise<ProjectListResult> {
     await this.ensureDataRoot()
     const projectsRoot = this.projectsRoot()
     const entries = await readdir(projectsRoot, { withFileTypes: true })
     const summaries: ProjectSummary[] = []
+    const diagnostics: ProjectDiagnostic[] = []
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
       if (!entry.isDirectory() || !isProjectId(entry.name)) continue
-      const project = await this.loadProject(entry.name)
+      let project: VideoProject
+      try {
+        project = await this.loadProject(entry.name)
+      } catch (error) {
+        diagnostics.push({
+          id: entry.name,
+          code: error instanceof VideoEngineError ? error.code : 'invalid_project'
+        })
+        continue
+      }
       summaries.push({
         id: project.id,
         name: project.name,
@@ -184,9 +208,12 @@ export class ProjectService {
         )
       })
     }
-    return summaries.sort((left, right) =>
-      right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id)
-    )
+    return {
+      projects: summaries.sort((left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id)
+      ),
+      diagnostics
+    }
   }
 
   async saveProject(

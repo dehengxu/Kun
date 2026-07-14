@@ -55,6 +55,72 @@ describe('extension public routes', () => {
     // Backend declarations are intentionally omitted from renderer discovery.
     expect(response.body.extensions[0].contributes.tools).toEqual([])
     expect(response.body.extensions[0].contributes.modelProviders).toEqual([])
+
+    const untrusted = await dispatchJson(
+      router,
+      'GET',
+      '/v1/extensions/workbench?workspace_root=%2Funtrusted&locale=zh-CN',
+      undefined,
+      runtimeHeaders()
+    )
+    expect(untrusted.status).toBe(200)
+    expect(untrusted.body.extensions).toHaveLength(1)
+    expect(untrusted.body.extensions[0]).toMatchObject({
+      id: 'acme.dashboard',
+      workspaceTrusted: false,
+      grantedPermissions: [],
+      rightRailDiscovery: {
+        views: [{ id: 'panel', title: '仪表盘' }],
+        containers: []
+      }
+    })
+    expect(untrusted.body.extensions[0].rightRailDiscovery.views[0]).not.toHaveProperty('entry')
+    expect(untrusted.body.extensions[0].contributes.commands).toEqual([])
+    expect(untrusted.body.extensions[0].contributes['views.rightSidebar']).toEqual([])
+  })
+
+  it('localizes bounded workbench display fields with base-manifest fallback', async () => {
+    const fixture = await createFixture()
+    const router = buildExtensionPublicRouter(fixture.runtime)
+    const localized = await dispatchJson(
+      router,
+      'GET',
+      '/v1/extensions/workbench?locale=zh-CN',
+      undefined,
+      runtimeHeaders()
+    )
+    expect(localized.status).toBe(200)
+    expect(localized.body.extensions[0].contributes.commands[0]).toMatchObject({
+      id: 'refresh',
+      title: '刷新面板'
+    })
+    expect(localized.body.extensions[0].contributes['views.rightSidebar'][0]).toMatchObject({
+      id: 'panel',
+      title: '仪表盘'
+    })
+    expect(localized.body.extensions[0].contributes.settings[0]).toMatchObject({
+      id: 'general',
+      title: '通用',
+      properties: {
+        mode: { title: '模式', description: '选择处理模式。' }
+      }
+    })
+
+    const unsupported = await dispatchJson(
+      router,
+      'GET',
+      '/v1/extensions/workbench?locale=fr-FR',
+      undefined,
+      runtimeHeaders()
+    )
+    expect(unsupported.body.extensions[0].contributes['views.rightSidebar'][0].title).toBe('Dashboard')
+    expect((await dispatchJson(
+      router,
+      'GET',
+      '/v1/extensions/workbench?locale=not_a_locale',
+      undefined,
+      runtimeHeaders()
+    )).status).toBe(400)
   })
 
   it('projects real compatibility reports instead of admitting future API minors to workbench', async () => {
@@ -1321,6 +1387,23 @@ async function createFixture(options: { maxEvents?: number; apiVersion?: string 
     publisher: 'acme',
     name: 'dashboard',
     displayName: 'Dashboard',
+    localizations: {
+      'zh-CN': {
+        displayName: '仪表盘',
+        contributes: {
+          commands: { refresh: { title: '刷新面板' } },
+          'views.rightSidebar': { panel: { title: '仪表盘' } },
+          settings: {
+            general: {
+              title: '通用',
+              properties: {
+                mode: { title: '模式', description: '选择处理模式。' }
+              }
+            }
+          }
+        }
+      }
+    },
     version: '1.0.0',
     manifestVersion: 1,
     apiVersion: options.apiVersion ?? '1.0.0',
@@ -1397,7 +1480,8 @@ async function createFixture(options: { maxEvents?: number; apiVersion?: string 
   await registry.setWorkspacePermissionGrant(
     'acme.dashboard',
     paths.workspaceKey('/workspace'),
-    permissions
+    permissions,
+    development.manifest.version
   )
 
   const viewSessions = new ExtensionViewSessionService({

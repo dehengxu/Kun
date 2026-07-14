@@ -68,6 +68,7 @@ import {
 } from './providers.js'
 import {
   MediaMetadataSchema,
+  MediaCapabilitiesSchema,
   MediaOpenViewResourceRequestSchema,
   MediaPickFilesRequestSchema,
   MediaPickFilesResultSchema,
@@ -75,6 +76,8 @@ import {
   MediaPickSaveTargetResultSchema,
   MediaProbeRequestSchema,
   MediaProbeResultSchema,
+  MediaReadTextRequestSchema,
+  MediaReadTextResultSchema,
   MediaReleaseRequestSchema,
   MediaReleaseResultSchema,
   MediaResourceLeaseSchema,
@@ -607,6 +610,13 @@ export class ExtensionHostClient implements Disposable {
         ),
       stat: (request) =>
         requestParsed(transport, 'media.stat', MediaStatRequestSchema.parse(request), MediaMetadataSchema),
+      readText: (request) =>
+        requestParsed(
+          transport,
+          'media.readText',
+          MediaReadTextRequestSchema.parse(request),
+          MediaReadTextResultSchema
+        ),
       release: (request) =>
         requestParsed(
           transport,
@@ -628,6 +638,8 @@ export class ExtensionHostClient implements Disposable {
           ArtifactHostActionRequestSchema.parse(request),
           ArtifactHostActionResultSchema
         ),
+      getCapabilities: () =>
+        requestParsed(transport, 'media.getCapabilities', {}, MediaCapabilitiesSchema),
       probe: (request) =>
         requestParsed(
           transport,

@@ -13,7 +13,7 @@ The Extension Platform is not yet through its final public-release sign-off, but
 - Let an explicitly trusted extension select, inspect, play, process, and export large local media without placing media bytes in JSON IPC, tool history, or extension state.
 - Keep file paths, media URLs, View sessions, jobs, and generated artifacts extension/workspace-owned and revocable.
 - Give long media operations durable progress, cancellation, terminal fencing, diagnostics, and restart reconciliation.
-- Provide a runnable first-party `.kunx` video editor with a full-page UI, frame-native timeline, transcript workflow, Agent profile/tools, subtitles, aspect presets, proof frames, and local FFmpeg export.
+- Provide a runnable first-party `.kunx` video editor with a right-sidebar UI, frame-native timeline, transcript workflow, Agent profile/tools, subtitles, aspect presets, proof frames, and local FFmpeg export.
 - Ship the video editor out of the box while keeping the installed bytes, lifecycle, permission model, and source tree identical to a normal third-party `.kunx` example.
 - Preserve Kun's one-runtime, approval, workspace trust, cache-stable tool catalog, and headless invariants.
 - Make the new public surface useful to future audio, image-sequence, dataset, and document-rendering extensions rather than hard-coding only one plugin.
@@ -99,13 +99,14 @@ The manifest contributes a private `video-editor` Agent profile and fewer than s
 - `video-apply-script`: validate a script revision and apply transcript-derived cuts/reordering.
 - `video-update-timeline`: apply explicit typed track/item/canvas/caption patches.
 - `video-render`: start preview-frame or export jobs.
-- `video-render-status`: inspect or cancel owned jobs.
+- `video-render-status`: inspect owned jobs without side effects.
+- `video-render-cancel`: explicitly cancel an owned job under destructive approval policy.
 
 The profile instructs the Agent to read current revision before mutation, align on creative choices, edit structure before decoration, avoid unrequested enhancements, verify project structure plus composed proof frames, and stop at an editable review checkpoint unless export is requested. It never claims visual understanding from transcript-only evidence.
 
 ### 8. The Webview is a real editor, with bounded first-release scope
 
-The extension contributes `views.fullPage` as its primary surface and a composer action that opens or creates a project. The React Webview contains Agent/chat status, Player, Media Library, Transcript, Timeline, inspector, jobs/export status, and undo/redo. It uses public theme/locale/state/media/jobs/Agent APIs only and remains useful without an active Agent run.
+The extension contributes `views.rightSidebar` as its only primary surface. Its manifest-declared icon registers directly in Kun's right rail; selecting it opens the docked editor beside the main conversation. The React Webview contains Agent synchronization status, Player, Media Library, Transcript, Timeline, inspector, jobs/export status, and undo/redo. It uses public theme/locale/state/media/jobs/Agent APIs only and remains useful without an active Agent run.
 
 Initial manual editing covers selection, split, trim, delete, reorder, track placement, captions, canvas aspect presets, and revision navigation. Preview uses source playback for simple selections plus broker-generated proxy/proof frames for composed state; export uses FFmpeg jobs. Unsupported timeline effects remain visible as validation warnings rather than being silently flattened or discarded.
 
@@ -136,7 +137,7 @@ Copying an extracted package directly into the registry was rejected because it 
 - [Large footage and proxy generation can exhaust disk/CPU] → Add per-extension concurrent-job quotas, byte/time limits, disk-space preflight, cache budgets, explicit cleanup, and user-visible estimates.
 - [Restart cannot safely resume arbitrary encodes] → Mark jobs interrupted, remove staging outputs, and require explicit restart instead of automatic retry.
 - [Transcript edits can create unnatural cuts] → Preserve source ranges and revisions, show waveform/transcript context, render proof frames/audio previews, and keep undo/redo.
-- [A full-page default extension can destabilize startup or release gates] → Keep it isolated behind the standard `.kunx` lifecycle, make seeding idempotent and non-fatal, use pure timeline-engine tests, fake media/jobs in Webview tests, and native packaged smokes for the broker boundary.
+- [A default right-sidebar extension can destabilize startup or release gates] → Keep it isolated behind the standard `.kunx` lifecycle, make seeding idempotent and non-fatal, use pure timeline-engine tests, fake media/jobs in Webview tests, and native packaged smokes for the broker boundary.
 - [API v1.1 documentation and fixtures can drift] → Regenerate Schema/API reference, retain v1.0 negotiation fixtures, and gate public export fingerprints/changelog.
 
 ## Migration Plan

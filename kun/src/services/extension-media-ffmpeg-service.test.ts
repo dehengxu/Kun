@@ -188,6 +188,115 @@ describe('ExtensionMediaFfmpegService', () => {
     })
   })
 
+  it('promotes a text-only subtitle transaction without starting FFmpeg and can roll it back', async () => {
+    const test = await fixture()
+    const targetPath = join(test.workspace, 'exports', 'captions.srt')
+    await writeFile(targetPath, 'original captions')
+    const output = await test.handles.register(test.principal, {
+      workspaceRoot: test.workspace,
+      path: 'exports/captions.srt',
+      mode: 'write',
+      source: 'workspace'
+    })
+    const runFfmpegForCore = vi.fn(async () => {
+      throw new Error('FFmpeg must not start for a text-only media job')
+    })
+    const service = new ExtensionMediaFfmpegService({
+      handleService: test.handles,
+      processService: { runFfmpegForCore } as never
+    })
+    const request = {
+      arguments: [],
+      inputs: {},
+      outputs: {},
+      textOutputs: {
+        captions: {
+          handleId: output.id,
+          mimeType: 'application/x-subrip' as const,
+          content: '1\n00:00:00,000 --> 00:00:01,000\nHello\n'
+        }
+      }
+    }
+
+    const transaction = await service.executeTransaction(test.principal, request, {
+      operationId: 'text-only-rollback'
+    })
+    expect(runFfmpegForCore).not.toHaveBeenCalled()
+    expect(await readFile(targetPath, 'utf8')).toContain('Hello')
+    expect(transaction.generatedMedia).toHaveLength(1)
+    expect(transaction.generatedMedia[0]).toMatchObject({
+      mode: 'read',
+      source: 'generated',
+      mimeType: 'application/x-subrip'
+    })
+
+    await transaction.rollback()
+    expect(await readFile(targetPath, 'utf8')).toBe('original captions')
+    await expect(test.handles.resolve(
+      test.principal,
+      transaction.generatedMedia[0]!.id,
+      'read'
+    )).rejects.toMatchObject({ code: 'not_found' })
+    await expect(test.handles.reserveOutput(test.principal, output.id, 'next-text-job'))
+      .resolves.toBeDefined()
+    await test.handles.releaseOutputReservation(test.principal, output.id, 'next-text-job')
+    expect((await readdir(join(test.workspace, 'exports')))
+      .filter((name) => name.includes('.kun-'))).toEqual([])
+  })
+
+  it('recovers an interrupted text-only output without starting FFmpeg', async () => {
+    const test = await fixture()
+    const targetPath = join(test.workspace, 'exports', 'recovered-captions.vtt')
+    await writeFile(targetPath, 'WEBVTT\n\noriginal\n')
+    const output = await test.handles.register(test.principal, {
+      workspaceRoot: test.workspace,
+      path: 'exports/recovered-captions.vtt',
+      mode: 'write',
+      source: 'workspace'
+    })
+    const request = {
+      arguments: [],
+      inputs: {},
+      outputs: {},
+      textOutputs: {
+        captions: {
+          handleId: output.id,
+          mimeType: 'text/vtt' as const,
+          content: 'WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n'
+        }
+      }
+    }
+    const runFfmpegForCore = vi.fn(async () => {
+      throw new Error('FFmpeg must not start for a text-only media job')
+    })
+    const service = new ExtensionMediaFfmpegService({
+      handleService: test.handles,
+      processService: { runFfmpegForCore } as never
+    })
+    await service.executeTransaction(test.principal, request, {
+      operationId: 'text-only-interrupted'
+    })
+    expect(await readFile(targetPath, 'utf8')).toContain('Hello')
+
+    const recoveredHandles = new ExtensionMediaHandleService({ dataDir: test.dataDir })
+    const recovered = new ExtensionMediaFfmpegService({
+      handleService: recoveredHandles,
+      processService: { runFfmpegForCore } as never
+    })
+    await recovered.rollbackInterruptedTransaction(
+      test.principal,
+      request,
+      'text-only-interrupted'
+    )
+
+    expect(runFfmpegForCore).not.toHaveBeenCalled()
+    expect(await readFile(targetPath, 'utf8')).toBe('WEBVTT\n\noriginal\n')
+    expect((await recoveredHandles.list(test.principal))
+      .filter(({ source }) => source === 'generated')).toHaveLength(0)
+    expect((await readdir(join(test.workspace, 'exports')))
+      .filter((name) => name.includes('.kun-'))).toEqual([])
+  })
+
   it('restores prior targets and provisional handles when a running job is recovered', async () => {
     const test = await fixture()
     const targetPath = join(test.workspace, 'exports', 'recovered.mp4')

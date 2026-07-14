@@ -29,15 +29,23 @@ describe('resolveActiveExtensionWorkspaceRoot', () => {
   it('keeps contributions hidden until the active workspace snapshot is ready', () => {
     expect(isExtensionContributionSnapshotReady({
       status: 'ready',
-      workspaceRoot: '/workspace-a'
-    }, '/workspace-b')).toBe(false)
+      workspaceRoot: '/workspace-a',
+      locale: 'en'
+    }, '/workspace-b', 'en')).toBe(false)
     expect(isExtensionContributionSnapshotReady({
       status: 'loading',
-      workspaceRoot: '/workspace-b'
-    }, '/workspace-b')).toBe(false)
+      workspaceRoot: '/workspace-b',
+      locale: 'en'
+    }, '/workspace-b', 'en')).toBe(false)
     expect(isExtensionContributionSnapshotReady({
       status: 'ready',
-      workspaceRoot: '/workspace-b'
-    }, '/workspace-b')).toBe(true)
+      workspaceRoot: '/workspace-b',
+      locale: 'zh-CN'
+    }, '/workspace-b', 'en')).toBe(false)
+    expect(isExtensionContributionSnapshotReady({
+      status: 'ready',
+      workspaceRoot: '/workspace-b',
+      locale: 'en'
+    }, '/workspace-b', 'en')).toBe(true)
   })
 })

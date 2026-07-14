@@ -590,8 +590,9 @@ function runPackagedKun(executable, runtimeEntry, args, environment, timeoutMs =
   }
   if (result.error) throw result.error
   if (result.status !== 0) {
+    const exitReason = result.signal ?? result.status ?? 'unknown exit'
     throw new Error([
-      `Packaged Kun command failed (${result.status}): ${args.join(' ')}`,
+      `Packaged Kun command failed (${exitReason}): ${args.join(' ')}`,
       result.stdout,
       result.stderr
     ].filter(Boolean).join('\n'))

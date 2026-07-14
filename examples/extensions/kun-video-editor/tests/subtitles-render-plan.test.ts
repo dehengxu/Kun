@@ -61,13 +61,13 @@ describe('subtitles and render plans', () => {
     })
     const step = plan.steps[0] as FfmpegRenderStep
     expect(step.inputs).toEqual({
-      'item-item-1': { kind: 'media-handle', reference: 'media_asset_1' },
-      'item-item-2': { kind: 'media-handle', reference: 'media_asset_1' }
+      'clip-0': { kind: 'media-handle', reference: 'media_asset_1' },
+      'clip-1': { kind: 'media-handle', reference: 'media_asset_1' }
     })
-    expect(step.args).toContain('{{input:item-item-1}}')
+    expect(step.args).toContain('{{input:clip-0}}')
     expect(step.args).toContain('{{output:proof}}')
     const graph = step.args[step.args.indexOf('-filter_complex') + 1]!
-    expect(graph).toContain('color=c=#000000:s=1920x1080:r=30/1:d=180/30[base]')
+    expect(graph).toContain('color=c=#000000:s=1920x1080:r=30/1:d=6.000000[base]')
     expect(graph).toContain('colorchannelmixer=aa=1.0000')
     expect(graph).toContain("overlay=x='(W-w)/2+0.000':y='(H-h)/2+0.000'")
     expect(graph).toContain('drawtext=text=Hello')
@@ -98,8 +98,8 @@ describe('subtitles and render plans', () => {
       outputHandleId: 'preview-output'
     }).steps[0] as FfmpegRenderStep
 
-    expect(Object.keys(proof.inputs)).toEqual(['item-z-bottom', 'item-a-top'])
-    expect(Object.keys(preview.inputs)).toEqual(['item-z-bottom', 'item-a-top'])
+    expect(Object.keys(proof.inputs)).toEqual(['clip-0', 'clip-1'])
+    expect(Object.keys(preview.inputs)).toEqual(['clip-0', 'clip-1'])
     const proofGraph = proof.args[proof.args.indexOf('-filter_complex') + 1]!
     const previewGraph = preview.args[preview.args.indexOf('-filter_complex') + 1]!
     for (const graph of [proofGraph, previewGraph]) {
@@ -155,6 +155,55 @@ describe('subtitles and render plans', () => {
     })
     expect((subtitles.steps[0] as TextRenderStep).content).toContain('00:00:00,000')
     expect(subtitles.artifacts[0]!.mime).toBe('application/x-subrip')
+  })
+
+  it('uses bounded bindings and a compact concat graph for thirty sequential cuts', () => {
+    const project = makeProject()
+    project.canvas = { ...project.canvas, width: 640, height: 360 }
+    project.captions = []
+    project.items = Array.from({ length: 30 }, (_unused, index) => ({
+      ...makeItem(`${'split-part-'.repeat(8)}${index}`, index * 3, 0, 100_000),
+      id: `${'split-part-'.repeat(8)}${index}`,
+      timelineStartFrame: index * 3,
+      durationFrames: 3
+    }))
+
+    const step = generateRenderPlan(project, {
+      kind: 'preview',
+      expectedRevision: 0,
+      outputHandleId: 'preview-output'
+    }).steps[0] as FfmpegRenderStep
+    const graph = step.args[step.args.indexOf('-filter_complex') + 1]!
+
+    expect(Object.keys(step.inputs)).toEqual(Array.from({ length: 30 }, (_unused, index) => `clip-${index}`))
+    expect(step.args).toContain('{{input:clip-29}}')
+    expect(graph).toContain('concat=n=30:v=1:a=1[vout][aout]')
+    expect(graph.length).toBeLessThanOrEqual(8_000)
+    expect(step.args.every((argument) => argument.length <= 8_192)).toBe(true)
+  })
+
+  it('fits and crops to the base canvas before applying item scale', () => {
+    const project = makeProject()
+    project.captions = []
+    project.canvas = { ...project.canvas, width: 640, height: 360, fit: 'crop' }
+    project.items = [{
+      ...project.items[0]!,
+      durationFrames: 30,
+      sourceEndUs: 1_000_000,
+      transform: { ...project.items[0]!.transform, scaleX: 0.5, scaleY: 0.5 }
+    }]
+
+    const step = generateRenderPlan(project, {
+      kind: 'preview',
+      expectedRevision: 0,
+      outputHandleId: 'preview-output'
+    }).steps[0] as FfmpegRenderStep
+    const graph = step.args[step.args.indexOf('-filter_complex') + 1]!
+    const crop = graph.indexOf('crop=640:360')
+    const transformedScale = graph.indexOf('scale=iw*0.500000:ih*0.500000')
+
+    expect(crop).toBeGreaterThan(-1)
+    expect(transformedScale).toBeGreaterThan(crop)
   })
 
   it('rejects stale plans and proof frames outside the composition', () => {

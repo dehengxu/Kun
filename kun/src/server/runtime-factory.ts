@@ -131,7 +131,8 @@ import {
   ExtensionRegistry,
   ExtensionStateMigrationCoordinator,
   ExtensionStateStore,
-  seedBundledExtensions
+  seedBundledExtensions,
+  type BundledExtensionSeedResult
 } from '../extensions/index.js'
 import { ExtensionAgentProfileRegistry } from '../services/extension-agent-profile-registry.js'
 import { ExtensionAgentService } from '../services/extension-agent-service.js'
@@ -818,8 +819,8 @@ export async function createKunServeRuntime(
 	    runTurn: runAgentTurn,
 	    defaultBinding: { providerId: 'default', modelId: activeOptions.model },
 	    headless: true,
-	    resolveToolCatalogEpoch: async ({ principal, allowedTools }) => {
-	      const owned = extensionTools.list(principal.extensionId)
+	    resolveToolCatalogEpoch: async ({ principal, workspace, allowedTools }) => {
+	      const owned = extensionTools.list(principal.extensionId, workspace)
 	      const allowed = new Set(allowedTools)
 	      const eligibleCanonicalToolIds = owned
 	        .filter((entry) => allowed.size === 0 ||
@@ -827,7 +828,7 @@ export async function createKunServeRuntime(
 	          allowed.has(entry.modelAlias) ||
 	          allowed.has(entry.declaration.name))
 	        .map((entry) => entry.canonicalToolId)
-	      return extensionTools.createCatalogEpoch({ eligibleCanonicalToolIds })
+	      return extensionTools.createCatalogEpoch({ eligibleCanonicalToolIds, workspace })
 	    }
 	  })
 	  const extensionPaths = new ExtensionPaths({
@@ -925,19 +926,31 @@ export async function createKunServeRuntime(
 	      extensionBroker.stream(principal, requestId, sequence, payload, terminal),
 	    onHostActivated: (principal) => {
 	      extensionJobs.clearExtensionFence(principal.extensionId)
+	      for (const workspaceRoot of principal.workspaceRoots) {
+	        extensionJobs.clearWorkspaceFence(
+	          principal.extensionId,
+	          extensionPaths.workspaceKey(workspaceRoot)
+	        )
+	      }
 	      extensionViewHostGenerations.bindExtension(
 	        principal.extensionId,
+	        principal.workspaceRoots,
 	        principal.lifecycleNonce
 	      )
 	    },
-	    onHostExit: async (exit) => {
+	    onHostExit: async (exit, principal) => {
 	      // Unexpected exits invalidate every guest bound to the crashed Host.
 	      // Expected lifecycle stops are already coordinated by disable/version/
 	      // shutdown paths. Keeping their sessions here also prevents an idle
 	      // teardown from deleting a newly retained View that is waiting for the
 	      // old Host cleanup to finish before reactivation.
 	      if (!exit.expected) {
-	        await extensionJobs.handleExtensionHostCrash(exit.extensionId)
+	        const workspaceIds = principal.workspaceRoots.map((root) =>
+	          extensionPaths.workspaceKey(root))
+	        await extensionJobs.handleExtensionHostCrash(
+	          exit.extensionId,
+	          workspaceIds.length === 0 ? undefined : workspaceIds
+	        )
 	        for (const sessionId of extensionViewHostGenerations.takeExitedGeneration(
 	          exit.extensionId,
 	          exit.lifecycleNonce
@@ -945,7 +958,7 @@ export async function createKunServeRuntime(
 	          extensionViewSessions.disposeSession(sessionId)
 	        }
 	      }
-	      await extensionBroker.disposeExtension(exit.extensionId)
+	      await extensionBroker.disposeHost(principal)
 	      // A crash does not change the registry revision, so explicitly drop
 	      // successful lazy-preparation entries and allow clean reactivation.
 	      extensionPreparations.clear()
@@ -974,8 +987,10 @@ export async function createKunServeRuntime(
 	    jobs: extensionJobs,
 	    invokeExtension: (extensionId, activationEvent, method, params, invokeOptions) =>
 	      extensionManager.invoke(extensionId, activationEvent, method, params, invokeOptions),
-	    notifyExtension: (extensionId, method, params) =>
-	      extensionManager.notify(extensionId, method, params),
+	    notifyExtension: (principal, method, params) =>
+	      extensionManager.notify(principal.extensionId, method, params, {
+	        workspaceRoots: [...principal.workspaceRoots]
+	      }),
 	    notifyView: (input) => extensionViewSessions.publishBridgeNotification(input),
 	    resolveManifest: resolveExtensionManifest,
 	    onUiRequest: extensionViewSessions.onUiRequest,
@@ -989,12 +1004,19 @@ export async function createKunServeRuntime(
 	      extensionViewHostGenerations.register(
 	        session.sessionId,
 	        session.extensionId,
-	        extensionManager.activeHostGeneration(session.extensionId)
+	        session.workspaceRoot,
+	        extensionManager.activeHostGeneration(session.extensionId, {
+	          ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {})
+	        })
 	      )
-	      extensionManager.retainView(session.extensionId)
+	      extensionManager.retainView(session.extensionId, {
+	        ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {})
+	      })
 	    } else {
 	      extensionViewHostGenerations.unregister(session.sessionId)
-	      extensionManager.releaseView(session.extensionId)
+	      extensionManager.releaseView(session.extensionId, {
+	        ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {})
+	      })
 	    }
 	  })
 	  extensionConfiguration.onDidChange(async (change) => {
@@ -1004,15 +1026,19 @@ export async function createKunServeRuntime(
 	      scope: change.scope,
 	      value: change.value
 	    }
+	    const deliveryScope = change.scope === 'workspace'
+	      ? { workspaceKey: change.workspaceKey }
+	      : undefined
 	    await extensionManager.notify(
 	      change.extensionId,
 	      'configuration.changed',
-	      event
+	      event,
+	      deliveryScope
 	    ).catch(() => undefined)
 	    extensionViewSessions.publish(change.extensionId, 'bridge', {
 	      method: 'configuration.changed',
 	      params: event
-	    })
+	    }, deliveryScope)
 	  })
 	  const extensionStateMigrations = new ExtensionStateMigrationCoordinator(
 	    extensionState,
@@ -1035,19 +1061,37 @@ export async function createKunServeRuntime(
 	      extensionLifecycle.recoverVersionSwitch?.(extensionId) ?? Promise.resolve(),
 	    recoverVersionSwitches: () =>
 	      extensionLifecycle.recoverVersionSwitches?.() ?? Promise.resolve(),
-	    beforeDisable: async (extensionId, workspaceKey) => {
-	      await extensionJobs.handleExtensionDisabled(extensionId)
-	      await extensionMediaHandles.revokeExtension(extensionId)
+	    beforeDisable: async (extensionId, workspaceKey, workspaceRoot) => {
+	      if (workspaceKey === undefined) {
+	        await extensionJobs.handleExtensionDisabled(extensionId)
+	        await extensionMediaHandles.revokeExtension(extensionId)
+	      } else {
+	        await extensionJobs.handleWorkspaceRevoked(extensionId, workspaceKey)
+	        await extensionMediaHandles.revokeExtensionWorkspace(
+	          extensionId,
+	          workspaceKey,
+	          workspaceRoot
+	        )
+	      }
 	      await extensionLifecycle.beforeDisable?.(extensionId, workspaceKey)
-	      extensionViewSessions.disposeExtension(extensionId)
-	      await extensionBroker.disposeExtension(extensionId)
+	      if (workspaceKey === undefined) {
+	        extensionViewSessions.disposeExtension(extensionId)
+	        await extensionBroker.disposeExtension(extensionId)
+	      } else {
+	        extensionViewSessions.disposeExtensionWorkspace(extensionId, workspaceKey)
+	        await extensionBroker.disposeExtensionWorkspace(extensionId, workspaceKey)
+	      }
 	    },
-	    beforePermissionChange: async (extensionId) => {
-	      await extensionJobs.handleExtensionDisabled(extensionId)
-	      await extensionMediaHandles.revokeExtension(extensionId)
-	      extensionViewSessions.disposeExtension(extensionId)
-	      await extensionManager.deactivate(extensionId)
-	      await extensionBroker.disposeExtension(extensionId)
+	    beforePermissionChange: async (extensionId, workspaceKey, workspaceRoot) => {
+	      await extensionJobs.handleWorkspaceRevoked(extensionId, workspaceKey)
+	      await extensionMediaHandles.revokeExtensionWorkspace(
+	        extensionId,
+	        workspaceKey,
+	        workspaceRoot
+	      )
+	      extensionViewSessions.disposeExtensionWorkspace(extensionId, workspaceKey)
+	      await extensionManager.deactivateWorkspace(extensionId, workspaceKey)
+	      await extensionBroker.disposeExtensionWorkspace(extensionId, workspaceKey)
 	    },
 	    beforeUninstall: async (extensionId) => {
 	      await extensionJobs.handleExtensionUninstalled(extensionId)
@@ -1058,6 +1102,7 @@ export async function createKunServeRuntime(
 	    }
 	  })
 	  await extensionPackageManager.recover()
+	  let bundledSeedResults: BundledExtensionSeedResult[] = []
 	  await extensionJobs.initialize()
 	  if (activeOptions.bundledExtensionsDir) {
 	    try {
@@ -1065,6 +1110,7 @@ export async function createKunServeRuntime(
 	        directory: activeOptions.bundledExtensionsDir,
 	        packageManager: extensionPackageManager
 	      })
+	      bundledSeedResults = bundledResults
 	      for (const result of bundledResults) {
 	        if (result.outcome === 'unchanged') continue
 	        const suffix = result.code ? ` (${result.code})` : ''
@@ -1509,7 +1555,8 @@ export async function createKunServeRuntime(
 	      mediaHandles: extensionMediaHandles,
 	      artifacts: extensionArtifacts,
 	      viewSessions: extensionViewSessions,
-	      secretReveals: extensionSecretReveals
+	      secretReveals: extensionSecretReveals,
+	      bundledSeedResults
 	    },
 	    modelClient,
 	    get defaultModel() {

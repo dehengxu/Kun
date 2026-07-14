@@ -1,4 +1,8 @@
-import type { RegisteredContribution } from './contribution-registry'
+import type {
+  ExtensionRightRailContainerEntry,
+  ExtensionRightRailViewEntry,
+  RegisteredContribution
+} from './contribution-registry'
 import { isExtensionContributionId } from './contribution-ids'
 
 export type ExtensionWorkbenchViewPoint =
@@ -31,8 +35,8 @@ export type ExtensionWorkbenchViewGroups = {
 }
 
 export type ExtensionRightContainerTarget = {
-  container: RegisteredContribution<'views.containers'>
-  target: RegisteredContribution<'views.rightSidebar'>
+  container: ExtensionRightRailContainerEntry
+  target: ExtensionRightRailViewEntry
 }
 
 export function resolveCommandOpenView(
@@ -122,4 +126,18 @@ export function firstViewForContainer(
           ...groups.fullPage
         ]
   return candidates.find((view) => viewBelongsToContainer(container, view))
+}
+
+export function firstRightRailEntryForContainer(
+  container: ExtensionRightRailContainerEntry,
+  views: readonly ExtensionRightRailViewEntry[]
+): ExtensionRightRailViewEntry | undefined {
+  if (container.owner.kind !== 'extension') return undefined
+  const extensionId = container.owner.extensionId
+  return views.find((view) => {
+    if (view.owner.kind !== 'extension' || view.owner.extensionId !== extensionId) {
+      return false
+    }
+    return view.payload.container === container.payload.id || view.payload.container === container.id
+  })
 }

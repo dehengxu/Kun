@@ -7,6 +7,7 @@ import {
   ExtensionMediaHandleError,
   ExtensionMediaHandleService
 } from './extension-media-handle-service.js'
+import { extensionWorkspaceKey } from '../extensions/paths.js'
 
 const roots: string[] = []
 
@@ -51,6 +52,45 @@ describe('ExtensionMediaHandleService', () => {
     expect(handle).not.toHaveProperty('absolutePath')
     const resolved = await service.resolve(principal, handle.id, 'read')
     expect(resolved.absolutePath).toBe(await realpath(join(workspace, 'clip.mp4')))
+  })
+
+  it('revokes handles only for the owning extension workspace', async () => {
+    const { root, workspace, dataDir, principal } = await fixture()
+    const workspaceB = join(root, 'workspace-b')
+    await mkdir(workspaceB)
+    await writeFile(join(workspaceB, 'clip.mp4'), Buffer.from('video-fixture-b'))
+    const principalB = { ...principal, workspaceRoots: [workspaceB] }
+    const foreignPrincipal = { ...principal, extensionId: 'other.video' }
+    const service = new ExtensionMediaHandleService({ dataDir })
+    const handleA = await service.register(principal, {
+      workspaceRoot: workspace,
+      path: 'clip.mp4',
+      mode: 'read',
+      source: 'workspace'
+    })
+    const handleB = await service.register(principalB, {
+      workspaceRoot: workspaceB,
+      path: 'clip.mp4',
+      mode: 'read',
+      source: 'workspace'
+    })
+    const foreignHandle = await service.register(foreignPrincipal, {
+      workspaceRoot: workspace,
+      path: 'clip.mp4',
+      mode: 'read',
+      source: 'workspace'
+    })
+
+    await expect(service.revokeExtensionWorkspace(
+      principal.extensionId,
+      extensionWorkspaceKey(workspace),
+      workspace
+    )).resolves.toBe(1)
+
+    await expect(service.stat(principal, handleA.id)).rejects.toMatchObject({ code: 'not_found' })
+    await expect(service.stat(principalB, handleB.id)).resolves.toMatchObject({ available: true })
+    await expect(service.stat(foreignPrincipal, foreignHandle.id))
+      .resolves.toMatchObject({ available: true })
   })
 
   it('accepts an external file only through a picker source and keeps its path opaque', async () => {

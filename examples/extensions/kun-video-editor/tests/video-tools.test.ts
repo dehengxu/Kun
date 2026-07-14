@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -38,10 +38,10 @@ afterEach(async () => {
 })
 
 describe('video editor manifest and Agent catalog', () => {
-  it('declares one private profile, eight stable tools, complete activation, and least privilege', async () => {
+  it('declares one private profile, nine stable tools, complete activation, and least privilege', async () => {
     const manifest = await loadManifest()
     expect(manifest.apiVersion).toBe('1.1.0')
-    expect(manifest.version).toBe('0.2.2')
+    expect(manifest.version).toBe('0.3.0')
     expect(manifest.contributes['views.rightSidebar']).toEqual([
       expect.objectContaining({
         id: 'editor',
@@ -56,6 +56,8 @@ describe('video editor manifest and Agent catalog', () => {
     expect(profile).toMatchObject({ id: 'video-editor', visibility: 'private' })
     expect(profile.allowedTools).toEqual(VIDEO_TOOL_IDS)
     expect(profile.instructions).toContain('video-project with action active')
+    expect(profile.instructions).toContain('video-project with action select')
+    expect(profile.instructions).toContain('video-render-cancel')
     expect(profile.instructions).toContain('not arbitrary visual-scene understanding')
     expect(profile.instructions).toContain('interaction-required')
     expect(manifest.contributes.tools).toEqual(VIDEO_TOOL_DECLARATIONS)
@@ -80,11 +82,12 @@ describe('video editor manifest and Agent catalog', () => {
         'video-apply-script': 'destructive',
         'video-update-timeline': 'write',
         'video-render': 'write',
-        'video-render-status': 'destructive'
+        'video-render-status': 'read',
+        'video-render-cancel': 'destructive'
       })
     const fingerprint = JSON.stringify(VIDEO_TOOL_DECLARATIONS)
     expect(JSON.stringify(VIDEO_TOOL_DECLARATIONS)).toBe(fingerprint)
-    expect(VIDEO_TOOL_DECLARATIONS).toHaveLength(8)
+    expect(VIDEO_TOOL_DECLARATIONS).toHaveLength(9)
   })
 
   it('keeps the manifest and Host command catalog aligned without artifact shell commands', async () => {
@@ -110,7 +113,12 @@ describe('video editor Agent tools', () => {
     })
     expect(created.content).toMatchObject({
       outcome: 'created',
-      project: { id: 'agent-demo', currentRevision: 0 },
+      project: {
+        id: 'agent-demo',
+        currentRevision: 0,
+        canUndo: false,
+        canRedo: false
+      },
       truncated: false
     })
     const active = await invoke(harness, 'video-project', { action: 'active' })
@@ -148,6 +156,104 @@ describe('video editor Agent tools', () => {
     expect(loaded.content).toMatchObject({
       outcome: 'loaded',
       project: { counts: { assets: 1, items: 1 }, currentRevision: 1 }
+    })
+    await harness.dispose()
+  })
+
+  it('returns an actionable ffprobe-unavailable outcome before selecting media or mutating a project', async () => {
+    const harness = await activatedHarness()
+    await invoke(harness, 'video-project', {
+      action: 'create', projectId: 'agent-demo', name: 'Agent Demo'
+    })
+    harness.media.setCapabilities({
+      probedAt: new Date().toISOString(),
+      ffprobe: { name: 'ffprobe', available: false, features: [] },
+      ffmpeg: {
+        name: 'ffmpeg',
+        available: true,
+        features: ['libx264-encoder', 'aac-encoder', 'drawtext-filter']
+      }
+    })
+
+    const unavailable = await invoke(harness, 'video-probe', {
+      projectId: 'agent-demo', expectedRevision: 0
+    })
+    expect(unavailable.content).toMatchObject({
+      outcome: 'unavailable',
+      code: 'FFPROBE_UNAVAILABLE',
+      projectId: 'agent-demo',
+      currentRevision: 0,
+      changedIds: [],
+      retryable: true
+    })
+    expect(String(contentObject(unavailable).message)).toContain('Install or configure ffprobe')
+    expect(JSON.stringify(unavailable)).not.toContain(harness.context.workspaceContext!.root)
+
+    const loaded = await invoke(harness, 'video-project', {
+      action: 'get', projectId: 'agent-demo'
+    })
+    expect(loaded.content).toMatchObject({
+      project: { currentRevision: 0, counts: { assets: 0, items: 0 } }
+    })
+    const mediaRequests = harness.transport.requests.map(({ method }) => method)
+    expect(mediaRequests.filter((method) => method === 'media.getCapabilities')).toHaveLength(1)
+    expect(mediaRequests).not.toContain('media.pickFiles')
+    expect(mediaRequests).not.toContain('media.probe')
+    await harness.dispose()
+  })
+
+  it('keeps project.get pure and makes create/select the explicit active-project transitions', async () => {
+    const harness = await activatedHarness()
+    await invoke(harness, 'video-project', {
+      action: 'create', projectId: 'project-one', name: 'Project One'
+    })
+    await invoke(harness, 'video-project', {
+      action: 'create', projectId: 'project-two', name: 'Project Two'
+    })
+
+    const beforeRead = await invoke(harness, 'video-project', { action: 'active' })
+    expect(beforeRead.content).toMatchObject({ project: { id: 'project-two' } })
+    const read = await invoke(harness, 'video-project', {
+      action: 'get', projectId: 'project-one'
+    })
+    expect(read.content).toMatchObject({ outcome: 'loaded', project: { id: 'project-one' } })
+    const afterRead = await invoke(harness, 'video-project', { action: 'active' })
+    expect(afterRead.content).toMatchObject({ project: { id: 'project-two' } })
+
+    const selected = await invoke(harness, 'video-project', {
+      action: 'select', projectId: 'project-one', expectedRevision: 0
+    })
+    expect(selected.content).toMatchObject({ outcome: 'selected', project: { id: 'project-one' } })
+    const afterSelect = await invoke(harness, 'video-project', { action: 'active' })
+    expect(afterSelect.content).toMatchObject({ project: { id: 'project-one' } })
+    expect(harness.webview.messages).toContainEqual({
+      channel: 'kun-video-editor.project-changed',
+      payload: expect.objectContaining({
+        projectId: 'project-one',
+        activeProjectId: 'project-one',
+        previousProjectId: 'project-two',
+        revision: 0,
+        reason: 'active-project-changed',
+        transition: 'selected',
+        source: 'agent'
+      })
+    })
+    const manuallySelected = await harness.client.commands.executeCommand<ToolResult>('editor-request', {
+      action: 'project.select',
+      payload: { projectId: 'project-two' }
+    })
+    expect(manuallySelected.content).toMatchObject({
+      outcome: 'selected', project: { id: 'project-two' }
+    })
+    expect(harness.webview.messages).toContainEqual({
+      channel: 'kun-video-editor.project-changed',
+      payload: expect.objectContaining({
+        projectId: 'project-two',
+        previousProjectId: 'project-one',
+        reason: 'active-project-changed',
+        transition: 'selected',
+        source: 'manual'
+      })
     })
     await harness.dispose()
   })
@@ -271,6 +377,99 @@ describe('video editor Agent tools', () => {
     await harness.dispose()
   })
 
+  it('reauthorizes a revoked asset without changing timeline or transcript identity', async () => {
+    const harness = await projectWithMedia()
+    const replacementHandle = 'fake_media_replacement_001'
+    harness.media.addHandle(mediaHandle(replacementHandle, 'read', 'replacement.mp4', 'video'))
+    harness.media.setProbe(replacementHandle, videoProbe(replacementHandle))
+
+    const result = await harness.client.commands.executeCommand<ToolResult>('editor-request', {
+      action: 'media.reauthorize',
+      payload: {
+        projectId: 'agent-demo',
+        expectedRevision: 1,
+        assetId: 'interview',
+        mediaHandleId: replacementHandle
+      }
+    })
+    expect(result.content).toMatchObject({
+      outcome: 'reauthorized',
+      currentRevision: 2,
+      asset: { id: 'interview', mediaHandleId: replacementHandle }
+    })
+    const loaded = await invoke(harness, 'video-project', {
+      action: 'get', projectId: 'agent-demo'
+    })
+    expect(loaded.content).toMatchObject({
+      project: {
+        assets: [{ id: 'interview', mediaHandleId: replacementHandle }],
+        items: [{ assetId: 'interview' }]
+      }
+    })
+    await harness.dispose()
+  })
+
+  it('projects authoritative undo and redo availability instead of inferring it from revision', async () => {
+    const harness = await activatedHarness()
+    await invoke(harness, 'video-project', {
+      action: 'create', projectId: 'history-flags', name: 'History Flags'
+    })
+    await invoke(harness, 'video-update-timeline', {
+      projectId: 'history-flags',
+      expectedRevision: 0,
+      operations: [{ type: 'set-canvas', preset: '9:16', fit: 'pad' }]
+    })
+    const changed = await invoke(harness, 'video-project', {
+      action: 'get', projectId: 'history-flags'
+    })
+    expect(changed.content).toMatchObject({
+      project: { currentRevision: 1, canUndo: true, canRedo: false }
+    })
+
+    const undone = await harness.client.commands.executeCommand<ToolResult>('editor-request', {
+      action: 'project.undo',
+      payload: { projectId: 'history-flags', expectedRevision: 1 }
+    })
+    expect(undone.content).toMatchObject({
+      details: { project: { currentRevision: 2, canUndo: false, canRedo: true } }
+    })
+    const redone = await harness.client.commands.executeCommand<ToolResult>('editor-request', {
+      action: 'project.redo',
+      payload: { projectId: 'history-flags', expectedRevision: 2 }
+    })
+    expect(redone.content).toMatchObject({
+      details: { project: { currentRevision: 3, canUndo: true, canRedo: false } }
+    })
+    await harness.dispose()
+  })
+
+  it('clears a damaged active project and still lists healthy projects with diagnostics', async () => {
+    const harness = await activatedHarness()
+    await invoke(harness, 'video-project', {
+      action: 'create', projectId: 'healthy-project', name: 'Healthy'
+    })
+    const projectsRoot = join(harness.context.workspaceContext!.root, '.kun-video/projects')
+    await mkdir(join(projectsRoot, 'damaged-project'), { recursive: true })
+    await writeFile(join(projectsRoot, 'damaged-project/project.json'), '{broken json', 'utf8')
+    harness.storage.workspace.set('active-project', {
+      schemaVersion: 1, projectId: 'damaged-project'
+    })
+
+    const active = await invoke(harness, 'video-project', { action: 'active' })
+    expect(active.content).toMatchObject({
+      outcome: 'stale-active-project',
+      projectId: 'damaged-project',
+      diagnosticCode: 'invalid_project'
+    })
+    expect(harness.storage.workspace.get('active-project')).toBeUndefined()
+    const listed = await invoke(harness, 'video-project', { action: 'list' })
+    expect(listed.content).toMatchObject({
+      projects: [expect.objectContaining({ id: 'healthy-project' })],
+      diagnostics: [{ id: 'damaged-project', code: 'invalid_project' }]
+    })
+    await harness.dispose()
+  })
+
   it('returns structured interaction-required in headless mode and rejects path-shaped inputs', async () => {
     const harness = await activatedHarness()
     await invoke(harness, 'video-project', {
@@ -310,6 +509,154 @@ describe('video editor Agent tools', () => {
     await harness.dispose()
   })
 
+  it('returns actionable unavailable results before picker or job admission when render capabilities are missing', async () => {
+    const harness = await projectWithMedia()
+    await invoke(harness, 'video-update-timeline', {
+      projectId: 'agent-demo',
+      expectedRevision: 1,
+      operations: [{
+        type: 'add-caption',
+        caption: {
+          id: 'caption-capability-check',
+          trackId: 'captions-1',
+          startFrame: 0,
+          endFrame: 45,
+          text: 'Capability preflight',
+          placement: 'bottom'
+        }
+      }]
+    })
+
+    const cases = [
+      {
+        code: 'FFPROBE_UNAVAILABLE',
+        name: 'ffprobe executable',
+        kind: 'proof-frame' as const,
+        captionMode: 'none' as const,
+        ffprobeAvailable: false,
+        ffmpegAvailable: true,
+        features: ['libx264-encoder', 'aac-encoder', 'drawtext-filter']
+      },
+      {
+        code: 'FFMPEG_UNAVAILABLE',
+        name: 'FFmpeg executable',
+        kind: 'proof-frame' as const,
+        captionMode: 'none' as const,
+        ffprobeAvailable: true,
+        ffmpegAvailable: false,
+        features: []
+      },
+      {
+        code: 'LIBX264_ENCODER_UNAVAILABLE',
+        name: 'libx264 encoder',
+        kind: 'preview' as const,
+        captionMode: 'none' as const,
+        ffprobeAvailable: true,
+        ffmpegAvailable: true,
+        features: ['aac-encoder', 'drawtext-filter']
+      },
+      {
+        code: 'AAC_ENCODER_UNAVAILABLE',
+        name: 'AAC encoder',
+        kind: 'audio-aac' as const,
+        captionMode: 'none' as const,
+        ffprobeAvailable: true,
+        ffmpegAvailable: true,
+        features: ['libx264-encoder', 'drawtext-filter']
+      },
+      {
+        code: 'DRAWTEXT_FILTER_UNAVAILABLE',
+        name: 'drawtext filter',
+        kind: 'h264-mp4' as const,
+        captionMode: 'burned' as const,
+        ffprobeAvailable: true,
+        ffmpegAvailable: true,
+        features: ['libx264-encoder', 'aac-encoder']
+      }
+    ]
+    const capabilityRequestsBefore = harness.transport.requests
+      .filter(({ method }) => method === 'media.getCapabilities').length
+
+    for (const testCase of cases) {
+      harness.media.setCapabilities({
+        probedAt: new Date().toISOString(),
+        ffprobe: {
+          name: 'ffprobe',
+          available: testCase.ffprobeAvailable,
+          features: []
+        },
+        ffmpeg: {
+          name: 'ffmpeg',
+          available: testCase.ffmpegAvailable,
+          features: testCase.features
+        }
+      })
+      const unavailable = await invoke(harness, 'video-render', {
+        projectId: 'agent-demo',
+        expectedRevision: 2,
+        kind: testCase.kind,
+        captionMode: testCase.captionMode
+      })
+      expect(unavailable.content).toMatchObject({
+        outcome: 'unavailable',
+        code: testCase.code,
+        projectId: 'agent-demo',
+        currentRevision: 2,
+        changedIds: [],
+        retryable: true,
+        renderKind: testCase.kind,
+        captionMode: testCase.captionMode
+      })
+      expect(String(contentObject(unavailable).message)).toContain(testCase.name)
+      expect(String(contentObject(unavailable).message)).toContain('No output target was selected')
+      expect(String(contentObject(unavailable).message)).toContain('no render job was started')
+    }
+
+    const requests = harness.transport.requests.map(({ method }) => method)
+    expect(requests.filter((method) => method === 'media.getCapabilities'))
+      .toHaveLength(capabilityRequestsBefore + cases.length)
+    expect(requests).not.toContain('media.pickSaveTarget')
+    expect(requests).not.toContain('media.startFfmpegJob')
+    const loaded = await invoke(harness, 'video-project', {
+      action: 'get', projectId: 'agent-demo'
+    })
+    expect(loaded.content).toMatchObject({ project: { currentRevision: 2 } })
+    await harness.dispose()
+  })
+
+  it('returns a bounded unavailable result when render capability inspection itself fails', async () => {
+    const harness = await projectWithMedia()
+    harness.transport.handle('media.getCapabilities', () => {
+      throw new Error('simulated capability inspection failure')
+    })
+
+    const unavailable = await invoke(harness, 'video-render', {
+      projectId: 'agent-demo',
+      expectedRevision: 1,
+      kind: 'h264-mp4'
+    })
+    expect(unavailable.content).toMatchObject({
+      outcome: 'unavailable',
+      code: 'MEDIA_CAPABILITIES_UNAVAILABLE',
+      projectId: 'agent-demo',
+      currentRevision: 1,
+      changedIds: [],
+      retryable: true,
+      renderKind: 'h264-mp4',
+      captionMode: 'none',
+      missingCapabilities: ['capability-inspection']
+    })
+    expect(String(contentObject(unavailable).message)).toContain('No output target was selected')
+    const requests = harness.transport.requests.map(({ method }) => method)
+    expect(requests).not.toContain('media.pickSaveTarget')
+    expect(requests).not.toContain('media.startFfmpegJob')
+    const loaded = await invoke(harness, 'video-project', {
+      action: 'get', projectId: 'agent-demo'
+    })
+    expect(loaded.content).toMatchObject({ project: { currentRevision: 1 } })
+    await harness.dispose()
+  })
+
   it('cancels durable renders and fences late completion without publishing artifacts', async () => {
     const harness = await projectWithMedia()
     const outputHandle = 'fake_render_cancel_0001'
@@ -323,16 +670,69 @@ describe('video editor Agent tools', () => {
     })
     const jobId = String(contentObject(render).jobId)
     harness.jobs.start(jobId)
-    const cancelled = await invoke(harness, 'video-render-status', {
-      jobId, action: 'cancel', reason: 'User requested cancellation'
+    const cancelled = await invoke(harness, 'video-render-cancel', {
+      jobId, projectId: 'agent-demo', reason: 'User requested cancellation'
     })
     expect(cancelled.content).toMatchObject({ outcome: 'cancelled', technicallyValidated: false })
     expect(cancelled.generatedArtifacts).toBeUndefined()
     const artifact = artifactFor(harness, jobId, outputHandle, 'cancelled.mp4')
     expect(harness.jobs.complete(jobId, { schemaVersion: 1, generatedArtifacts: [artifact] }).state)
       .toBe('cancelled')
-    const after = await invoke(harness, 'video-render-status', { jobId, action: 'get' })
+    const after = await invoke(harness, 'video-render-status', { jobId, projectId: 'agent-demo' })
     expect(after.generatedArtifacts).toBeUndefined()
+    await harness.dispose()
+  })
+
+  it('keeps status read-only and refuses project-mismatched or untracked cancellation', async () => {
+    const harness = await projectWithMedia()
+    const outputHandle = 'fake_render_scope_guard_001'
+    harness.media.addHandle(mediaHandle(outputHandle, 'export', 'scope-guard.mp4', 'video'))
+    const render = await invoke(harness, 'video-render', {
+      projectId: 'agent-demo',
+      expectedRevision: 1,
+      kind: 'h264-mp4',
+      outputHandleId: outputHandle
+    })
+    const jobId = String(contentObject(render).jobId)
+    harness.jobs.start(jobId)
+
+    await expect(invoke(harness, 'video-render-status', {
+      jobId,
+      action: 'cancel'
+    } as unknown as JsonObject)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+    await expect(invoke(harness, 'video-render-status', {
+      jobId,
+      projectId: 'another-project'
+    })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+    await expect(invoke(harness, 'video-render-cancel', {
+      jobId,
+      projectId: 'another-project'
+    })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+    expect(harness.jobs.get(jobId).state).toBe('running')
+
+    harness.storage.workspace.set(`render-job:${jobId}`, {
+      schemaVersion: 1,
+      jobId,
+      projectId: '../outside-workspace',
+      pinnedRevision: 1,
+      renderKind: 'h264-mp4',
+      captionMode: 'none',
+      subtitleFormat: 'srt',
+      canvasPreset: '16:9',
+      expectedArtifacts: [{ mediaKind: 'video', mimeType: 'video/mp4' }],
+      createdAt: new Date().toISOString()
+    })
+    const untracked = await invoke(harness, 'video-render-status', { jobId })
+    expect(untracked.content).toMatchObject({
+      outcome: 'running',
+      state: 'running',
+      tracked: false,
+      artifacts: []
+    })
+    expect(untracked.content).not.toHaveProperty('projectId')
+    await expect(invoke(harness, 'video-render-cancel', { jobId }))
+      .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+    expect(harness.jobs.get(jobId).state).toBe('running')
     await harness.dispose()
   })
 
@@ -366,7 +766,7 @@ describe('video editor Agent tools', () => {
     expect(harness.jobs.get(jobId).state).toBe('cancelled')
     expect(harness.storage.workspace.has(`render-job:${jobId}`)).toBe(false)
 
-    const status = await invoke(harness, 'video-render-status', { jobId, action: 'get' })
+    const status = await invoke(harness, 'video-render-status', { jobId })
     expect(status.content).toMatchObject({ outcome: 'cancelled', jobId, technicallyValidated: false })
     await harness.dispose()
   })
@@ -412,9 +812,11 @@ describe('video editor Agent tools', () => {
     const artifact = artifactFor(harness, jobId, outputHandle, 'output.mp4')
     harness.jobs.complete(jobId, { schemaVersion: 1, generatedArtifacts: [artifact] })
     harness.storage.workspace.delete(`render-job:${jobId}`)
-    const status = await invoke(harness, 'video-render-status', { jobId, action: 'get' })
+    const status = await invoke(harness, 'video-render-status', { jobId, projectId: 'agent-demo' })
     expect(status.content).toMatchObject({
       outcome: 'completed',
+      tracked: true,
+      projectId: 'agent-demo',
       technicallyValidated: true,
       proofStale: false,
       artifacts: [{ artifactId: artifact.artifactId }]
@@ -433,9 +835,25 @@ describe('video editor Agent tools', () => {
       renderKind: 'h264-mp4'
     })
 
-    const replay = await invoke(harness, 'video-render-status', { jobId, action: 'get' })
+    const replay = await invoke(harness, 'video-render-status', { jobId, projectId: 'agent-demo' })
     expect(replay.generatedArtifacts).toEqual(status.generatedArtifacts)
     expect(replay.content).toEqual(status.content)
+
+    const recoveredRecord = harness.storage.workspace.get(`render-job:${jobId}`) as JsonObject
+    harness.storage.workspace.set(`render-job:${jobId}`, {
+      ...recoveredRecord,
+      projectId: 'wrong-project'
+    })
+    const corrected = await invoke(harness, 'video-render-status', {
+      jobId,
+      projectId: 'agent-demo'
+    })
+    expect(corrected.content).toMatchObject({
+      outcome: 'completed', tracked: true, projectId: 'agent-demo', technicallyValidated: true
+    })
+    expect(harness.storage.workspace.get(`render-job:${jobId}`)).toMatchObject({
+      projectId: 'agent-demo'
+    })
     await harness.dispose()
   })
 
@@ -472,7 +890,7 @@ describe('video editor Agent tools', () => {
       .filter(({ method }) => method === 'media.startFfmpegJob')
       .at(-1)
     expect(request?.params).toMatchObject({
-      inputs: { 'item-item-interview': 'fake_media_source_0001' },
+      inputs: { 'clip-0': 'fake_media_source_0001' },
       outputs: { video: outputHandle },
       metadata: { pinnedRevision: 2, captionMode: 'burned' }
     })
@@ -608,9 +1026,11 @@ describe('video editor Agent tools', () => {
     })
     harness.storage.workspace.delete(`render-job:${jobId}`)
 
-    const status = await invoke(harness, 'video-render-status', { jobId, action: 'get' })
+    const status = await invoke(harness, 'video-render-status', { jobId, projectId: 'agent-demo' })
     expect(status.content).toMatchObject({
       outcome: 'completed',
+      tracked: true,
+      projectId: 'agent-demo',
       technicallyValidated: true,
       artifacts: [
         { artifactId: videoArtifact.artifactId },
@@ -624,6 +1044,138 @@ describe('video editor Agent tools', () => {
         { mediaKind: 'video', mimeType: 'video/mp4' }
       ]
     })
+    await harness.dispose()
+  })
+
+  it('releases a Host-selected primary export handle when sidecar target selection is cancelled', async () => {
+    const harness = await projectWithMedia()
+    await invoke(harness, 'video-update-timeline', {
+      projectId: 'agent-demo',
+      expectedRevision: 1,
+      operations: [{
+        type: 'add-caption',
+        caption: {
+          id: 'caption-cancel-sidecar',
+          trackId: 'captions-1',
+          startFrame: 0,
+          endFrame: 30,
+          text: 'Keep the first target bounded',
+          placement: 'bottom'
+        }
+      }]
+    })
+    const primaryTarget = 'fake_render_cancel_sidecar_001'
+    harness.media.queueSaveTarget(mediaHandle(primaryTarget, 'export', 'cancelled-sidecar.mp4', 'video'))
+    harness.media.queueSaveTarget()
+
+    const response = await harness.client.commands.executeCommand<ToolResult>('editor-request', {
+      action: 'render.start',
+      payload: {
+        projectId: 'agent-demo',
+        expectedRevision: 2,
+        kind: 'h264-mp4',
+        captionMode: 'sidecar',
+        subtitleFormat: 'srt'
+      }
+    })
+
+    expect(contentObject(response)).toMatchObject({ outcome: 'cancelled', code: 'MEDIA_CANCELLED' })
+    expect(harness.media.handles.get(primaryTarget)?.revoked).toBe(true)
+    expect(harness.transport.requests.map(({ method }) => method)).not.toContain('media.startFfmpegJob')
+    await harness.dispose()
+  })
+
+  it('exports standalone WebVTT through a text-only durable job and validates its artifact', async () => {
+    const harness = await projectWithMedia()
+    await invoke(harness, 'video-update-timeline', {
+      projectId: 'agent-demo',
+      expectedRevision: 1,
+      operations: [{
+        type: 'add-caption',
+        caption: {
+          id: 'caption-standalone',
+          trackId: 'captions-1',
+          startFrame: 0,
+          endFrame: 45,
+          text: 'Standalone caption',
+          placement: 'bottom'
+        }
+      }]
+    })
+    const target = 'fake_standalone_vtt_00001'
+    harness.media.addHandle({
+      ...mediaHandle(target, 'export', 'captions.vtt', 'subtitle'),
+      mimeType: 'text/vtt'
+    })
+    const capabilityRequestsBefore = harness.transport.requests
+      .filter(({ method }) => method === 'media.getCapabilities').length
+    harness.media.executablesAvailable = false
+    const render = await invoke(harness, 'video-render', {
+      projectId: 'agent-demo',
+      expectedRevision: 2,
+      kind: 'subtitles',
+      outputHandleId: target,
+      subtitleFormat: 'vtt'
+    })
+    const jobId = String(contentObject(render).jobId)
+    const request = harness.transport.requests
+      .filter(({ method }) => method === 'media.startFfmpegJob')
+      .at(-1)?.params as JsonObject
+    expect(request).toMatchObject({
+      arguments: [],
+      inputs: {},
+      outputs: {},
+      metadata: {
+        projectId: 'agent-demo',
+        pinnedRevision: 2,
+        renderKind: 'subtitles',
+        captionMode: 'none',
+        subtitleFormat: 'vtt'
+      },
+      textOutputs: {
+        subtitles: { handleId: target, mimeType: 'text/vtt' }
+      }
+    })
+    expect(JSON.stringify(request.textOutputs)).toContain('WEBVTT')
+    expect(harness.transport.requests.filter(({ method }) => method === 'media.getCapabilities'))
+      .toHaveLength(capabilityRequestsBefore)
+    harness.media.executablesAvailable = true
+
+    const generated = 'fake_generated_vtt_000001'
+    harness.media.addHandle({
+      ...mediaHandle(generated, 'read', 'captions.vtt', 'subtitle'),
+      mimeType: 'text/vtt',
+      byteSize: 96,
+      completionIdentity: 'standalone-vtt-complete'
+    })
+    harness.media.setProbe(generated, subtitleProbe(generated))
+    harness.jobs.start(jobId)
+    const artifact = createGeneratedArtifactFixture({
+      artifactId: `artifact_${createSafeSuffix(jobId)}_vtt`,
+      ownerExtensionId: harness.identity.id,
+      ownerExtensionVersion: harness.identity.version,
+      workspaceId: harness.context.workspaceContext!.id,
+      mediaHandleId: generated,
+      displayName: 'captions.vtt',
+      mediaKind: 'subtitle',
+      mimeType: 'text/vtt',
+      byteSize: 96,
+      completionIdentity: 'standalone-vtt-complete',
+      provenance: {
+        jobId,
+        operation: 'media.startFfmpegJob',
+        metadata: {
+          projectId: 'agent-demo', pinnedRevision: 2, renderKind: 'subtitles',
+          captionMode: 'none', subtitleFormat: 'vtt', canvasPreset: '16:9', proofFrame: null
+        }
+      }
+    })
+    harness.jobs.complete(jobId, { schemaVersion: 1, generatedArtifacts: [artifact] })
+    const status = await invoke(harness, 'video-render-status', { jobId, projectId: 'agent-demo' })
+    expect(status.content).toMatchObject({
+      outcome: 'completed', renderKind: 'subtitles', technicallyValidated: true
+    })
+    expect(status.generatedArtifacts).toEqual([expect.objectContaining({ artifactId: artifact.artifactId })])
     await harness.dispose()
   })
 })
@@ -780,7 +1332,8 @@ function renderProvenance(
     renderKind: 'h264-mp4',
     captionMode,
     subtitleFormat,
-    canvasPreset: '16:9'
+    canvasPreset: '16:9',
+    proofFrame: null
   }
 }
 

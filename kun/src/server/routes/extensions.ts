@@ -1,5 +1,9 @@
 import { isAbsolute } from 'node:path'
 import { z } from 'zod'
+import {
+  ManifestLocaleTagSchema,
+  resolveExtensionManifestLocale
+} from '@kun/extension-api'
 import { redactSecrets, redactSecretText } from '../../config/secret-redaction.js'
 import {
   ExtensionError,
@@ -9,6 +13,7 @@ import {
   ExtensionRegistry,
   inspectKunxArchive,
   type ArchiveValidationOptions,
+  type BundledExtensionSeedResult,
   type DevelopmentExtensionRecord,
   type ExtensionManifest,
   type ExtensionRegistryEntry,
@@ -71,6 +76,7 @@ const ScopeRequestSchema = z.strictObject({ workspaceRoot: PathSchema.optional()
 const SelectRequestSchema = z.strictObject({ version: VersionSchema })
 const PermissionRequestSchema = z.strictObject({
   workspaceRoot: PathSchema,
+  expectedVersion: VersionSchema,
   permissions: PermissionListSchema.nullable()
 })
 
@@ -82,6 +88,7 @@ export type ExtensionManagementRoutes = {
   validation: ArchiveValidationOptions
   runtimeToken: string
   insecure: boolean
+  bundledSeedResults?: readonly BundledExtensionSeedResult[]
 }
 
 /**
@@ -146,7 +153,8 @@ async function listExtensions(runtime: ExtensionManagementRoutes, request: Reque
     : runtime.packageManager.paths.workspaceKey(page.workspaceRoot)
   const extensions = selectedIds.map((id) => projectRegistryEntry(
     registry.extensions[id]!,
-    workspaceKey
+    workspaceKey,
+    page.locale
   ))
   const hasMore = offset + selectedIds.length < ids.length
   return jsonResponse({
@@ -242,7 +250,12 @@ async function setExtensionEnabled(
     await runtime.packageManager.setGlobalEnabled(extensionId, enabled)
   } else {
     const workspaceKey = runtime.packageManager.paths.workspaceKey(body.data.workspaceRoot)
-    await runtime.packageManager.setWorkspaceEnabled(extensionId, workspaceKey, enabled)
+    await runtime.packageManager.setWorkspaceEnabled(
+      extensionId,
+      workspaceKey,
+      enabled,
+      body.data.workspaceRoot
+    )
   }
   return changedEntry(runtime, extensionId)
 }
@@ -259,7 +272,9 @@ async function setExtensionPermissions(
   await runtime.packageManager.setWorkspacePermissionGrant(
     extensionId,
     workspaceKey,
-    body.data.permissions ?? undefined
+    body.data.permissions ?? undefined,
+    body.data.expectedVersion,
+    body.data.workspaceRoot
   )
   return changedEntry(runtime, extensionId)
 }
@@ -348,7 +363,14 @@ async function listExtensionDiagnostics(
     runtime.manager.listDiagnostics()
   ])
   const byId = new Map(hostDiagnostics.map((diagnostic) => [diagnostic.extensionId, diagnostic]))
-  const ids = [...new Set([...Object.keys(registry.extensions), ...byId.keys()])].sort()
+  const seedsById = new Map(
+    (runtime.bundledSeedResults ?? []).map((diagnostic) => [diagnostic.extensionId, diagnostic])
+  )
+  const ids = [...new Set([
+    ...Object.keys(registry.extensions),
+    ...byId.keys(),
+    ...seedsById.keys()
+  ])].sort()
   const start = page.cursor === undefined ? 0 : ids.findIndex((id) => id > page.cursor!)
   const offset = start < 0 ? ids.length : start
   const selectedIds = ids.slice(offset, offset + page.limit)
@@ -360,7 +382,8 @@ async function listExtensionDiagnostics(
     extension: registry.extensions[extensionId] === undefined
       ? undefined
       : projectRegistryEntry(registry.extensions[extensionId]!),
-    host: redactSecrets(selectedHostDiagnostics[index]!)
+    host: redactSecrets(selectedHostDiagnostics[index]!),
+    seed: seedsById.has(extensionId) ? redactSecrets(seedsById.get(extensionId)!) : undefined
   }))
   const hasMore = offset + selectedIds.length < ids.length
   return jsonResponse({
@@ -397,19 +420,28 @@ async function parseBody<T extends z.ZodType>(
 
 function parsePage(
   request: Request
-): { ok: true; limit: number; cursor?: string; workspaceRoot?: string } | { ok: false; response: JsonResponse } {
+): {
+  ok: true
+  limit: number
+  cursor?: string
+  workspaceRoot?: string
+  locale?: string
+} | { ok: false; response: JsonResponse } {
   const url = new URL(request.url)
   const rawLimit = url.searchParams.get('limit')
   const rawCursor = url.searchParams.get('cursor')
   const rawWorkspaceRoot = url.searchParams.get('workspace_root')
+  const rawLocale = url.searchParams.get('locale')
   const parsed = z.strictObject({
     limit: z.coerce.number().int().min(1).max(MAX_PAGE_LIMIT).default(DEFAULT_PAGE_LIMIT),
     cursor: ExtensionIdSchema.optional(),
-    workspaceRoot: PathSchema.refine(isAbsolute, 'workspace_root must be absolute').optional()
+    workspaceRoot: PathSchema.refine(isAbsolute, 'workspace_root must be absolute').optional(),
+    locale: ManifestLocaleTagSchema.optional()
   }).safeParse({
     limit: rawLimit ?? undefined,
     cursor: rawCursor ?? undefined,
-    workspaceRoot: rawWorkspaceRoot ?? undefined
+    workspaceRoot: rawWorkspaceRoot ?? undefined,
+    locale: rawLocale ?? undefined
   })
   if (!parsed.success) {
     return { ok: false, response: ERRORS.validation('invalid extension list query', parsed.error.issues) }
@@ -417,7 +449,11 @@ function parsePage(
   return { ok: true, ...parsed.data }
 }
 
-function projectRegistryEntry(entry: ExtensionRegistryEntry, workspaceKey?: string) {
+function projectRegistryEntry(
+  entry: ExtensionRegistryEntry,
+  workspaceKey?: string,
+  locale?: string
+) {
   const workspaceTrusted = workspaceKey === undefined || Object.prototype.hasOwnProperty.call(
     entry.workspacePermissionGrants,
     workspaceKey
@@ -441,14 +477,17 @@ function projectRegistryEntry(entry: ExtensionRegistryEntry, workspaceKey?: stri
       : structuredClone(entry.workspacePermissionGrants[workspaceKey]),
     versions: Object.values(entry.versions)
       .sort((left, right) => left.version.localeCompare(right.version))
-      .map(projectInstalledVersion),
-    development: entry.development === undefined ? undefined : projectDevelopment(entry.development)
+      .map((version) => projectInstalledVersion(version, locale)),
+    development: entry.development === undefined
+      ? undefined
+      : projectDevelopment(entry.development, locale)
   }
 }
 
-function projectInstalledVersion(version: InstalledExtensionVersion) {
+function projectInstalledVersion(version: InstalledExtensionVersion, locale?: string) {
+  const manifest = resolveExtensionManifestLocale(version.manifest, locale)
   return {
-    id: `${version.manifest.publisher}.${version.manifest.name}`,
+    id: `${manifest.publisher}.${manifest.name}`,
     version: version.version,
     path: version.packagePath,
     sha256: version.archiveSha256,
@@ -457,22 +496,23 @@ function projectInstalledVersion(version: InstalledExtensionVersion) {
     requestedPermissions: [...version.requestedPermissions],
     grantedPermissions: [...version.grantedPermissions],
     installedAt: version.installedAt,
-    apiVersion: version.manifest.apiVersion,
-    manifestVersion: version.manifest.manifestVersion,
-    stateSchemaVersion: version.manifest.stateSchemaVersion,
-    displayName: version.manifest.displayName,
-    description: version.manifest.description,
-    views: projectManagedViews(version.manifest),
-    modelProviders: structuredClone(version.manifest.contributes.modelProviders),
-    authentication: structuredClone(version.manifest.contributes.authentication),
+    apiVersion: manifest.apiVersion,
+    manifestVersion: manifest.manifestVersion,
+    stateSchemaVersion: manifest.stateSchemaVersion,
+    displayName: manifest.displayName,
+    description: manifest.description,
+    views: projectManagedViews(manifest),
+    modelProviders: structuredClone(manifest.contributes.modelProviders),
+    authentication: structuredClone(manifest.contributes.authentication),
     mutable: false
   }
 }
 
-function projectDevelopment(development: DevelopmentExtensionRecord) {
+function projectDevelopment(development: DevelopmentExtensionRecord, locale?: string) {
+  const manifest = resolveExtensionManifestLocale(development.manifest, locale)
   return {
-    id: `${development.manifest.publisher}.${development.manifest.name}`,
-    version: development.manifest.version,
+    id: `${manifest.publisher}.${manifest.name}`,
+    version: manifest.version,
     path: development.path,
     digest: development.digest,
     source: structuredClone(development.source),
@@ -481,20 +521,20 @@ function projectDevelopment(development: DevelopmentExtensionRecord) {
     registeredAt: development.registeredAt,
     reloadedAt: development.reloadedAt,
     generation: development.generation,
-    apiVersion: development.manifest.apiVersion,
-    manifestVersion: development.manifest.manifestVersion,
-    stateSchemaVersion: development.manifest.stateSchemaVersion,
-    displayName: development.manifest.displayName,
-    description: development.manifest.description,
-    views: projectManagedViews(development.manifest),
-    modelProviders: structuredClone(development.manifest.contributes.modelProviders),
-    authentication: structuredClone(development.manifest.contributes.authentication),
+    apiVersion: manifest.apiVersion,
+    manifestVersion: manifest.manifestVersion,
+    stateSchemaVersion: manifest.stateSchemaVersion,
+    displayName: manifest.displayName,
+    description: manifest.description,
+    views: projectManagedViews(manifest),
+    modelProviders: structuredClone(manifest.contributes.modelProviders),
+    authentication: structuredClone(manifest.contributes.authentication),
     mutable: true
   }
 }
 
 function projectManagedViews(manifest: ExtensionManifest) {
-  return (['views.editorTab', 'views.fullPage'] as const).flatMap((point) =>
+  return (['views.rightSidebar', 'views.editorTab', 'views.fullPage'] as const).flatMap((point) =>
     manifest.contributes[point].map((view) => ({
       id: view.id,
       title: view.title,

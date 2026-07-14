@@ -25,6 +25,7 @@ if (JSON.stringify(examples) !== JSON.stringify(expected)) {
 
 run('npm', ['run', 'build:extensions'])
 run('npm', ['run', 'build:kun'])
+run('node', ['--test', join(examplesRoot, 'run-repository-kun-cli.test.mjs')])
 
 for (const packageName of ['@kun/extension-api', '@kun/extension-react', '@kun/extension-test']) {
   await import(packageName)
@@ -47,15 +48,10 @@ try {
     }
     run('node', [join(examplesRoot, 'validate-manifest.mjs'), join(directory, 'kun-extension.json')])
     if (packageJson.scripts?.test) run('npm', ['--prefix', directory, 'run', 'test'])
-    run('node', [
-      join(root, 'kun', 'dist', 'cli', 'serve-entry.js'),
-      'extension', 'validate', directory, '--json'
-    ])
-    run('node', [
-      join(root, 'kun', 'dist', 'cli', 'serve-entry.js'),
-      'extension', 'pack', directory,
-      '--output', join(temporary, `${name}.kunx`),
-      '--overwrite', '--json'
+    run('npm', ['--prefix', directory, 'run', 'validate', '--', '--json'])
+    run('npm', [
+      '--prefix', directory, 'run', 'pack', '--',
+      '--output', join(temporary, `${name}.kunx`), '--overwrite', '--json'
     ])
   }
 } finally {

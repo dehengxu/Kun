@@ -149,6 +149,7 @@ import {
   ExtensionConsentTokenService,
   ProtectedExtensionActionService
 } from './extensions/extension-consent-service'
+import { localizeProtectedExtensionPrompt } from './extensions/protected-extension-prompt'
 import { ProtectedCredentialSurfaceController } from './extensions/protected-credential-surface'
 import { ExtensionContentScriptController } from './extensions/extension-content-script-controller'
 import { createExtensionWorkbenchEnvironment } from './extensions/extension-workbench-environment'
@@ -1617,19 +1618,21 @@ app.whenReady().then(async () => {
   const protectedExtensionActions = new ProtectedExtensionActionService(
     extensionConsentTokens,
     async (binding, copy) => {
+      const settings = await store.load()
+      const prompt = localizeProtectedExtensionPrompt(binding, copy, settings.locale)
       const detail = [
-        `Extension: ${binding.extensionId} ${binding.extensionVersion}`,
-        `Operation: ${binding.operationKind}`,
-        binding.workspaceRoot ? `Workspace: ${binding.workspaceRoot}` : undefined,
-        copy.detail
+        `${prompt.extensionLabel}: ${binding.extensionId} ${binding.extensionVersion}`,
+        `${prompt.operationLabel}: ${binding.operationKind}`,
+        binding.workspaceRoot ? `${prompt.workspaceLabel}: ${binding.workspaceRoot}` : undefined,
+        prompt.detail
       ].filter((value): value is string => Boolean(value)).join('\n\n')
       const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
       const dialogOptions = {
         type: 'warning' as const,
-        title: copy.title,
-        message: copy.message,
+        title: prompt.title,
+        message: prompt.message,
         detail,
-        buttons: ['Continue', 'Cancel'],
+        buttons: [prompt.approveLabel, prompt.cancelLabel],
         defaultId: 1,
         cancelId: 1,
         noLink: true,
@@ -1715,6 +1718,13 @@ app.whenReady().then(async () => {
 
   traceStartup('ipc registration:start')
   let publishExtensionWorkbenchEnvironmentChanged = async (): Promise<void> => undefined
+  const requestExtensionWorkbenchEnvironmentPublish = (): void => {
+    void publishExtensionWorkbenchEnvironmentChanged().catch((error) => {
+      logWarn('extension-workbench', 'Failed to publish extension workbench environment.', {
+        message: error instanceof Error ? error.message : String(error)
+      })
+    })
+  }
   const applySettingsPatch = async (partial: AppSettingsPatch): Promise<AppSettingsV1> => {
     const prev = await store.load()
     const effectivePartial = preserveRuntimeTokenForFullSettingsSnapshot(prev, partial)
@@ -1772,11 +1782,7 @@ app.whenReady().then(async () => {
     syncLoginItemSettings(saved)
     syncTray(saved)
     syncCheckpointCleanupTimer(saved)
-    void publishExtensionWorkbenchEnvironmentChanged().catch((error) => {
-      logWarn('extension-workbench', 'Failed to publish extension workbench environment.', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    })
+    requestExtensionWorkbenchEnvironmentPublish()
     return saved
   }
 
@@ -1788,7 +1794,7 @@ app.whenReady().then(async () => {
 
   const saveSettingsPatch = async (partial: AppSettingsPatch): Promise<AppSettingsV1> => {
     const saved = await store.patch(preserveRuntimeTokenForFullSettingsSnapshot(await store.load(), partial))
-    void publishExtensionWorkbenchEnvironmentChanged().catch(() => undefined)
+    requestExtensionWorkbenchEnvironmentPublish()
     return saved
   }
 
@@ -1863,17 +1869,17 @@ app.whenReady().then(async () => {
   publishExtensionWorkbenchEnvironmentChanged = () =>
     extensionIpcRegistration.publishWorkbenchEnvironmentChanged()
   const onNativeThemeUpdated = (): void => {
-    void publishExtensionWorkbenchEnvironmentChanged().catch(() => undefined)
+    requestExtensionWorkbenchEnvironmentPublish()
   }
   const onWorkbenchZoomChanged = (): void => {
-    void publishExtensionWorkbenchEnvironmentChanged().catch(() => undefined)
+    requestExtensionWorkbenchEnvironmentPublish()
   }
   bindExtensionMainWindow = (window) => {
     extensionIpcRegistration.bindMainWindow(window)
     window.webContents.on('zoom-changed', onWorkbenchZoomChanged)
   }
   nativeTheme.on('updated', onNativeThemeUpdated)
-  void publishExtensionWorkbenchEnvironmentChanged().catch(() => undefined)
+  requestExtensionWorkbenchEnvironmentPublish()
   const stopSecretRevealConsentPump = startExtensionSecretRevealConsentPump(
     extensionIpcOptions
   )

@@ -16,6 +16,7 @@ const {
 const { tmpdir } = require('node:os')
 const { basename, join, resolve } = require('node:path')
 const { pathToFileURL } = require('node:url')
+const { isDeepStrictEqual } = require('node:util')
 const {
   makeTreeWritable,
   resolvePackagedRuntimeExecutable,
@@ -29,7 +30,7 @@ const {
 } = require('./lib/extension-native-media-smoke.cjs')
 
 const EXTENSION_ID = 'kun-examples.kun-video-editor'
-const EXTENSION_VERSION = '0.2.2'
+const EXTENSION_VERSION = '0.3.0'
 const SUCCESS_MARKER = 'Packaged Kun Video Editor native smoke OK ('
 const REEXEC_MARKER = 'KUN_PACKAGED_VIDEO_EDITOR_NATIVE_SMOKE_REEXEC'
 const DEFAULT_COMMAND_TIMEOUT_MS = 180_000
@@ -72,6 +73,7 @@ async function main() {
     runtimeExecutable,
     repositoryRoot: argumentValue('--repository-root') ?? resolve(__dirname, '..'),
     archivePath: argumentValue('--archive'),
+    captionMode: captionModeArgument('--caption-mode', 'both'),
     commandTimeoutMs: positiveIntegerArgument('--command-timeout-ms', DEFAULT_COMMAND_TIMEOUT_MS),
     jobTimeoutMs: positiveIntegerArgument('--job-timeout-ms', DEFAULT_JOB_TIMEOUT_MS)
   })
@@ -124,6 +126,7 @@ async function runPackagedVideoEditorNativeSmoke({
   runtimeExecutable,
   repositoryRoot,
   archivePath,
+  captionMode = 'both',
   commandTimeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
   jobTimeoutMs = DEFAULT_JOB_TIMEOUT_MS
 }) {
@@ -229,7 +232,8 @@ async function runPackagedVideoEditorNativeSmoke({
         cancellationOutput,
         ffprobePath: executables.ffprobe,
         jobTimeoutMs,
-        commandTimeoutMs
+        commandTimeoutMs,
+        captionMode
       })
     })
 
@@ -277,7 +281,8 @@ async function runPackagedVideoEditorNativeSmoke({
       `${SUCCESS_MARKER}${process.platform}/${process.arch}): real packaged Kun runtime, ` +
       `real kun-video-editor .kunx ${archivePath === undefined ? 'build/' : ''}validate/install/activation, ` +
       'host-native ffprobe, proof artifact, ' +
-      'burned-caption H.264/SRT export, post-probe/artifact publication, durable cancellation, executable-unavailable path, ' +
+      `${captionMode === 'both' ? 'burned-caption' : 'sidecar-caption fallback'} H.264/SRT export, ` +
+      'post-probe/artifact publication, durable cancellation, executable-unavailable path, ' +
       'source preservation, and uninstall.\n'
     )
   } catch (error) {
@@ -399,7 +404,7 @@ async function exerciseSuccessfulNativeWorkflow(runtime, smoke, paths) {
     expectedRevision: 2,
     kind: 'h264-mp4',
     outputHandleId: videoTarget.id,
-    captionMode: 'both',
+    captionMode: paths.captionMode,
     subtitleOutputHandleId: subtitleTarget.id,
     subtitleFormat: 'srt',
     idempotencyKey: 'packaged-native-h264'
@@ -408,7 +413,7 @@ async function exerciseSuccessfulNativeWorkflow(runtime, smoke, paths) {
   const [videoArtifact, subtitleArtifact] = assertCompletedArtifacts(videoStatus, [
     { mediaKind: 'video', mimeType: 'video/mp4' },
     { mediaKind: 'subtitle', mimeType: 'application/x-subrip' }
-  ], 'burned-caption H.264/SRT render')
+  ], `${paths.captionMode === 'both' ? 'burned-caption' : 'sidecar-caption'} H.264/SRT render`)
   await assertRegularNonEmptyFile(paths.videoOutput, 'packaged H.264 output')
   const subtitleText = await assertSrtSidecar(paths.subtitleOutput, 'packaged SRT sidecar')
   assertH264Probe(runFfprobe(paths.ffprobePath, paths.videoOutput, paths.commandTimeoutMs))
@@ -435,16 +440,21 @@ async function exerciseSuccessfulNativeWorkflow(runtime, smoke, paths) {
     idempotencyKey: 'packaged-native-cancellation'
   })
   const cancellationJobId = jobId(cancellationStart, 'cancellation render')
-  const cancelled = await smoke.invoke('video-render-status', {
+  const cancelled = await smoke.invoke('video-render-cancel', {
     jobId: cancellationJobId,
-    action: 'cancel',
     reason: 'Packaged native smoke cancellation'
   })
   assertContent(cancelled, {
     outcome: 'cancelled',
     state: 'cancelled',
     technicallyValidated: false
-  }, 'video-render-status cancellation')
+  }, 'video-render-cancel cancellation')
+  if (smoke.approvalCount('video-render-status') !== 0) {
+    throw new Error('Read-only video-render-status unexpectedly requested approval')
+  }
+  if (smoke.approvalCount('video-render-cancel') !== 1) {
+    throw new Error('Destructive video-render-cancel did not request exactly one approval')
+  }
   if (Array.isArray(cancelled.generatedArtifacts) && cancelled.generatedArtifacts.length > 0) {
     throw new Error('Cancelled packaged render published generated artifacts')
   }
@@ -454,7 +464,7 @@ async function exerciseSuccessfulNativeWorkflow(runtime, smoke, paths) {
 
   const durableArtifacts = await runtime.extensionPlatform.artifacts.listOwned(
     smoke.principal,
-    runtime.extensionPlatform.paths.workspaceKey(paths.workspace)
+    smoke.workspaceKey
   )
   const expectedArtifactIds = new Set([
     proofArtifact.artifactId,
@@ -484,18 +494,21 @@ async function exerciseUnavailableExecutablePath(_runtime, smoke, { sourceHandle
     projectId: 'packaged-native-unavailable',
     name: 'Packaged native unavailable executable'
   })
-  const failed = await smoke.invokeRaw('video-probe', {
+  const unavailable = await smoke.invoke('video-probe', {
     projectId: 'packaged-native-unavailable',
     expectedRevision: 0,
     mediaHandleId: sourceHandleId,
     assetId: 'unavailable-source',
     addToTimeline: true
   })
-  if (failed.item.kind !== 'tool_result' || failed.item.isError !== true) {
-    throw new Error('Missing ffprobe path did not fail the packaged video-probe tool')
-  }
-  const diagnostic = JSON.stringify(failed.item.output)
-  if (!diagnostic.includes('ffprobe is not available on this host')) {
+  const unavailableContent = assertContent(unavailable, {
+    outcome: 'unavailable',
+    code: 'FFPROBE_UNAVAILABLE',
+    currentRevision: 0,
+    changedIds: []
+  }, 'unavailable video-probe preflight')
+  const diagnostic = JSON.stringify(unavailableContent)
+  if (!diagnostic.includes('ffprobe is unavailable')) {
     throw new Error(`Missing ffprobe path returned an unexpected diagnostic: ${diagnostic}`)
   }
   if (diagnostic.includes('unavailable/ffprobe') || diagnostic.includes('unavailable\\\\ffprobe')) {
@@ -555,7 +568,8 @@ async function prepareRuntime(runtime, workspace) {
   await platform.registry.setWorkspacePermissionGrant(
     EXTENSION_ID,
     workspaceKey,
-    [...active.grantedPermissions]
+    [...active.grantedPermissions],
+    active.manifest.version
   )
   const host = await platform.manager.activate(EXTENSION_ID, 'onTool:video-project', {
     workspaceRoot: canonicalWorkspace,
@@ -569,8 +583,8 @@ async function prepareRuntime(runtime, workspace) {
   })
   if (!host) throw new Error('Packaged Kun Video Editor Host did not activate')
   const registrations = platform.tools.list(EXTENSION_ID)
-  if (registrations.length !== 8) {
-    throw new Error(`Packaged Kun Video Editor registered ${registrations.length} tools instead of 8`)
+  if (registrations.length !== 9) {
+    throw new Error(`Packaged Kun Video Editor registered ${registrations.length} tools instead of 9`)
   }
   const aliases = new Map(registrations.map((registration) => [
     registration.declaration.name,
@@ -584,6 +598,7 @@ async function prepareRuntime(runtime, workspace) {
     workspaceTrusted: true
   }
   let callSequence = 0
+  const approvalCounts = new Map()
   const invokeRaw = async (localToolId, args) => {
     const toolName = aliases.get(localToolId)
     if (!toolName) throw new Error(`Packaged Kun Video Editor tool is unavailable: ${localToolId}`)
@@ -604,7 +619,10 @@ async function prepareRuntime(runtime, workspace) {
       approvalPolicy: 'auto',
       sandboxMode: 'danger-full-access',
       abortSignal: controller.signal,
-      awaitApproval: async () => 'allow'
+      awaitApproval: async () => {
+        approvalCounts.set(localToolId, (approvalCounts.get(localToolId) ?? 0) + 1)
+        return 'allow'
+      }
     })
   }
   const invoke = async (localToolId, args) => {
@@ -622,8 +640,10 @@ async function prepareRuntime(runtime, workspace) {
   }
   return {
     principal,
+    workspaceKey,
     invoke,
     invokeRaw,
+    approvalCount: (localToolId) => approvalCounts.get(localToolId) ?? 0,
     registerMedia: (input) => platform.mediaHandles.register(principal, {
       workspaceRoot: canonicalWorkspace,
       ...input
@@ -632,7 +652,7 @@ async function prepareRuntime(runtime, workspace) {
       const deadline = Date.now() + timeoutMs
       let last
       while (Date.now() < deadline) {
-        last = await invoke('video-render-status', { jobId: jobIdValue, action: 'get' })
+        last = await invoke('video-render-status', { jobId: jobIdValue })
         const state = contentOf(last, 'video-render-status').state
         if (typeof state === 'string' && TERMINAL_JOB_STATES.has(state)) {
           if (state !== 'completed') {
@@ -831,7 +851,7 @@ function assertCompletedArtifacts(result, expected, label) {
 function assertContent(result, expected, label) {
   const content = contentOf(result, label)
   for (const [key, value] of Object.entries(expected)) {
-    if (content[key] !== value) {
+    if (!isDeepStrictEqual(content[key], value)) {
       throw new Error(
         `${label} expected content.${key}=${JSON.stringify(value)}, got ${JSON.stringify(content[key])}`
       )
@@ -964,6 +984,18 @@ function positiveIntegerArgument(name, fallback) {
   return parsed
 }
 
+function captionModeArgument(name, fallback) {
+  return parseCaptionMode(argumentValue(name), fallback, name)
+}
+
+function parseCaptionMode(value, fallback = 'both', label = 'caption mode') {
+  if (value === undefined) return fallback
+  if (value !== 'both' && value !== 'sidecar') {
+    throw new Error(`${label} must be both or sidecar`)
+  }
+  return value
+}
+
 function delay(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds))
 }
@@ -971,14 +1003,17 @@ function delay(milliseconds) {
 module.exports = {
   EXTENSION_ID,
   SUCCESS_MARKER,
+  assertContent,
   assertCompletedArtifact,
   assertCompletedArtifacts,
   assertH264Probe,
   assertPackagedReexecResult,
   assertReleaseArchive,
   assertSrtSidecar,
+  captionModeArgument,
   createNpmInvocation,
   createPackagedReexecInvocation,
+  parseCaptionMode,
   runPackagedVideoEditorNativeSmoke
 }
 

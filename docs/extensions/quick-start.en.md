@@ -25,6 +25,24 @@ node --version
 
 ## 2. Create a project
 
+The commands below are the standalone public-registry path. First verify that
+the scaffolder and template dependencies are actually published:
+
+```bash
+npm view create-kun-extension version
+npm view @kun/extension-api version
+npm view @kun/extension-react version
+npm view @kun/extension-test version
+```
+
+Continue only when the packages required by the chosen template return
+versions. `E404` means the configured registry does not yet provide the
+standalone artifacts; use the repository
+[extension examples](../../examples/extensions/README.md) instead of adding
+repository-relative `file:` dependencies to a portable project. The `kun` CLI
+comes from the Kun installation; the unscoped npm package with that name is not
+the Kun Agent CLI.
+
 ```bash
 npx create-kun-extension hello-sidebar \
   --template react \

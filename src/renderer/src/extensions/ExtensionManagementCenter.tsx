@@ -13,12 +13,13 @@ import {
   ShieldCheck,
   Trash2
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { SidebarTitlebarToggleButton } from '../components/sidebar/SidebarPrimitives'
 import { ExtensionAccountManagement } from './ExtensionAccountManagement'
 import {
   extensionWorkbenchClient,
+  type BundledExtensionSeedDiagnostic,
   type ExtensionHostDiagnostic,
   type ExtensionManagementEntry
 } from './extension-workbench-client'
@@ -64,7 +65,10 @@ export function ExtensionManagementCenter({
   const copy = (chinese: string, english: string): string => zh ? chinese : english
   const [tab, setTab] = useState<Tab>('installed')
   const [entries, setEntries] = useState<ExtensionManagementEntry[]>([])
-  const [diagnostics, setDiagnostics] = useState<Map<string, ExtensionHostDiagnostic>>(new Map())
+  const [diagnostics, setDiagnostics] = useState<Map<string, {
+    host: ExtensionHostDiagnostic
+    seed?: BundledExtensionSeedDiagnostic
+  }>>(new Map())
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ tone: 'error' | 'success' | 'info'; text: string } | null>(null)
@@ -73,23 +77,30 @@ export function ExtensionManagementCenter({
   const [indexVersion, setIndexVersion] = useState('')
   const [permissionEditorId, setPermissionEditorId] = useState<string | null>(null)
   const [permissionDraft, setPermissionDraft] = useState<string[]>([])
+  const refreshGeneration = useRef(0)
   const sortedEntries = useMemo(() => [...entries].sort((a, b) => a.id.localeCompare(b.id)), [entries])
 
   const refresh = useCallback(async (): Promise<void> => {
+    const generation = ++refreshGeneration.current
     setLoading(true)
     try {
       const [nextEntries, nextDiagnostics] = await Promise.all([
-        extensionWorkbenchClient.listExtensions(workspaceRoot || undefined),
+        extensionWorkbenchClient.listExtensions(workspaceRoot || undefined, i18n.language),
         extensionWorkbenchClient.listDiagnostics()
       ])
+      if (generation !== refreshGeneration.current) return
       setEntries(nextEntries)
-      setDiagnostics(new Map(nextDiagnostics.map((item) => [item.extensionId, item.host])))
+      setDiagnostics(new Map(nextDiagnostics.map((item) => [item.extensionId, {
+        host: item.host,
+        ...(item.seed ? { seed: item.seed } : {})
+      }])))
     } catch (error) {
+      if (generation !== refreshGeneration.current) return
       setNotice({ tone: 'error', text: error instanceof Error ? error.message : String(error) })
     } finally {
-      setLoading(false)
+      if (generation === refreshGeneration.current) setLoading(false)
     }
-  }, [workspaceRoot])
+  }, [i18n.language, workspaceRoot])
 
   useEffect(() => {
     void refresh()
@@ -236,7 +247,7 @@ export function ExtensionManagementCenter({
             </div>
           ) : tab === 'diagnostics' ? (
             <div className="space-y-3">
-              {sortedEntries.map((entry) => <DiagnosticCard key={entry.id} entry={entry} diagnostic={diagnostics.get(entry.id)} copy={copy} onOpenLogs={() => void window.kunGui.openLogDir()} />)}
+              {sortedEntries.map((entry) => <DiagnosticCard key={entry.id} entry={entry} diagnostic={diagnostics.get(entry.id)?.host} seed={diagnostics.get(entry.id)?.seed} copy={copy} onOpenLogs={() => void window.kunGui.openLogDir()} />)}
               {!loading && sortedEntries.length === 0 ? <EmptyState text={copy('没有扩展诊断。', 'No extension diagnostics.')} /> : null}
             </div>
           ) : (
@@ -444,9 +455,50 @@ function PermissionEditor({
   )
 }
 
-function DiagnosticCard({ entry, diagnostic, copy, onOpenLogs }: { entry: ExtensionManagementEntry; diagnostic?: ExtensionHostDiagnostic; copy: (zh: string, en: string) => string; onOpenLogs: () => void }): ReactElement {
+function DiagnosticCard({ entry, diagnostic, seed, copy, onOpenLogs }: {
+  entry: ExtensionManagementEntry
+  diagnostic?: ExtensionHostDiagnostic
+  seed?: BundledExtensionSeedDiagnostic
+  copy: (zh: string, en: string) => string
+  onOpenLogs: () => void
+}): ReactElement {
   const state = diagnostic?.lifecycleState ?? 'inactive'
-  return <article className="rounded-xl border border-ds-border bg-ds-card p-4"><div className="flex items-center gap-3"><Bug className="h-5 w-5 text-ds-faint" /><div className="min-w-0 flex-1"><div className="truncate text-[12px] font-semibold text-ds-ink">{entry.id}</div><div className="mt-0.5 text-[10.5px] text-ds-faint">{state} · {copy('重启', 'restarts')} {diagnostic?.restartCount ?? 0} · {diagnostic?.circuitOpen ? copy('熔断已打开', 'circuit open') : copy('熔断关闭', 'circuit closed')}</div></div><ActionButton icon={<Archive className="h-3.5 w-3.5" />} label={copy('日志', 'Logs')} onClick={onOpenLogs} /></div>{diagnostic?.lastError?.message ? <div className="mt-3 rounded-lg bg-red-500/8 px-3 py-2 text-[10.5px] leading-5 text-red-700 dark:text-red-200">{boundedText(diagnostic.lastError.code, 128)}: {boundedText(diagnostic.lastError.message)}</div> : null}{diagnostic?.logPath ? <div className="mt-2 truncate font-mono text-[10px] text-ds-faint" title={boundedText(diagnostic.logPath)}>{boundedText(diagnostic.logPath)}</div> : null}</article>
+  const seedNeedsAttention = seed?.outcome === 'failed' || seed?.outcome.startsWith('skipped-')
+  return (
+    <article className="rounded-xl border border-ds-border bg-ds-card p-4">
+      <div className="flex items-center gap-3">
+        <Bug className="h-5 w-5 text-ds-faint" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12px] font-semibold text-ds-ink">{entry.id}</div>
+          <div className="mt-0.5 text-[10.5px] text-ds-faint">
+            {state} · {copy('重启', 'restarts')} {diagnostic?.restartCount ?? 0} · {diagnostic?.circuitOpen ? copy('熔断已打开', 'circuit open') : copy('熔断关闭', 'circuit closed')}
+          </div>
+        </div>
+        <ActionButton icon={<Archive className="h-3.5 w-3.5" />} label={copy('日志', 'Logs')} onClick={onOpenLogs} />
+      </div>
+      {seed ? (
+        <div className={`mt-3 rounded-lg px-3 py-2 text-[10.5px] leading-5 ${seedNeedsAttention ? 'bg-amber-500/10 text-amber-800 dark:text-amber-200' : 'bg-emerald-500/10 text-emerald-800 dark:text-emerald-200'}`}>
+          <strong>{copy('内置扩展更新', 'Bundled extension update')}:</strong>{' '}
+          {boundedText(seed.outcome, 128)} · v{boundedText(seed.version, 128)}
+          {seed.outcome === 'skipped-permission-change'
+            ? ` — ${copy('新版本请求的权限发生变化，请在扩展中心审核后手动安装。', 'The new version changes requested permissions; review and install it manually in the Extension Center.')}`
+            : ''}
+          {seed.code ? ` (${boundedText(seed.code, 128)})` : ''}
+          {seed.message ? ` — ${boundedText(seed.message)}` : ''}
+        </div>
+      ) : null}
+      {diagnostic?.lastError?.message ? (
+        <div className="mt-3 rounded-lg bg-red-500/8 px-3 py-2 text-[10.5px] leading-5 text-red-700 dark:text-red-200">
+          {boundedText(diagnostic.lastError.code, 128)}: {boundedText(diagnostic.lastError.message)}
+        </div>
+      ) : null}
+      {diagnostic?.logPath ? (
+        <div className="mt-2 truncate font-mono text-[10px] text-ds-faint" title={boundedText(diagnostic.logPath)}>
+          {boundedText(diagnostic.logPath)}
+        </div>
+      ) : null}
+    </article>
+  )
 }
 
 function EmptyState({ text }: { text: string }): ReactElement {

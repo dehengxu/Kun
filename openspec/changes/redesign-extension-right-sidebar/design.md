@@ -32,6 +32,8 @@ The aggregate `ExtensionViewRailLauncher` and its popover will be removed. This 
 
 Host-rendered icons use an explicit host-image resource request. The resource protocol accepts that request only when the exact path is declared as an icon in the selected manifest, returns a cross-origin image response for that bounded case, and keeps normal View resources under the existing same-origin policy. The main renderer CSP permits `kun-extension:` only in `img-src`; it does not grant script, frame, or network authority.
 
+An installed version that has not yet been reviewed for the active workspace remains discoverable as an inert locked launcher. The Runtime projects only the localized ID, title, icon, grouping, order, and visibility expression for that launcher; it withholds View entry paths and resource roots. The renderer stores this metadata outside the executable contribution registry, and clicking it invokes Main's protected permission review. Normal `get`, `has`, layout restoration, activation, and View Session creation remain fail-closed until the reviewed grant is persisted. A later explicit permission revocation still removes the runnable entry as before.
+
 Alternative considered: retain one puzzle menu and place it at the bottom of the right rail. Rejected because it still makes users choose an extension twice and prevents an extension's own icon from becoming a stable muscle-memory target.
 
 ### 2. The Host continues to own panel geometry
@@ -42,7 +44,7 @@ Alternative considered: add `preferredWidth` to the public manifest. Deferred be
 
 ### 3. Main Agent coordination uses tools plus a workspace active-project pointer
 
-The video extension's existing eight registered tools remain the only Agent mutation/read surface. `video-project` gains an `active` action. Opening or creating a project records a bounded active-project ID in extension workspace storage; `active` resolves that pointer and returns the current project projection or a clear empty outcome. The Agent profile instructs callers to resolve the active project first, then read its revision and script before editing.
+The video extension's registered tools remain the only Agent mutation/read surface. `video-project` supports active-project lookup and selection. Opening or creating a project records a bounded active-project ID in extension workspace storage; active lookup resolves that pointer and returns the current project projection or a clear empty outcome. The Agent profile instructs callers to resolve the active project first, then read its revision and script before editing.
 
 Both manual Webview operations and Agent tool operations use `ProjectService`, optimistic revisions, and the existing `kun-video-editor.project-changed` host message. An open panel refreshes when the main Agent changes its active project. The Webview does not receive main-thread messages or tool calls directly, and the Agent does not receive arbitrary View state.
 
@@ -80,6 +82,40 @@ The Desktop Host keeps control of native-only interactions such as file pickers,
 
 Alternative considered: let the bundled video editor omit job restoration until a render begins. Rejected because it would only hide a broken public API contract and would make every third-party View using the documented jobs client fail in the same way.
 
+### 9. Workspace-scoped Hosts, tools, and View events are isolated end to end
+
+An activated extension Host, its registered tools, and its View events are owned by the admitted workspace scope rather than by the extension ID alone. Runtime activation SHALL key workspace-scoped Host state by extension and normalized workspace root, tool discovery and invocation SHALL require the caller's workspace to match that ownership, and View event delivery SHALL match both extension ID and workspace. Activation failure in a second workspace must fail closed; it must never expose or execute a registration left behind by a different workspace.
+
+Alternative considered: keep one global Host and merely hide tools in the renderer. Rejected because background Agent sessions and direct runtime tool execution would still be able to cross workspace boundaries.
+
+### 10. The reference editor proves executable media plans, not only serialized commands
+
+Render plans SHALL use FFmpeg-compatible decimal duration arguments, bounded sequential binding names, and a composition strategy that remains below public argument limits for at least 30 ordinary sequential clips. Canvas fitting/cropping is computed before item transforms so crop plus a sub-unity transform never requests an impossible crop. Focused tests SHALL execute proof, preview, and H.264/AAC export against a discovered FFmpeg installation when the required capabilities are present; missing optional caption filters are reported by capability preflight instead of failing late.
+
+Alternative considered: increase the filter-graph character limit. Rejected because the View-to-Host argument contract is intentionally bounded and oversized process arguments remain platform dependent.
+
+### 11. Transcript ingestion and timeline preview use public bounded media APIs
+
+The public media service gains a bounded UTF-8 text read for an authorized opaque media handle. The editor uses it to import SRT, WebVTT, or transcript JSON selected through the native picker, releases the temporary handle, and shows localized parse or capability errors. The editor's player maps project time through the selected timeline item to the correct source asset and source time, including trim, speed, ordering, and cut boundaries; it previews active captions in the panel. Script Markdown is a read-only deterministic projection rather than a misleading free-form editor.
+
+Alternative considered: ask users to paste transcript contents or asset IDs into JSON. Rejected because that bypasses the native permission model and is not a usable default workflow.
+
+### 12. Manifest localization is a generic Extension API capability
+
+Extension manifests MAY declare bounded locale overlays for extension metadata and contribution copy. Kun resolves the best supported locale for Host-rendered chrome such as right-rail tooltips, panel titles, Extension Center cards, settings, and result previews; Webview localization remains controlled by the existing appearance API. The mechanism is generic and versioned in the public manifest schema, not special-cased to the bundled video editor.
+
+Alternative considered: translate only the Webview body. Rejected because the panel title and other Host-rendered surfaces would still contradict Kun's selected language.
+
+### 13. Active project changes are authoritative, attributable, and race safe
+
+The workspace active-project pointer is authoritative when a View starts. Agent-originated create, select, or mutation operations publish a workspace-scoped active/project change, and the open panel switches or refreshes accordingly. View loads carry a monotonically increasing generation so late responses cannot restore an older selection. Switching projects releases old leases and clears or filters project-bound script, media, jobs, and artifacts. Undo and redo availability come from the authoritative project projection rather than revision guesses.
+
+The read-only render-status operation remains approval-free; cancellation is a distinct side-effecting tool so polling does not train users to approve destructive authority.
+
+### 14. Release gates drive the real bundled View
+
+The packaged smoke path SHALL open `kun-examples.kun-video-editor` through its real right-sidebar View Session and exercise locale/theme bootstrap, project creation, media/transcript import, edits, proof/export, Agent synchronization, restart recovery, and actionable capability failure. Repository-local example commands SHALL resolve repository tooling explicitly, while standalone documentation SHALL use published package names and clearly state when public registry artifacts are required.
+
 ## Risks / Trade-offs
 
 - [A complex editor is cramped in a docked panel] → Open extension panels at a useful Host-owned width, keep resizing, and provide a deliberate single-column responsive layout with bounded scroll regions.
@@ -92,6 +128,11 @@ Alternative considered: let the bundled video editor omit job restoration until 
 - [Contribution discovery and View activation drift into different workspaces] → Derive one active extension workspace in the renderer and use it for every contribution and View operation.
 - [A project request fails before appearance initialization completes] → Resolve locale/theme separately, apply each successful Host response, and test failure isolation plus live setting changes.
 - [Desktop and Runtime View policies drift] → Cover a forwarded jobs request through the public View Session route while retaining negative credential and registration policy tests.
+- [One extension is activated from two workspaces] → Key workspace-scoped Host instances and tool registrations by normalized workspace ownership and filter event delivery by the same scope.
+- [FFmpeg versions parse filter arguments differently] → Generate decimal duration arguments and execute representative plans against the detected binary in addition to structural unit tests.
+- [Long timelines exceed broker/process bounds] → Use compact labels and a bounded sequential composition path, and retain explicit argument-size assertions.
+- [A manifest translation becomes executable or unbounded data] → Restrict locale overlays to known display fields, locale tags, and contribution identifiers already present in the same manifest.
+- [Late project responses overwrite a newer selection] → Use load generations and authoritative active-project events; clean project-bound resources on every switch.
 
 ## Migration Plan
 
@@ -100,6 +141,8 @@ Alternative considered: let the bundled video editor omit job restoration until 
 3. Migrate the video manifest, icon, Host command catalog, active-project tool contract, Agent instructions, and Webview layout; bump and regenerate the deterministic bundled package.
 4. Update Chinese/English extension guidance and release/version fixtures.
 5. Validate old non-right manifests still parse and command-open, while the bundled video editor appears as a direct right-rail icon and shares revisions with Agent tools.
+6. Isolate workspace-scoped Host instances, registered tools, and View events, then add cross-workspace security regressions.
+7. Complete the executable video workflow, public bounded transcript read, generic manifest localization, and real packaged View smoke before advancing the bundled package version again.
 
 Rollback is a normal code revert plus selecting the prior installed video-editor version. Registry data and project revisions remain compatible because the project schema does not change.
 

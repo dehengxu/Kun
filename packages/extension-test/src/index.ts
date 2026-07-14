@@ -15,6 +15,7 @@ import {
   JobSnapshotSchema,
   JsonObjectSchema,
   JsonValueSchema,
+  MediaCapabilitiesSchema,
   MediaMetadataSchema,
   MediaOpenViewResourceRequestSchema,
   MediaPickFilesRequestSchema,
@@ -56,6 +57,7 @@ import {
   type JobSnapshot,
   type JsonObject,
   type JsonValue,
+  type MediaCapabilities,
   type ModelProviderDeclaration,
   type ModelProviderStreamEvent,
   type MediaMetadata,
@@ -702,13 +704,35 @@ export class FakeMediaService {
   readonly #fileSelections: MediaMetadata[][] = []
   readonly #saveSelections: Array<MediaMetadata | undefined> = []
   executablesAvailable = true
+  #capabilities: MediaCapabilities
   #nextLease = 1
 
   constructor(
     private readonly transport: FakeHostTransport,
     private readonly jobs: FakeJobService,
     private readonly clock: FakeClock
-  ) {}
+  ) {
+    this.#capabilities = MediaCapabilitiesSchema.parse({
+      probedAt: this.clock.nowIso(),
+      ffprobe: {
+        name: 'ffprobe',
+        available: true,
+        version: 'fake ffprobe 1.0',
+        features: []
+      },
+      ffmpeg: {
+        name: 'ffmpeg',
+        available: true,
+        version: 'fake ffmpeg 1.0',
+        features: [
+          'libx264-encoder',
+          'aac-encoder',
+          'drawtext-filter',
+          'subtitles-filter'
+        ]
+      }
+    })
+  }
 
   install(): void {
     this.transport.handle('media.pickFiles', (params) => {
@@ -750,6 +774,14 @@ export class FakeMediaService {
         expiresAt: new Date(this.clock.now() + 60_000).toISOString()
       }
     })
+    this.transport.handle('media.getCapabilities', () => {
+      if (this.executablesAvailable) return structuredClone(this.#capabilities)
+      return MediaCapabilitiesSchema.parse({
+        probedAt: this.clock.nowIso(),
+        ffprobe: { name: 'ffprobe', available: false, features: [] },
+        ffmpeg: { name: 'ffmpeg', available: false, features: [] }
+      })
+    })
     this.transport.handle('media.probe', (params) => {
       if (!this.executablesAvailable) throw unavailable('media.probe')
       const request = MediaProbeRequestSchema.parse(params)
@@ -759,8 +791,11 @@ export class FakeMediaService {
       return probe
     })
     this.transport.handle('media.startFfmpegJob', (params) => {
-      if (!this.executablesAvailable) throw unavailable('media.startFfmpegJob')
       const request = MediaStartFfmpegJobRequestSchema.parse(params)
+      const needsFfmpeg = request.arguments.length > 0 ||
+        Object.keys(request.inputs).length > 0 ||
+        Object.keys(request.outputs).length > 0
+      if (!this.executablesAvailable && needsFfmpeg) throw unavailable('media.startFfmpegJob')
       for (const handleId of Object.values(request.inputs)) {
         const handle = this.#get(handleId, 'media.startFfmpegJob')
         if (handle.mode !== 'read') throw notFound('FFmpeg input is not readable', 'media.startFfmpegJob')
@@ -805,6 +840,12 @@ export class FakeMediaService {
     const parsed = MediaProbeResultSchema.parse(result)
     if (parsed.handleId !== handleId) throw new Error('Fake probe handleId must match the configured handle')
     this.probes.set(handleId, parsed)
+    return structuredClone(parsed)
+  }
+
+  setCapabilities(value: unknown): MediaCapabilities {
+    const parsed = MediaCapabilitiesSchema.parse(value)
+    this.#capabilities = parsed
     return structuredClone(parsed)
   }
 
@@ -1211,6 +1252,7 @@ export class ExtensionTestHarness implements Disposable {
     this.transport.requirePermission('media.stat', ['media.read', 'workspace.read'])
     this.transport.requirePermission('media.release', 'media.read')
     this.transport.requirePermission('media.openViewResource', ['media.read', 'workspace.read'])
+    this.transport.requirePermission('media.getCapabilities', 'media.process')
     this.transport.requirePermission('media.probe', [
       'media.read',
       'media.process',

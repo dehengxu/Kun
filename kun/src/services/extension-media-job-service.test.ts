@@ -518,6 +518,85 @@ describe('ExtensionMediaJobService', () => {
     expect(inputs?.[1]).not.toHaveProperty('durationMicros')
   })
 
+  it('publishes a text-only subtitle job as one durable generated artifact', async () => {
+    const test = await fixture()
+    const subtitle = {
+      ...test.generated,
+      id: 'media_subtitle_only_1234',
+      displayName: 'captions.vtt',
+      mimeType: 'text/vtt',
+      byteSize: 52,
+      completionIdentity: 'identity_subtitle_only_1234'
+    }
+    test.generatedMedia.set(subtitle.id, subtitle)
+    test.ffmpeg.executeTransaction.mockResolvedValueOnce(test.transactionFor([subtitle]))
+    test.media.probe.mockResolvedValueOnce({
+      schemaVersion: 1,
+      handleId: subtitle.id,
+      container: { formatNames: ['webvtt'] },
+      streams: [{
+        index: 0,
+        kind: 'subtitle',
+        codecName: 'webvtt',
+        disposition: { default: true, forced: false, attachedPicture: false }
+      }]
+    })
+    const request = {
+      arguments: [],
+      inputs: {},
+      outputs: {},
+      textOutputs: {
+        captions: {
+          handleId: 'media_subtitle_target_01',
+          mimeType: 'text/vtt' as const,
+          content: 'WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n'
+        }
+      },
+      metadata: {
+        projectId: 'project-1',
+        pinnedRevision: 8,
+        renderKind: 'subtitles',
+        captionMode: 'sidecar',
+        subtitleFormat: 'vtt'
+      }
+    }
+
+    const reference = await test.adapter.start(test.principal, request)
+    await test.jobs.waitForIdle(reference.jobId)
+    expect(test.ffmpeg.executeTransaction).toHaveBeenCalledWith(
+      expect.any(Object),
+      request,
+      expect.objectContaining({ operationId: reference.jobId })
+    )
+    expect(await test.store.get(reference.jobId)).toMatchObject({
+      kind: 'media.ffmpeg',
+      state: 'completed',
+      result: {
+        data: {
+          outputs: [{
+            mediaHandleId: subtitle.id,
+            displayName: 'captions.vtt',
+            mimeType: 'text/vtt'
+          }]
+        },
+        generatedArtifacts: [{
+          mediaKind: 'subtitle',
+          mimeType: 'text/vtt'
+        }]
+      }
+    })
+    expect(test.artifacts.createMany).toHaveBeenCalledWith(
+      expect.any(Object),
+      [expect.objectContaining({
+        provenance: {
+          jobId: reference.jobId,
+          operation: 'media.startFfmpegJob',
+          metadata: request.metadata
+        }
+      })]
+    )
+  })
+
   it('fails before publication when generated output does not match its MIME contract', async () => {
     const invalidCases: Array<{
       name: string

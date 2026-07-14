@@ -63,18 +63,18 @@
 
 ## 7. Video editor Agent profile and tools
 
-- [x] 7.1 Declare the full-page View, composer action, private `video-editor` Agent profile, eight stable tools, activation events, settings, result preview, and least-privilege permissions in the manifest.
+- [x] 7.1 Declare the right-sidebar View, private `video-editor` Agent profile, nine stable tools, activation events, settings, result preview, and least-privilege permissions in the manifest.
 - [x] 7.2 Implement `video-project`, `video-read-script`, and revision-aware bounded project/script projections.
 - [x] 7.3 Implement `video-probe`, protected media import, asset creation, metadata persistence, thumbnails, and waveform requests.
 - [x] 7.4 Implement `video-transcribe`, `video-apply-script`, and `video-update-timeline` with structured schemas, transactionality, provenance, and change events.
-- [x] 7.5 Implement `video-render` and `video-render-status` over durable media jobs with pinned revision/preset, cancellation, proof/export validation, and generated artifacts.
+- [x] 7.5 Implement `video-render`, read-only `video-render-status`, and destructive `video-render-cancel` over durable media jobs with pinned revision/preset, cancellation, proof/export validation, and generated artifacts.
 - [x] 7.6 Implement profile instructions that align creative choices, read before write, edit structure first, avoid unrequested additions, verify proof, and state unsupported visual/generative limits.
 - [x] 7.7 Add manifest/catalog, handler schema, approval class, project race, stale revision, cancellation, headless, artifact, and stable tool-history tests.
 
-## 8. Full-page video editing Webview
+## 8. Right-sidebar video editing Webview
 
 - [x] 8.1 Implement the public Host client bindings and bounded View state for media handles, jobs, project changes, Agent runs, theme, locale, reconnect, and errors.
-- [x] 8.2 Build the responsive full-page shell with media library, Player, transcript, multi-track timeline, inspector, captions, revisions, preview, Agent, and export/job regions.
+- [x] 8.2 Build the responsive docked right-sidebar shell with media library, Player, transcript, multi-track timeline, inspector, captions, revisions, preview, Agent synchronization, and export/job regions.
 - [x] 8.3 Implement project creation/open, protected import, media lease playback, missing capability states, and stale/revoked resource recovery.
 - [x] 8.4 Implement manual select/split/trim/delete/reorder/track/caption/aspect edits through the revision-aware service with conflict refresh and undo/redo.
 - [x] 8.5 Implement synchronized transcript/timeline seeking, `timeline.md` review/apply, caption editing, and explicit transcript-only understanding boundaries.

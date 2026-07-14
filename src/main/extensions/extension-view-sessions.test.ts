@@ -373,4 +373,30 @@ describe('ExtensionViewSessionRegistry', () => {
     }))
     expect(registry.sendToGuest(created.sessionId, 'agent.event', null)).toBe(false)
   })
+
+  it('disposes only sessions in the selected extension workspace', () => {
+    const registry = new ExtensionViewSessionRegistry()
+    const workspaceA = registry.create({
+      sessionId: 'workspace-a-session',
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      contributionId: 'issues',
+      workspaceRoot: '/workspace/a',
+      entryPath: 'dist/index.html',
+      parentWebContentsId: 10
+    })
+    const workspaceB = registry.create({
+      sessionId: 'workspace-b-session',
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      contributionId: 'issues',
+      workspaceRoot: '/workspace/b',
+      entryPath: 'dist/index.html',
+      parentWebContentsId: 10
+    })
+
+    expect(registry.disposeForExtensionWorkspace('acme.example', '/workspace/a')).toBe(1)
+    expect(registry.get(workspaceA.sessionId)).toBeUndefined()
+    expect(registry.get(workspaceB.sessionId)).toMatchObject({ workspaceRoot: '/workspace/b' })
+  })
 })

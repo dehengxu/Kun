@@ -7,7 +7,10 @@ import {
   JobProgressSchema,
   JobSnapshotSchema,
   MediaMetadataSchema,
+  MediaCapabilitiesSchema,
   MediaProbeResultSchema,
+  MediaReadTextRequestSchema,
+  MediaReadTextResultSchema,
   MediaResourceLeaseSchema,
   MediaStartFfmpegJobRequestSchema,
   PermissionSchema,
@@ -111,6 +114,47 @@ describe('Extension API v1.1 media schemas', () => {
     }).url).toMatch(/^kun-media:/)
   })
 
+  it('defines bounded UTF-8 text reads without exposing a path', () => {
+    expect(MediaReadTextRequestSchema.parse({ handleId, maxBytes: 32 })).toEqual({
+      handleId,
+      maxBytes: 32
+    })
+    expect(MediaReadTextResultSchema.parse({
+      handleId,
+      displayName: 'captions.srt',
+      mimeType: 'application/x-subrip',
+      byteSize: 6,
+      content: '你好'
+    })).toMatchObject({ handleId, content: '你好' })
+    expect(MediaReadTextResultSchema.safeParse({
+      handleId,
+      displayName: 'captions.srt',
+      mimeType: 'application/x-subrip',
+      byteSize: 2,
+      content: '你好'
+    }).success).toBe(false)
+    expect(MediaReadTextRequestSchema.safeParse({
+      handleId,
+      maxBytes: 512 * 1024 + 1
+    }).success).toBe(false)
+  })
+
+  it('publishes bounded media executable capabilities without paths', () => {
+    const capabilities = MediaCapabilitiesSchema.parse({
+      probedAt: now,
+      ffprobe: { name: 'ffprobe', available: true, version: '8.0.1' },
+      ffmpeg: {
+        name: 'ffmpeg',
+        available: true,
+        version: '8.0.1',
+        features: ['libx264-encoder', 'aac-encoder']
+      }
+    })
+    expect(capabilities.ffprobe.features).toEqual([])
+    expect(capabilities.ffmpeg.features).toEqual(['libx264-encoder', 'aac-encoder'])
+    expect(JSON.stringify(capabilities)).not.toContain('/opt/')
+  })
+
   it('requires handle maps for FFmpeg jobs rather than file paths', () => {
     expect(MediaStartFfmpegJobRequestSchema.parse({
       arguments: ['-i', '{{input:source}}', '{{output:export}}'],
@@ -155,6 +199,40 @@ describe('Extension API v1.1 media schemas', () => {
           content: '😀'.repeat(50_000)
         }
       }
+    }).success).toBe(false)
+  })
+
+  it('admits bounded text-only jobs without admitting an FFmpeg command shape', () => {
+    const textOnly = {
+      arguments: [],
+      inputs: {},
+      outputs: {},
+      textOutputs: {
+        captions: {
+          handleId: 'media_subtitle_0001',
+          mimeType: 'application/x-subrip' as const,
+          content: '1\n00:00:00,000 --> 00:00:01,000\nHello\n'
+        }
+      }
+    }
+    expect(MediaStartFfmpegJobRequestSchema.parse(textOnly)).toEqual(textOnly)
+    expect(MediaStartFfmpegJobRequestSchema.safeParse({
+      ...textOnly,
+      arguments: ['-version']
+    }).success).toBe(false)
+    expect(MediaStartFfmpegJobRequestSchema.safeParse({
+      ...textOnly,
+      inputs: { source: handleId }
+    }).success).toBe(false)
+    expect(MediaStartFfmpegJobRequestSchema.safeParse({
+      arguments: [],
+      inputs: {},
+      outputs: {}
+    }).success).toBe(false)
+    expect(MediaStartFfmpegJobRequestSchema.safeParse({
+      arguments: [],
+      inputs: {},
+      outputs: { export: 'media_export_00001' }
     }).success).toBe(false)
   })
 })
@@ -224,6 +302,8 @@ describe('Extension API v1.1 jobs and artifacts', () => {
 
   it('publishes media/jobs methods in the View-safe catalog but no generic job start', () => {
     expect(isExtensionViewSafeMethod('media.openViewResource')).toBe(true)
+    expect(isExtensionViewSafeMethod('media.readText')).toBe(true)
+    expect(isExtensionViewSafeMethod('media.getCapabilities')).toBe(true)
     expect(isExtensionViewSafeMethod('media.performArtifactAction')).toBe(true)
     expect(isExtensionViewSafeMethod('jobs.subscribe')).toBe(true)
     expect(isExtensionViewSafeMethod('jobs.start')).toBe(false)

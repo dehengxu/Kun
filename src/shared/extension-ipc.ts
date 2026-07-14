@@ -21,10 +21,12 @@ export type ExtensionListRequest = {
   limit?: number
   cursor?: string
   workspaceRoot?: string
+  locale?: string
 }
 
 export type ExtensionWorkspaceRequest = {
   workspaceRoot?: string
+  locale?: string
 }
 
 export type ExtensionListProviderModelsRequest = {
@@ -105,7 +107,7 @@ export type ExtensionReloadRequest = {
 
 export type ExtensionPermissionGrantRequest = ExtensionScopedRequest & {
   permissions: string[] | null
-  extensionVersion: string
+  expectedVersion: string
   consentRequestId?: string
 }
 

@@ -1,4 +1,4 @@
-import type { GeneratedArtifact, JobSnapshot } from '@kun/extension-api'
+import type { GeneratedArtifact, JobSnapshot, MediaCapabilityFeature } from '@kun/extension-api'
 import {
   useEffect,
   useMemo,
@@ -6,23 +6,43 @@ import {
   useState,
   type FormEvent,
   type PropsWithChildren,
-  type ReactNode
+  type ReactNode,
+  type CSSProperties
 } from 'react'
 import { artifactUsesPlayer, artifactsForJobs, type EditorController } from './controller.js'
 import { formatMessage, messagesFor, type Messages } from './i18n.js'
 import {
   VIEW_LIMITS,
   activeTranscriptSegment,
+  activeCaptionAtFrame,
   frameToSeconds,
+  projectFrameFromSourceTime,
   proofIsStale,
+  timelineSourceAtFrame,
   type CaptionProjection,
+  type EditorNotice,
   type EditorState,
   type ItemProjection,
   type ProjectProjection,
   type RenderTicket,
+  type RevisionProjection,
   type TimelineOperation,
+  type TimelineSource,
   type TrackProjection
 } from './model.js'
+
+const HOST_THEME_TOKEN_VARIABLES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  background: ['--bg', '--app-glow'],
+  sidebarBackground: ['--surface-raised', '--surface-soft', '--control', '--control-hover'],
+  surface: ['--surface'],
+  foreground: ['--text'],
+  mutedForeground: ['--muted'],
+  border: ['--border', '--border-strong'],
+  accent: ['--accent', '--accent-strong'],
+  focusRing: ['--focus'],
+  success: ['--green'],
+  danger: ['--danger']
+})
 
 export type VideoEditorWorkbenchProps = {
   controller: EditorController
@@ -33,11 +53,18 @@ export function VideoEditorWorkbench({ controller }: VideoEditorWorkbenchProps):
   const messages = useMemo(() => messagesFor(state.locale), [state.locale])
   const alertRef = useRef<HTMLDivElement>(null)
   const project = state.project
+  const projectJobIds = new Set(
+    state.renderTickets.filter(({ projectId }) => projectId === project?.id).map(({ jobId }) => jobId)
+  )
+  const projectJobs = state.jobs.filter(({ id }) => projectJobIds.has(id))
   const selectedItem = project?.items.find(({ id }) => id === state.selectedItemId)
   const selectedCaption = project?.captions.find(({ id }) => id === state.selectedCaptionId)
-  const artifacts = useMemo(() => artifactsForJobs(state.jobs), [state.jobs])
+  const artifacts = useMemo(() => artifactsForJobs(projectJobs), [projectJobs])
   const activeArtifact = artifacts.find(({ mediaHandleId }) => mediaHandleId === state.activeMediaHandleId)
   const activeAsset = project?.assets.find(({ mediaHandleId }) => mediaHandleId === state.activeMediaHandleId)
+  const timelineSource = project ? timelineSourceAtFrame(project, state.playheadFrame) : undefined
+  const activeCaption = project ? activeCaptionAtFrame(project, state.playheadFrame) : undefined
+  const openAsset = controller.openAsset
 
   useEffect(() => {
     if (state.notices.at(-1)?.severity === 'error') alertRef.current?.focus()
@@ -75,6 +102,20 @@ export function VideoEditorWorkbench({ controller }: VideoEditorWorkbenchProps):
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [controller, messages, project, selectedItem])
 
+  useEffect(() => {
+    if (
+      !activeArtifact &&
+      timelineSource?.asset.mediaHandleId &&
+      timelineSource.asset.mediaHandleId !== state.activeMediaHandleId
+    ) {
+      void openAsset(timelineSource.asset.id)
+    }
+  }, [activeArtifact, openAsset, state.activeMediaHandleId, timelineSource?.asset.id, timelineSource?.asset.mediaHandleId])
+
+  if (state.resultPreview) {
+    return <ResultPreviewWorkbench controller={controller} messages={messages} />
+  }
+
   return (
     <div
       className="editor-app"
@@ -82,6 +123,7 @@ export function VideoEditorWorkbench({ controller }: VideoEditorWorkbenchProps):
       data-reduced-motion={state.theme?.reducedMotion ? 'true' : 'false'}
       dir={state.locale?.direction ?? 'ltr'}
       lang={state.locale?.language ?? 'en'}
+      style={themeStyle(state.theme)}
     >
       <a className="skip-link" href="#video-editor-main">{messages.skipEditor}</a>
       <ProjectBar controller={controller} messages={messages} />
@@ -96,7 +138,7 @@ export function VideoEditorWorkbench({ controller }: VideoEditorWorkbenchProps):
             tabIndex={notice.severity === 'error' && index === state.notices.length - 1 ? -1 : undefined}
             ref={notice.severity === 'error' && index === state.notices.length - 1 ? alertRef : undefined}
           >
-            <span>{notice.message}</span>
+            <span>{noticeMessage(notice, messages)}</span>
             {notice.interactionRequired && <strong>{messages.interactionRequired}</strong>}
             <button type="button" className="quiet-button" onClick={() => controller.dismissNotice(notice.id)}>
               {messages.dismiss}
@@ -125,6 +167,8 @@ export function VideoEditorWorkbench({ controller }: VideoEditorWorkbenchProps):
                 kind={activeArtifact?.mediaKind ?? activeAsset?.kind}
                 title={activeArtifact?.displayName ?? activeAsset?.name}
                 project={project}
+                timelineSource={activeArtifact ? undefined : timelineSource}
+                caption={activeArtifact ? undefined : activeCaption}
                 playheadFrame={state.playheadFrame}
                 playing={state.playing}
                 onSeek={controller.seek}
@@ -146,7 +190,7 @@ export function VideoEditorWorkbench({ controller }: VideoEditorWorkbenchProps):
             <CaptionPanel controller={controller} messages={messages} />
             <RevisionPanel controller={controller} messages={messages} />
             <PreviewPanel controller={controller} artifacts={artifacts} messages={messages} />
-            <ExportPanel controller={controller} messages={messages} />
+            <ExportPanel controller={controller} jobs={projectJobs} messages={messages} />
           </section>
         </main>
       )}
@@ -160,13 +204,54 @@ export function VideoEditorWorkbench({ controller }: VideoEditorWorkbenchProps):
 }
 
 export function syncDocumentPresentation(
-  documentRoot: Pick<HTMLElement, 'dataset' | 'dir' | 'lang'>,
+  documentRoot: Pick<HTMLElement, 'dataset' | 'dir' | 'lang'> & {
+    style?: Pick<CSSStyleDeclaration, 'setProperty' | 'removeProperty'>
+  },
   theme: EditorState['theme'],
   locale: EditorState['locale']
 ): void {
   documentRoot.dataset.theme = theme?.kind ?? 'dark'
+  documentRoot.dataset.reducedMotion = theme?.reducedMotion ? 'true' : 'false'
+  documentRoot.dataset.zoomFactor = String(theme?.zoomFactor ?? 1)
   documentRoot.lang = locale?.language ?? 'en'
   documentRoot.dir = locale?.direction ?? 'ltr'
+  if (documentRoot.style) {
+    for (const variables of Object.values(HOST_THEME_TOKEN_VARIABLES)) {
+      for (const variable of variables) documentRoot.style.removeProperty(variable)
+    }
+    for (const [token, value] of Object.entries(theme?.tokens ?? {})) {
+      for (const variable of HOST_THEME_TOKEN_VARIABLES[token] ?? []) {
+        documentRoot.style.setProperty(variable, value)
+      }
+    }
+    const zoomFactor = Math.min(3, Math.max(0.5, theme?.zoomFactor ?? 1))
+    documentRoot.style.setProperty('font-size', `${16 * zoomFactor}px`)
+    documentRoot.style.setProperty('color-scheme', themeColorScheme(theme))
+  }
+}
+
+export function themeStyle(theme: EditorState['theme']): CSSProperties {
+  const style: Record<string, string | number> = {
+    colorScheme: themeColorScheme(theme)
+  }
+  for (const [token, value] of Object.entries(theme?.tokens ?? {})) {
+    for (const variable of HOST_THEME_TOKEN_VARIABLES[token] ?? []) style[variable] = value
+  }
+  return style as CSSProperties
+}
+
+export function noticeMessage(notice: EditorNotice, messages: Messages): string {
+  return notice.messageKey
+    ? formatMessage(messages[notice.messageKey], notice.messageValues)
+    : notice.message
+}
+
+function themeColorScheme(theme: EditorState['theme']): 'light' | 'dark' {
+  if (theme?.kind === 'light') return 'light'
+  if (theme?.kind === 'dark') return 'dark'
+  const background = theme?.tokens.background?.trim().toLowerCase()
+  if (background === '#fff' || background === '#ffffff' || background === 'white') return 'light'
+  return 'dark'
 }
 
 function ProjectBar({ controller, messages }: { controller: EditorController; messages: Messages }): React.JSX.Element {
@@ -174,13 +259,15 @@ function ProjectBar({ controller, messages }: { controller: EditorController; me
   const [name, setName] = useState(messages.untitledInterview)
   const previousDefaultName = useRef(messages.untitledInterview)
   const [preset, setPreset] = useState<'16:9' | '9:16' | '1:1'>('16:9')
+  const [fpsPreset, setFpsPreset] = useState('30/1')
   useEffect(() => {
     setName((current) => current === previousDefaultName.current ? messages.untitledInterview : current)
     previousDefaultName.current = messages.untitledInterview
   }, [messages.untitledInterview])
   const create = (event: FormEvent): void => {
     event.preventDefault()
-    void controller.createProject(name, preset)
+    const [numerator, denominator] = fpsPreset.split('/').map(Number)
+    void controller.createProject(name, preset, { numerator, denominator })
   }
   return (
     <header className="project-bar">
@@ -205,13 +292,21 @@ function ProjectBar({ controller, messages }: { controller: EditorController; me
           <label><span>{messages.canvas}</span><select value={preset} onChange={(event) => setPreset(event.target.value as typeof preset)}>
             <option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option>
           </select></label>
+          <label><span>{messages.frameRate}</span><select value={fpsPreset} onChange={(event) => setFpsPreset(event.target.value)}>
+            <option value="24/1">24 fps</option>
+            <option value="25/1">25 fps</option>
+            <option value="30000/1001">29.97 fps</option>
+            <option value="30/1">30 fps</option>
+            <option value="60/1">60 fps</option>
+          </select></label>
           <button type="submit" disabled={state.busy}>{messages.createProject}</button>
         </form>
       </nav>
       <div className="project-actions">
         <span className={`connection connection-${state.connection}`}>{connectionLabel(messages, state.connection)}</span>
         {state.project && <span className="revision-badge">r{state.project.currentRevision}</span>}
-        <button type="button" onClick={() => void controller.importMedia()} disabled={!state.project || state.busy}>{messages.importMedia}</button>
+        <MediaCapabilityStatus state={state} messages={messages} />
+        <button type="button" onClick={() => void controller.importMedia()} disabled={!state.project || state.busy || !canImportMedia(state)}>{messages.importMedia}</button>
         <button type="button" onClick={() => void controller.undo()} disabled={!(state.project?.canUndo ?? Boolean(state.project && state.project.currentRevision > 0)) || state.busy}>{messages.undo}</button>
         <button type="button" onClick={() => void controller.redo()} disabled={!(state.project?.canRedo ?? Boolean(state.project && state.project.currentRevision > 0)) || state.busy}>{messages.redo}</button>
         <button type="button" className="quiet-button" onClick={() => void controller.refreshAll()} disabled={state.busy}>{messages.refresh}</button>
@@ -245,7 +340,7 @@ function MediaLibrary({ controller, messages }: { controller: EditorController; 
   const project = controller.state.project!
   const assets = project.assets.slice(0, VIEW_LIMITS.virtualWindow)
   return (
-    <Panel title={messages.mediaLibrary} actions={<button type="button" className="quiet-button" onClick={() => void controller.importMedia()}>{messages.importMedia}</button>}>
+    <Panel title={messages.mediaLibrary} actions={<button type="button" className="quiet-button" onClick={() => void controller.importMedia()} disabled={controller.state.busy || !canImportMedia(controller.state)}>{messages.importMedia}</button>}>
       {assets.length === 0 ? <EmptyState>{messages.noMedia}</EmptyState> : (
         <ul className="media-list" aria-label={messages.importedMedia}>
           {assets.map((asset) => {
@@ -260,8 +355,16 @@ function MediaLibrary({ controller, messages }: { controller: EditorController; 
                 >
                   <span className={`media-kind media-kind-${asset.kind}`}>{asset.kind === 'video' ? messages.videoAbbreviation : messages.audioAbbreviation}</span>
                   <span><strong>{asset.name}</strong><small>{formatTime(asset.durationUs / 1_000_000)} · {asset.container}</small></span>
-                  {revoked && <em>{messages.reauthorize}</em>}
                 </button>
+                {revoked && (
+                  <button
+                    type="button"
+                    className="quiet-button reauthorize-button"
+                    onClick={() => void controller.recoverMedia(asset.id)}
+                  >
+                    {messages.reauthorize}
+                  </button>
+                )}
               </li>
             )
           })}
@@ -285,11 +388,16 @@ function TranscriptPanel({ controller, messages }: { controller: EditorControlle
   const visible = segments.slice(start, start + VIEW_LIMITS.virtualWindow)
   const active = activeTranscriptSegment(project, state.selectedAssetId, state.playheadFrame)
   return (
-    <Panel title={messages.transcript} actions={<VirtualControls start={start} total={segments.length} onChange={controller.setTranscriptWindow} messages={messages} />}>
+    <Panel title={messages.transcript} actions={<>
+      <button type="button" className="quiet-button" onClick={() => void controller.importTranscript()}>{messages.importTranscript}</button>
+      <button type="button" className="quiet-button" onClick={() => void controller.checkLocalTranscriber()}>{messages.checkLocalTranscriber}</button>
+      <button type="button" className="quiet-button" disabled={segments.length === 0} onClick={() => void controller.generateCaptions()}>{messages.generateCaptions}</button>
+      <VirtualControls start={start} total={segments.length} onChange={controller.setTranscriptWindow} messages={messages} />
+    </>}>
       {segments.length === 0 ? <EmptyState>{messages.noTranscript}</EmptyState> : (
         <ol className="transcript-list" start={start + 1} aria-label={messages.timedTranscriptSegments}>
           {visible.map((segment) => (
-            <li key={`${segment.assetId}:${segment.id}`}>
+            <li key={`${segment.assetId}:${segment.id}`} className="transcript-row">
               <button
                 type="button"
                 className={active?.id === segment.id ? 'transcript-segment active' : 'transcript-segment'}
@@ -298,12 +406,25 @@ function TranscriptPanel({ controller, messages }: { controller: EditorControlle
               >
                 <time>{formatTime(segment.startUs / 1_000_000)}</time>
                 <span>{segment.text}</span>
-                {segment.tags?.map((tag) => <em key={tag}>{tag}</em>)}
+                {segment.tags?.map((tag) => <em key={tag}>{transcriptTagLabel(messages, tag)}</em>)}
+              </button>
+              <button
+                type="button"
+                className="quiet-button transcript-cut"
+                onClick={() => void controller.applyScript([{
+                  assetId: segment.assetId,
+                  startUs: segment.startUs,
+                  endUs: segment.endUs,
+                  reason: segment.tags?.includes('silence') ? 'silence' : segment.tags?.includes('filler') ? 'filler' : 'selection'
+                }])}
+              >
+                {messages.removeTranscriptRange}
               </button>
             </li>
           ))}
         </ol>
       )}
+      {transcripts.some(({ truncated }) => truncated) && <p className="notice notice-warning">{messages.transcriptTruncated}</p>}
       <p className="boundary-note">{messages.transcriptEvidenceBoundary}</p>
       <ScriptReview controller={controller} messages={messages} />
     </Panel>
@@ -313,14 +434,15 @@ function TranscriptPanel({ controller, messages }: { controller: EditorControlle
 function ScriptReview({ controller, messages }: { controller: EditorController; messages: Messages }): React.JSX.Element {
   const script = controller.state.script
   const [ranges, setRanges] = useState('[]')
+  const [rangeError, setRangeError] = useState('')
   const apply = (): void => {
     try {
       const parsed: unknown = JSON.parse(ranges)
       if (!Array.isArray(parsed)) throw new Error(messages.rangesRequired)
+      setRangeError('')
       void controller.applyScript(parsed as Array<{ assetId: string; startUs: number; endUs: number; reason?: 'filler' | 'silence' | 'selection' }>)
     } catch {
-      // Keep validation local and non-destructive; the button is paired with
-      // explanatory helper text and Host validation remains authoritative.
+      setRangeError(messages.invalidRanges)
     }
   }
   return (
@@ -330,10 +452,12 @@ function ScriptReview({ controller, messages }: { controller: EditorController; 
         <button type="button" onClick={() => void controller.readScript()}>{messages.readScript}</button>
       ) : (
         <div className="field-stack">
-          <span className="subtle">{messages.revisionLabel} {script.revision} · {messages.digestLabel} {script.digest.slice(0, 12) || messages.unavailable}{script.dirty ? ` · ${messages.edited}` : ''}</span>
-          <label><span>{messages.revisionBoundTimeline}</span><textarea rows={12} value={script.markdown} onChange={(event) => controller.editScript(event.target.value)} /></label>
+          <span className="subtle">{messages.revisionLabel} {script.revision} · {messages.digestLabel} {script.digest.slice(0, 12) || messages.unavailable}</span>
+          <label><span>{messages.revisionBoundTimeline}</span><textarea rows={12} value={script.markdown} readOnly /></label>
+          <small>{messages.revisionBoundTimelineReadonly}</small>
           <label><span>{messages.explicitSourceRanges} (JSON)</span><textarea rows={4} value={ranges} onChange={(event) => setRanges(event.target.value)} aria-describedby="range-help" /></label>
           <small id="range-help">{messages.example}: [{`{"assetId":"asset-1","startUs":1000000,"endUs":1300000,"reason":"filler"}`}]</small>
+          {rangeError && <p className="field-error" role="alert">{rangeError}</p>}
           <div className="button-row"><button type="button" onClick={apply} disabled={controller.state.busy}>{messages.apply}</button><button type="button" className="quiet-button" onClick={() => void controller.readScript()}>{messages.reload}</button></div>
         </div>
       )}
@@ -346,6 +470,8 @@ function MediaPlayer(props: {
   kind?: string
   title?: string
   project: ProjectProjection
+  timelineSource?: TimelineSource
+  caption?: CaptionProjection
   playheadFrame: number
   playing: boolean
   onSeek(frame: number): void
@@ -354,7 +480,9 @@ function MediaPlayer(props: {
   messages: Messages
 }): React.JSX.Element {
   const mediaRef = useRef<HTMLMediaElement | null>(null)
-  const seconds = frameToSeconds(props.project, props.playheadFrame)
+  const seconds = props.timelineSource
+    ? props.timelineSource.sourceTimeUs / 1_000_000
+    : frameToSeconds(props.project, props.playheadFrame)
   useEffect(() => {
     const media = mediaRef.current
     if (media && Math.abs(media.currentTime - seconds) > 0.2) media.currentTime = seconds
@@ -362,13 +490,17 @@ function MediaPlayer(props: {
   useEffect(() => {
     const media = mediaRef.current
     if (!media) return
+    media.playbackRate = props.timelineSource?.playbackRate ?? 1
     if (props.playing) void media.play().catch(() => props.onPlaybackChange(false))
     else media.pause()
-  }, [props.playing, props.url])
+  }, [props.playing, props.timelineSource?.playbackRate, props.url])
   const bind = (element: HTMLMediaElement | null): void => { mediaRef.current = element }
   const update = (): void => {
     const media = mediaRef.current
-    if (media) props.onSeek(Math.round(media.currentTime * props.project.fps.numerator / props.project.fps.denominator))
+    if (!media) return
+    props.onSeek(props.timelineSource
+      ? projectFrameFromSourceTime(props.project, props.timelineSource, media.currentTime)
+      : Math.round(media.currentTime * props.project.fps.numerator / props.project.fps.denominator))
   }
   if (!props.url) {
     return <div className={`player-stage aspect-${props.project.canvas.preset.replace(':', '-')}`}><EmptyState>{props.messages.selectMediaPreview}</EmptyState></div>
@@ -377,9 +509,25 @@ function MediaPlayer(props: {
     return <div className={`player-stage aspect-${props.project.canvas.preset.replace(':', '-')}`}><img src={props.url} alt={props.title ? `${props.messages.proofFrame}: ${props.title}` : props.messages.generatedProofFrame} onError={props.onResourceError} /></div>
   }
   if (props.kind === 'audio') {
-    return <div className="player-stage audio-stage"><div className="audio-visual" aria-hidden="true">{props.messages.audioAbbreviation}</div><audio ref={bind} src={props.url} controls onTimeUpdate={update} onPlay={() => props.onPlaybackChange(true)} onPause={() => props.onPlaybackChange(false)} onError={props.onResourceError} aria-label={props.title ?? props.messages.audioPreview} /></div>
+    return <div className="player-stage audio-stage"><div className="audio-visual" aria-hidden="true">{props.messages.audioAbbreviation}</div><audio ref={bind} src={props.url} controls onTimeUpdate={update} onPlay={() => props.onPlaybackChange(true)} onPause={() => props.onPlaybackChange(false)} onError={props.onResourceError} aria-label={props.title ?? props.messages.audioPreview} />{props.caption && <CaptionOverlay caption={props.caption} />}</div>
   }
-  return <div className={`player-stage aspect-${props.project.canvas.preset.replace(':', '-')}`}><video ref={bind} src={props.url} controls playsInline onTimeUpdate={update} onPlay={() => props.onPlaybackChange(true)} onPause={() => props.onPlaybackChange(false)} onError={props.onResourceError} aria-label={props.title ?? props.messages.videoPreview} /></div>
+  const videoStyle: CSSProperties = props.timelineSource ? {
+    objectFit: props.project.canvas.fit === 'crop' ? 'cover' : 'contain',
+    opacity: props.timelineSource.item.opacity,
+    transform: `translate(${props.timelineSource.item.transform.x}px, ${props.timelineSource.item.transform.y}px) scale(${props.timelineSource.item.transform.scaleX}, ${props.timelineSource.item.transform.scaleY}) rotate(${props.timelineSource.item.transform.rotation}deg)`
+  } : {}
+  return <div className={`player-stage aspect-${props.project.canvas.preset.replace(':', '-')}`} style={{ background: props.project.canvas.background }}><video ref={bind} src={props.url} style={videoStyle} controls playsInline onTimeUpdate={update} onPlay={() => props.onPlaybackChange(true)} onPause={() => props.onPlaybackChange(false)} onError={props.onResourceError} aria-label={props.title ?? props.messages.videoPreview} />{props.caption && <CaptionOverlay caption={props.caption} />}</div>
+}
+
+function CaptionOverlay({ caption }: { caption: CaptionProjection }): React.JSX.Element {
+  return <div
+    className={`caption-overlay caption-${caption.placement}`}
+    style={{
+      color: caption.style?.color,
+      background: caption.style?.background,
+      fontSize: caption.style?.fontSize
+    }}
+  >{caption.text}</div>
 }
 
 function PlayerControls({ controller, project, messages }: { controller: EditorController; project: ProjectProjection; messages: Messages }): React.JSX.Element {
@@ -406,8 +554,8 @@ function TimelinePanel({ controller, messages }: { controller: EditorController;
       <div className="tracks" role="list" aria-label={messages.orderedTimelineTracks}>
         {[...project.tracks].sort((a, b) => a.order - b.order).map((track) => (
           <div className="track-row" role="listitem" key={track.id}>
-            <div className="track-header"><strong>{track.name}</strong><small>{trackKindLabel(messages, track.kind)}{track.locked ? ` · ${messages.locked}` : ''}</small></div>
-            <div className={`track-lane track-${track.kind}`} aria-label={`${track.name} · ${formatMessage(messages.trackItems, { count: project.items.filter((item) => item.trackId === track.id).length })}`}>
+            <div className="track-header"><strong>{trackDisplayName(messages, track)}</strong><small>{trackKindLabel(messages, track.kind)}{track.locked ? ` · ${messages.locked}` : ''}</small></div>
+            <div className={`track-lane track-${track.kind}`} aria-label={`${trackDisplayName(messages, track)} · ${formatMessage(messages.trackItems, { count: project.items.filter((item) => item.trackId === track.id).length })}`}>
               {project.items.filter((item) => item.trackId === track.id && visibleIds.has(item.id)).map((item) => (
                 <button
                   type="button"
@@ -415,7 +563,7 @@ function TimelinePanel({ controller, messages }: { controller: EditorController;
                   className={state.selectedItemId === item.id ? 'clip selected' : 'clip'}
                   data-duration={durationBand(item.durationFrames, project.durationFrames)}
                   aria-pressed={state.selectedItemId === item.id}
-                  onClick={() => { controller.selectItem(item.id); controller.seek(item.timelineStartFrame) }}
+                  onClick={() => { controller.selectItem(item.id); controller.seek(item.timelineStartFrame); void controller.openAsset(item.assetId) }}
                 >
                   <strong>{project.assets.find(({ id }) => id === item.assetId)?.name ?? item.assetId}</strong>
                   <small>{item.timelineStartFrame}–{item.timelineStartFrame + item.durationFrames}f</small>
@@ -453,7 +601,7 @@ function EditToolbar({ controller, project, messages }: { controller: EditorCont
       <label><span>{messages.trimIn} ({messages.frames})</span><input type="number" min={item?.timelineStartFrame ?? 0} max={trimEnd - 1} value={trimStart} onChange={(event) => setTrimStart(Number(event.target.value))} disabled={!item} /></label>
       <label><span>{messages.trimOut} ({messages.frames})</span><input type="number" min={trimStart + 1} max={item ? item.timelineStartFrame + item.durationFrames : 1} value={trimEnd} onChange={(event) => setTrimEnd(Number(event.target.value))} disabled={!item} /></label>
       <button type="button" disabled={!item} onClick={() => item && void controller.applyOperations([{ type: 'trim-item', itemId: item.id, startFrame: trimStart, endFrame: trimEnd }], formatMessage(messages.trimSummary, { id: item.id }))}>{messages.applyTrim}</button>
-      <label><span>{messages.track}</span><select value={trackId} onChange={(event) => setTrackId(event.target.value)} disabled={!item}>{compatibleTracks(project.tracks, item).map((track) => <option key={track.id} value={track.id}>{track.name}</option>)}</select></label>
+      <label><span>{messages.track}</span><select value={trackId} onChange={(event) => setTrackId(event.target.value)} disabled={!item}>{compatibleTracks(project.tracks, item).map((track) => <option key={track.id} value={track.id}>{trackDisplayName(messages, track)}</option>)}</select></label>
       <button type="button" disabled={!item || !trackId} onClick={() => item && void controller.applyOperations([{ type: 'move-item', itemId: item.id, trackId, timelineStartFrame: item.timelineStartFrame }], formatMessage(messages.moveSummary, { id: item.id }))}>{messages.moveTrack}</button>
       <label><span>{messages.placeBefore}</span><select value={beforeItemId} onChange={(event) => setBeforeItemId(event.target.value)} disabled={!item}><option value="">{messages.endOfTrack}</option>{project.items.filter((candidate) => candidate.trackId === item?.trackId && candidate.id !== item?.id).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.id}</option>)}</select></label>
       <button type="button" disabled={!item} onClick={() => item && void controller.applyOperations([{ type: 'reorder-item', itemId: item.id, ...(beforeItemId ? { beforeItemId } : {}) }], formatMessage(messages.reorderSummary, { id: item.id }))}>{messages.reorder}</button>
@@ -533,7 +681,7 @@ function RevisionPanel({ controller, messages }: { controller: EditorController;
   const project = controller.state.project!
   return (
     <Panel title={messages.revisions} actions={<span className="revision-badge">{messages.current} r{project.currentRevision}</span>}>
-      <ol className="revision-list" reversed>{[...project.revisions].reverse().map((revision) => <li key={revision.revision} className={revision.revision === project.currentRevision ? 'current' : ''}><strong>r{revision.revision}</strong><span>{revision.summary}</span><small>{revisionAuthorLabel(messages, revision.author)} · {formatTimestamp(revision.timestamp, controller.state.locale?.language)}</small></li>)}</ol>
+      <ol className="revision-list" reversed>{[...project.revisions].reverse().map((revision) => <li key={revision.revision} className={revision.revision === project.currentRevision ? 'current' : ''}><strong>r{revision.revision}</strong><span>{revisionSummaryLabel(messages, revision)}</span><small>{revisionAuthorLabel(messages, revision.author)} · {formatTimestamp(revision.timestamp, controller.state.locale?.language)}</small></li>)}</ol>
     </Panel>
   )
 }
@@ -549,12 +697,12 @@ function AgentSyncPanel({ controller, messages }: { controller: EditorController
       <dl className="agent-sync-grid">
         <div><dt>{messages.activeProject}</dt><dd>{project?.name ?? messages.noProject}</dd></div>
         <div><dt>{messages.activeRevision}</dt><dd>{project ? `r${project.currentRevision}` : '—'}</dd></div>
-        <div><dt>{messages.agentTool}</dt><dd><code>video-project · active</code></dd></div>
+        <div><dt>{messages.agentTool}</dt><dd><code>{messages.agentToolActive}</code></dd></div>
       </dl>
       <div className="agent-sync-status" role="status" aria-live="polite">
         <span className="agent-sync-dot" aria-hidden="true" />
         <span>{lastProjectChange && lastProjectChange.projectId === project?.id
-          ? `${messages.lastSync}: ${lastProjectChange.reason} · r${lastProjectChange.revision}`
+          ? `${messages.lastSync}: ${projectChangeReasonLabel(messages, lastProjectChange.reason)} · r${lastProjectChange.revision}`
           : messages.agentReady}</span>
       </div>
       {agentRun ? <p className="subtle">{messages.legacyRun}: {agentStateLabel(messages, agentRun.state)}</p> : null}
@@ -566,9 +714,16 @@ function AgentSyncPanel({ controller, messages }: { controller: EditorController
 function PreviewPanel(props: { controller: EditorController; artifacts: GeneratedArtifact[]; messages: Messages }): React.JSX.Element {
   const { controller, artifacts, messages } = props
   const project = controller.state.project!
+  const [captionMode, setCaptionMode] = useState<'none' | 'burned'>('none')
+  const burnedAvailable = hasMediaFeature(controller.state, 'drawtext-filter')
   return (
     <Panel title={messages.preview}>
-      <div className="button-row"><button type="button" onClick={() => void controller.startRender('proof-frame', 'none')}>{messages.proofFrame}</button><button type="button" onClick={() => void controller.startRender('preview', 'none')}>{messages.previewClip}</button></div>
+      <div className="button-row">
+        <label className="inline-field"><span>{messages.captionsLabel}</span><select value={captionMode} onChange={(event) => setCaptionMode(event.target.value as typeof captionMode)}><option value="none">{messages.captionModeNone}</option><option value="burned" disabled={!burnedAvailable}>{messages.captionModeBurned}</option></select></label>
+        <button type="button" disabled={!canRender(controller.state, 'proof-frame', captionMode)} onClick={() => void controller.startRender('proof-frame', captionMode)}>{messages.proofFrame}</button>
+        <button type="button" disabled={!canRender(controller.state, 'preview', captionMode)} onClick={() => void controller.startRender('preview', captionMode)}>{messages.previewClip}</button>
+      </div>
+      {!burnedAvailable && <p className="boundary-note">{messages.burnedCaptionsUnavailable}</p>}
       {artifacts.length === 0 ? <EmptyState>{messages.noProofArtifacts}</EmptyState> : <ul className="artifact-list">{artifacts.map((artifact) => {
         const ticket = ticketForArtifact(controller.state.renderTickets, artifact)
         const stale = ticket ? proofIsStale(ticket, project) : false
@@ -579,13 +734,14 @@ function PreviewPanel(props: { controller: EditorController; artifacts: Generate
   )
 }
 
-function ExportPanel({ controller, messages }: { controller: EditorController; messages: Messages }): React.JSX.Element {
+function ExportPanel({ controller, jobs, messages }: { controller: EditorController; jobs: JobSnapshot[]; messages: Messages }): React.JSX.Element {
   const [captionMode, setCaptionMode] = useState<'none' | 'burned' | 'sidecar' | 'both'>('none')
   const [subtitleFormat, setSubtitleFormat] = useState<'srt' | 'vtt'>('srt')
   return (
-    <Panel title={messages.export} actions={<><label className="inline-field"><span>{messages.captionsLabel}</span><select value={captionMode} onChange={(event) => setCaptionMode(event.target.value as typeof captionMode)}><option value="none">{messages.captionModeNone}</option><option value="burned">{messages.captionModeBurned}</option><option value="sidecar">{messages.captionModeSidecar}</option><option value="both">{messages.captionModeBoth}</option></select></label>{(captionMode === 'sidecar' || captionMode === 'both') && <label className="inline-field"><span>{messages.format}</span><select value={subtitleFormat} onChange={(event) => setSubtitleFormat(event.target.value as typeof subtitleFormat)}><option value="srt">SRT</option><option value="vtt">WebVTT</option></select></label>}</>}>
-      <div className="button-row"><button type="button" onClick={() => void controller.startRender('h264-mp4', captionMode, subtitleFormat)}>{messages.exportVideo}</button><button type="button" onClick={() => void controller.startRender('audio-aac', 'none')}>{messages.exportAudio}</button></div>
-      {controller.state.jobs.length === 0 ? <EmptyState>{messages.emptyJobs}</EmptyState> : <ul className="job-list">{controller.state.jobs.map((job) => <JobRow key={job.id} job={job} controller={controller} messages={messages} />)}</ul>}
+    <Panel title={messages.export} actions={<><label className="inline-field"><span>{messages.captionsLabel}</span><select value={captionMode} onChange={(event) => setCaptionMode(event.target.value as typeof captionMode)}><option value="none">{messages.captionModeNone}</option><option value="burned" disabled={!hasMediaFeature(controller.state, 'drawtext-filter')}>{messages.captionModeBurned}</option><option value="sidecar">{messages.captionModeSidecar}</option><option value="both" disabled={!hasMediaFeature(controller.state, 'drawtext-filter')}>{messages.captionModeBoth}</option></select></label>{(captionMode === 'sidecar' || captionMode === 'both') && <label className="inline-field"><span>{messages.format}</span><select value={subtitleFormat} onChange={(event) => setSubtitleFormat(event.target.value as typeof subtitleFormat)}><option value="srt">SRT</option><option value="vtt">WebVTT</option></select></label>}</>}>
+      <div className="button-row"><button type="button" disabled={!canRender(controller.state, 'h264-mp4', captionMode)} onClick={() => void controller.startRender('h264-mp4', captionMode, subtitleFormat)}>{messages.exportVideo}</button><button type="button" disabled={!canRender(controller.state, 'audio-aac', 'none')} onClick={() => void controller.startRender('audio-aac', 'none')}>{messages.exportAudio}</button><button type="button" disabled={!canRender(controller.state, 'subtitles', 'none')} onClick={() => void controller.startRender('subtitles', 'none', 'srt')}>{messages.exportSubRip}</button><button type="button" disabled={!canRender(controller.state, 'subtitles', 'none')} onClick={() => void controller.startRender('subtitles', 'none', 'vtt')}>{messages.exportWebVtt}</button></div>
+      {!hasMediaFeature(controller.state, 'drawtext-filter') && <p className="boundary-note">{messages.burnedCaptionsUnavailable}</p>}
+      {jobs.length === 0 ? <EmptyState>{messages.emptyJobs}</EmptyState> : <ul className="job-list">{jobs.map((job) => <JobRow key={job.id} job={job} controller={controller} messages={messages} />)}</ul>}
     </Panel>
   )
 }
@@ -598,14 +754,76 @@ function JobRow({ job, controller, messages }: { job: JobSnapshot; controller: E
       <div><strong>{jobKindLabel(messages, job.kind)}</strong><small>{job.id} · {formatMessage(messages.attempt, { attempt: job.executionAttempt })}</small></div>
       <span className="job-state">{jobStateLabel(messages, job.state)}</span>
       <progress max={100} value={progress ?? (job.state === 'completed' ? 100 : undefined)} aria-label={formatMessage(messages.progressLabel, { label: jobKindLabel(messages, job.kind), value: Math.round(progress ?? 0) })} />
-      <p>{job.progress?.message ?? job.error?.message ?? messages.waitingProgress}</p>
+      <p>{jobDetailLabel(messages, job)}</p>
       {!terminal && <button type="button" className="danger-button" onClick={() => void controller.cancelJob(job.id)}>{messages.cancelJob}</button>}
     </li>
   )
 }
 
+function ResultPreviewWorkbench({ controller, messages }: { controller: EditorController; messages: Messages }): React.JSX.Element {
+  const preview = controller.state.resultPreview!
+  const source = preview.result
+  const url = controller.state.activeMediaUrl
+  const isImage = source.mimeType.startsWith('image/')
+  const isAudio = source.mimeType.startsWith('audio/')
+  return <div
+    className="editor-app result-preview-app"
+    data-theme={controller.state.theme?.kind ?? 'dark'}
+    data-reduced-motion={controller.state.theme?.reducedMotion ? 'true' : 'false'}
+    dir={controller.state.locale?.direction ?? 'ltr'}
+    lang={controller.state.locale?.language ?? 'en'}
+    style={themeStyle(controller.state.theme)}
+  >
+    <header className="project-bar">
+      <div className="brand-block"><span className="brand-mark" aria-hidden="true">K</span><div><strong>{messages.preview}</strong><small>{source.name ?? source.mimeType}</small></div></div>
+    </header>
+    <main className="result-preview-main">
+      {!url ? <EmptyState>{source.availability === 'unavailable' ? messages.artifactUnavailable : messages.loadingEditor}</EmptyState>
+        : isImage ? <img src={url} alt={source.name ?? messages.generatedProofFrame} onError={() => void controller.refreshActiveLease()} />
+          : isAudio ? <audio src={url} controls onError={() => void controller.refreshActiveLease()} aria-label={source.name ?? messages.audioPreview} />
+            : <video src={url} controls playsInline onError={() => void controller.refreshActiveLease()} aria-label={source.name ?? messages.videoPreview} />}
+      <p className="subtle">{messages.technicallyValidated}</p>
+    </main>
+  </div>
+}
+
+function MediaCapabilityStatus({ state, messages }: { state: EditorState; messages: Messages }): React.JSX.Element {
+  const ready = Boolean(
+    state.mediaCapabilities?.ffmpeg.available &&
+    state.mediaCapabilities.ffprobe.available &&
+    hasMediaFeature(state, 'libx264-encoder') &&
+    hasMediaFeature(state, 'aac-encoder')
+  )
+  return <span
+    className={ready ? 'connection connection-online' : 'connection connection-offline'}
+    title={ready ? messages.mediaCapabilitiesReady : messages.mediaCapabilitiesLimited}
+  >FFmpeg</span>
+}
+
 function Panel(props: PropsWithChildren<{ title: string; actions?: ReactNode; className?: string }>): React.JSX.Element {
   return <section className={`panel ${props.className ?? ''}`}><header className="panel-header"><h2>{props.title}</h2>{props.actions && <div className="panel-actions">{props.actions}</div>}</header><div className="panel-body">{props.children}</div></section>
+}
+
+function hasMediaFeature(state: EditorState, feature: MediaCapabilityFeature): boolean {
+  return state.mediaCapabilities?.ffmpeg.features.includes(feature) ?? false
+}
+
+export function canImportMedia(state: EditorState): boolean {
+  return state.mediaCapabilities?.ffprobe.available !== false
+}
+
+function canRender(
+  state: EditorState,
+  kind: RenderTicket['renderKind'],
+  captionMode: 'none' | 'burned' | 'sidecar' | 'both'
+): boolean {
+  if ((kind === 'subtitles' || captionMode !== 'none') && !state.project?.captions.length) return false
+  if (!state.mediaCapabilities?.ffprobe.available) return false
+  if (kind !== 'subtitles' && !state.mediaCapabilities.ffmpeg.available) return false
+  if ((kind === 'preview' || kind === 'h264-mp4') && !hasMediaFeature(state, 'libx264-encoder')) return false
+  if ((kind === 'audio-aac' || kind === 'h264-mp4') && !hasMediaFeature(state, 'aac-encoder')) return false
+  if ((captionMode === 'burned' || captionMode === 'both') && !hasMediaFeature(state, 'drawtext-filter')) return false
+  return true
 }
 
 function EmptyState({ children }: PropsWithChildren): React.JSX.Element { return <div className="empty-state"><span aria-hidden="true">--</span><p>{children}</p></div> }
@@ -640,6 +858,20 @@ function revisionAuthorLabel(messages: Messages, author: string): string {
   return author
 }
 
+function revisionSummaryLabel(messages: Messages, revision: RevisionProjection): string {
+  const labels: Readonly<Record<string, string>> = {
+    'project.create': messages.revisionProjectCreated,
+    'video-probe': messages.revisionMediaImported,
+    'media.reauthorize': messages.revisionMediaReauthorized,
+    'video-transcribe': messages.revisionTranscriptImported,
+    'video-apply-script': messages.revisionScriptApplied,
+    'video-update-timeline': messages.revisionTimelineUpdated,
+    'history.undo': messages.revisionUndo,
+    'history.redo': messages.revisionRedo
+  }
+  return labels[revision.sourceOperation] ?? revision.summary
+}
+
 function agentStateLabel(messages: Messages, state: string): string {
   const labels: Record<string, string> = {
     queued: messages.agentStateQueued,
@@ -670,10 +902,56 @@ function jobKindLabel(messages: Messages, kind: string): string {
   return kind
 }
 
+function jobDetailLabel(messages: Messages, job: JobSnapshot): string {
+  if (job.state === 'completed') return messages.jobCompletedDetail
+  if (job.state === 'failed') {
+    return job.error?.code
+      ? formatMessage(messages.jobFailedDetail, { code: job.error.code })
+      : messages.jobFailedWithoutCode
+  }
+  if (job.state === 'cancelled') return messages.jobCancelledDetail
+  if (job.state === 'interrupted') return messages.jobInterruptedDetail
+  if (job.progress?.phase === 'encoding' || job.progress?.phase === 'encode') return messages.jobProgressEncoding
+  if (job.progress?.phase === 'finalizing') return messages.jobProgressFinalizing
+  if (job.progress) return messages.jobProgressRunning
+  return messages.waitingProgress
+}
+
+function transcriptTagLabel(messages: Messages, tag: string): string {
+  if (tag === 'filler') return messages.transcriptTagFiller
+  if (tag === 'silence') return messages.transcriptTagSilence
+  return tag
+}
+
+function projectChangeReasonLabel(messages: Messages, reason: string): string {
+  const labels: Record<string, string> = {
+    'project-created': messages.projectChangeCreated,
+    'active-project-changed': messages.projectChangeActive,
+    'asset-imported': messages.projectChangeAssetImported,
+    'asset-reauthorized': messages.projectChangeAssetReauthorized,
+    'transcript-imported': messages.projectChangeTranscriptImported,
+    'script-applied': messages.projectChangeScriptApplied,
+    'timeline-updated': messages.projectChangeTimelineUpdated,
+    'project-undo': messages.projectChangeUndone,
+    'project-redo': messages.projectChangeRedone
+  }
+  return labels[reason] ?? messages.projectChanged
+}
+
 function trackKindLabel(messages: Messages, kind: TrackProjection['kind']): string {
   if (kind === 'video') return messages.trackKindVideo
   if (kind === 'audio') return messages.trackKindAudio
   return messages.trackKindCaption
+}
+
+function trackDisplayName(messages: Messages, track: TrackProjection): string {
+  const labels: Readonly<Record<string, string>> = {
+    'video-1': messages.defaultVideoTrack1,
+    'video-2': messages.defaultVideoTrack2,
+    'audio-1': messages.defaultAudioTrack1,
+    'captions-1': messages.defaultCaptionTrack
+  }
+  return labels[track.id] ?? track.name
 }
 
 function mediaKindLabel(messages: Messages, kind: GeneratedArtifact['mediaKind']): string {

@@ -43,6 +43,7 @@ import type {
 } from './jobs.js'
 import type {
   MediaMetadata,
+  MediaCapabilities,
   MediaOpenViewResourceRequest,
   MediaPickFilesRequest,
   MediaPickFilesResult,
@@ -50,6 +51,8 @@ import type {
   MediaPickSaveTargetResult,
   MediaProbeRequest,
   MediaProbeResult,
+  MediaReadTextRequest,
+  MediaReadTextResult,
   MediaReleaseRequest,
   MediaReleaseResult,
   MediaResourceLease,
@@ -281,9 +284,11 @@ export interface MediaApi {
   pickFiles(request?: MediaPickFilesRequest): Promise<MediaPickFilesResult>
   pickSaveTarget(request?: MediaPickSaveTargetRequest): Promise<MediaPickSaveTargetResult>
   stat(request: MediaStatRequest): Promise<MediaMetadata>
+  readText(request: MediaReadTextRequest): Promise<MediaReadTextResult>
   release(request: MediaReleaseRequest): Promise<MediaReleaseResult>
   openViewResource(request: MediaOpenViewResourceRequest): Promise<MediaResourceLease>
   performArtifactAction(request: ArtifactHostActionRequest): Promise<ArtifactHostActionResult>
+  getCapabilities(): Promise<MediaCapabilities>
   probe(request: MediaProbeRequest): Promise<MediaProbeResult>
   startFfmpegJob(request: MediaStartFfmpegJobRequest): Promise<MediaStartFfmpegJobResult>
 }

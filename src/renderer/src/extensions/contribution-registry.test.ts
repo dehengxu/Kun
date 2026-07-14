@@ -108,6 +108,43 @@ describe('ContributionRegistry', () => {
     })).toBeDefined()
   })
 
+  it('keeps untrusted right-rail metadata discoverable without making it executable', () => {
+    const registry = new ContributionRegistry()
+    registry.replaceExtensions(ExtensionWorkbenchSnapshotSchema.parse({
+      schemaVersion: 1,
+      revision: 1,
+      extensions: [{
+        ...extension('acme.review', {}, []),
+        workspaceTrusted: false,
+        rightRailDiscovery: {
+          views: [{
+            id: 'review',
+            title: 'Review me',
+            icon: 'assets/review.svg',
+            when: 'workspaceOpen',
+            order: 30
+          }],
+          containers: []
+        }
+      }]
+    }))
+
+    expect(registry.listRightRailViewEntries({ workspaceOpen: false })).toEqual([])
+    expect(registry.listRightRailViewEntries({ workspaceOpen: true })).toMatchObject([{
+      id: 'extension:acme.review/review',
+      workspaceTrusted: false,
+      payload: { title: 'Review me' }
+    }])
+    expect(registry.list('views.rightSidebar', { workspaceOpen: true })
+      .filter((item) => item.owner.kind === 'extension')).toEqual([])
+    expect(registry.get('extension:acme.review/review', { workspaceOpen: true })).toBeUndefined()
+    expect(registry.has('extension:acme.review/review', { workspaceOpen: true })).toBe(false)
+    expect(registry.sanitizeLayoutIds(
+      ['extension:acme.review/review'],
+      { workspaceOpen: true }
+    )).toEqual([])
+  })
+
   it('removes stale layout IDs and namespaces private command dispatch', () => {
     const registry = new ContributionRegistry()
     registry.replaceExtensions(snapshot([

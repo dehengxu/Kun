@@ -252,6 +252,67 @@ describe('extension IPC security bridge', () => {
     expect(state.runtimeRequest).not.toHaveBeenCalled()
   })
 
+  it('binds permission consent to the expected version and discloses the actual workspace delta', async () => {
+    const state = fixture()
+    state.descriptors.resolvePackage.mockResolvedValue({
+      extensionId: 'acme.example',
+      extensionVersion: '1.2.3',
+      grantedPermissions: ['media.read'],
+      workspaceTrusted: true
+    })
+
+    await electronMock.handlers.get('extension:set-permissions')!(state.trustedEvent, {
+      extensionId: 'acme.example',
+      expectedVersion: '1.2.3',
+      permissions: ['workspace.write'],
+      workspaceRoot: '/workspace'
+    })
+
+    expect(state.protectedActions.authorizeAndPerform).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extensionId: 'acme.example',
+        extensionVersion: '1.2.3',
+        operationKind: 'extension.permissions',
+        parameters: expect.objectContaining({ expectedVersion: '1.2.3' })
+      }),
+      expect.objectContaining({
+        detail: expect.stringMatching(
+          /Added broker permissions:[\s\S]*workspace\.write[\s\S]*Removed broker permissions:[\s\S]*media\.read[\s\S]*Workspace write permission/
+        )
+      }),
+      expect.any(Function)
+    )
+    expect(state.runtimeRequest).toHaveBeenCalledWith(
+      '/v1/extensions/acme.example/permissions',
+      'PUT',
+      JSON.stringify({
+        workspaceRoot: '/workspace',
+        permissions: ['workspace.write'],
+        expectedVersion: '1.2.3'
+      })
+    )
+  })
+
+  it('rejects a stale permission review before presenting native consent', async () => {
+    const state = fixture()
+    state.descriptors.resolvePackage.mockResolvedValue({
+      extensionId: 'acme.example',
+      extensionVersion: '2.0.0',
+      grantedPermissions: [],
+      workspaceTrusted: false
+    })
+
+    await expect(electronMock.handlers.get('extension:set-permissions')!(state.trustedEvent, {
+      extensionId: 'acme.example',
+      expectedVersion: '1.0.0',
+      permissions: ['ui.views'],
+      workspaceRoot: '/workspace'
+    })).rejects.toThrow(/version changed/i)
+
+    expect(state.protectedActions.authorizeAndPerform).not.toHaveBeenCalled()
+    expect(state.runtimeRequest).not.toHaveBeenCalled()
+  })
+
   it('binds guest requests to the Main-owned session and forwards nonce headers', async () => {
     const state = fixture()
     const record = state.viewSessions.create({
@@ -352,6 +413,7 @@ describe('extension IPC security bridge', () => {
     expect(electronMock.showOpenDialog).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
+        title: 'Select media files for acme.example',
         properties: ['openFile', 'multiSelections'],
         filters: [{ name: 'Videos', extensions: ['mp4'] }]
       })
@@ -711,6 +773,160 @@ describe('extension IPC security bridge', () => {
     expect(state.runtimeRequest).not.toHaveBeenCalled()
   })
 
+  it('localizes protected native media picker titles from the current Host locale', async () => {
+    const state = fixture()
+    const record = state.viewSessions.create({
+      sessionId: 'view_12345678-1234-1234-1234-123456789abc',
+      nonce: 'n'.repeat(43),
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      contributionId: 'extension:acme.example/issues',
+      workspaceRoot: '/tmp/workspace',
+      entryPath: 'dist/index.html',
+      parentWebContentsId: 1
+    })
+    state.viewSessions.prepareAttach(1, record.sourceUrl)
+    const mainFrame = { processId: 300, routingId: 400 }
+    const guest = { id: 20, mainFrame, once: vi.fn() }
+    state.viewSessions.bindNextGuest(1, guest as never)
+    electronMock.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
+    electronMock.showSaveDialog.mockResolvedValue({ canceled: true })
+
+    state.setWorkbenchEnvironment({
+      theme: {
+        kind: 'light',
+        tokens: { foreground: '#233659' },
+        zoomFactor: 1,
+        reducedMotion: false
+      },
+      locale: { language: 'zh', direction: 'ltr', messages: {} }
+    })
+    await electronMock.handlers.get('extension:view:request')!(
+      { sender: guest, senderFrame: mainFrame },
+      {
+        sessionId: record.sessionId,
+        sessionNonce: record.nonce,
+        requestId: 'request-localized-media-import',
+        method: 'media.pickFiles',
+        params: {}
+      }
+    )
+    state.setWorkbenchEnvironment({
+      theme: {
+        kind: 'light',
+        tokens: { foreground: '#233659' },
+        zoomFactor: 1,
+        reducedMotion: false
+      },
+      locale: { language: 'zh-CN', direction: 'ltr', messages: {} }
+    })
+    await electronMock.handlers.get('extension:view:request')!(
+      { sender: guest, senderFrame: mainFrame },
+      {
+        sessionId: record.sessionId,
+        sessionNonce: record.nonce,
+        requestId: 'request-localized-media-export',
+        method: 'media.pickSaveTarget',
+        params: {}
+      }
+    )
+
+    state.setWorkbenchEnvironment({
+      theme: {
+        kind: 'light',
+        tokens: { foreground: '#233659' },
+        zoomFactor: 1,
+        reducedMotion: false
+      },
+      locale: { language: 'en', direction: 'ltr', messages: {} }
+    })
+    await electronMock.handlers.get('extension:view:request')!(
+      { sender: guest, senderFrame: mainFrame },
+      {
+        sessionId: record.sessionId,
+        sessionNonce: record.nonce,
+        requestId: 'request-english-media-import',
+        method: 'media.pickFiles',
+        params: {}
+      }
+    )
+    await electronMock.handlers.get('extension:view:request')!(
+      { sender: guest, senderFrame: mainFrame },
+      {
+        sessionId: record.sessionId,
+        sessionNonce: record.nonce,
+        requestId: 'request-english-media-export',
+        method: 'media.pickSaveTarget',
+        params: {}
+      }
+    )
+
+    expect(electronMock.showOpenDialog).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      expect.objectContaining({ title: '为 acme.example 选择媒体文件' })
+    )
+    expect(electronMock.showSaveDialog).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      expect.objectContaining({ title: '为 acme.example 选择导出位置' })
+    )
+    expect(electronMock.showOpenDialog).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.objectContaining({ title: 'Select media files for acme.example' })
+    )
+    expect(electronMock.showSaveDialog).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.objectContaining({ title: 'Choose export destination for acme.example' })
+    )
+    expect(state.runtimeRequest).not.toHaveBeenCalled()
+  })
+
+  it('does not open a native picker if its View navigates while Main resolves the locale', async () => {
+    const state = fixture()
+    const record = state.viewSessions.create({
+      sessionId: 'view_12345678-1234-1234-1234-123456789abc',
+      nonce: 'n'.repeat(43),
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      contributionId: 'extension:acme.example/issues',
+      workspaceRoot: '/tmp/workspace',
+      entryPath: 'dist/index.html',
+      parentWebContentsId: 1
+    })
+    state.viewSessions.prepareAttach(1, record.sourceUrl)
+    const mainFrame = { processId: 300, routingId: 400 }
+    const guest = { id: 20, mainFrame, once: vi.fn() }
+    state.viewSessions.bindNextGuest(1, guest as never)
+    state.options.getWorkbenchEnvironment = vi.fn(async (): Promise<ExtensionWorkbenchEnvironment> => {
+      guest.mainFrame = { processId: 301, routingId: 401 }
+      return {
+        theme: {
+          kind: 'light',
+          tokens: { foreground: '#233659' },
+          zoomFactor: 1,
+          reducedMotion: false
+        },
+        locale: { language: 'zh-CN', direction: 'ltr', messages: {} }
+      }
+    })
+
+    await expect(electronMock.handlers.get('extension:view:request')!(
+      { sender: guest, senderFrame: mainFrame },
+      {
+        sessionId: record.sessionId,
+        sessionNonce: record.nonce,
+        requestId: 'request-picker-locale-navigation-race',
+        method: 'media.pickFiles',
+        params: {}
+      }
+    )).rejects.toMatchObject({ code: 'MEDIA_SCOPE_DENIED' })
+    expect(electronMock.showOpenDialog).not.toHaveBeenCalled()
+    expect(state.runtimeRequest).not.toHaveBeenCalled()
+  })
+
   it('does not register a picker selection after its originating frame navigates', async () => {
     const state = fixture()
     const record = state.viewSessions.create({
@@ -967,6 +1183,7 @@ describe('extension IPC security bridge', () => {
     expect(electronMock.showSaveDialog).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
+        title: 'Choose export destination for acme.example',
         defaultPath: '/tmp/workspace/final.mp4',
         filters: [{ name: 'MP4', extensions: ['mp4'] }]
       })
@@ -1047,6 +1264,90 @@ describe('extension IPC security bridge', () => {
     })
   })
 
+  it('serializes environment PUTs and coalesces queued publishes to the latest Host state', async () => {
+    const state = fixture()
+    const broadcastToGuests = vi.spyOn(state.viewSessions, 'broadcastToGuests')
+    type RuntimeResult = { ok: boolean; status: number; body: string }
+    const success: RuntimeResult = { ok: true, status: 200, body: '{}' }
+    const pendingPuts: Array<{
+      body: string
+      resolve: (result: RuntimeResult) => void
+    }> = []
+    const deferredRuntimeRequest = vi.fn((
+      path: string,
+      method?: string,
+      body?: string,
+      _headers?: Record<string, string>
+    ): Promise<RuntimeResult> => {
+      if (path !== '/v1/extensions/workbench/environment' || method !== 'PUT') {
+        return Promise.resolve(success)
+      }
+      return new Promise((resolve) => {
+        pendingPuts.push({ body: body ?? '', resolve })
+      })
+    })
+    state.options.runtimeRequest = deferredRuntimeRequest
+
+    const firstPublish = state.registration.publishWorkbenchEnvironmentChanged()
+    await vi.waitFor(() => expect(pendingPuts).toHaveLength(1))
+
+    state.setWorkbenchEnvironment({
+      theme: {
+        kind: 'dark',
+        tokens: { foreground: '#f0f5fc' },
+        zoomFactor: 1.25,
+        reducedMotion: true
+      },
+      locale: { language: 'zh', direction: 'ltr', messages: {} }
+    })
+    const intermediatePublish = state.registration.publishWorkbenchEnvironmentChanged()
+    state.setWorkbenchEnvironment({
+      theme: {
+        kind: 'dark',
+        tokens: { foreground: '#ffffff' },
+        zoomFactor: 1.5,
+        reducedMotion: false
+      },
+      locale: { language: 'en', direction: 'ltr', messages: { ready: 'Ready' } }
+    })
+    const latestPublish = state.registration.publishWorkbenchEnvironmentChanged()
+
+    await Promise.resolve()
+    expect(pendingPuts).toHaveLength(1)
+    expect(JSON.parse(pendingPuts[0]!.body)).toMatchObject({
+      theme: { kind: 'light', zoomFactor: 1 },
+      locale: { language: 'en' }
+    })
+
+    pendingPuts[0]!.resolve(success)
+    await vi.waitFor(() => expect(pendingPuts).toHaveLength(2))
+    expect(broadcastToGuests).not.toHaveBeenCalled()
+    expect(JSON.parse(pendingPuts[1]!.body)).toEqual({
+      theme: {
+        kind: 'dark',
+        tokens: { foreground: '#ffffff' },
+        zoomFactor: 1.5,
+        reducedMotion: false
+      },
+      locale: { language: 'en', direction: 'ltr', messages: { ready: 'Ready' } }
+    })
+
+    pendingPuts[1]!.resolve(success)
+    await Promise.all([firstPublish, intermediatePublish, latestPublish])
+    expect(deferredRuntimeRequest).toHaveBeenCalledTimes(2)
+    expect(broadcastToGuests).toHaveBeenCalledTimes(2)
+    expect(broadcastToGuests).toHaveBeenNthCalledWith(
+      1,
+      'ui.themeChanged',
+      expect.objectContaining({ kind: 'dark', zoomFactor: 1.5 })
+    )
+    expect(broadcastToGuests).toHaveBeenNthCalledWith(
+      2,
+      'ui.localeChanged',
+      { language: 'en', direction: 'ltr', messages: { ready: 'Ready' } }
+    )
+  })
+
   it('queues trusted HostMessages for one owned View Session through the bounded runtime pump', async () => {
     const state = fixture()
     const record = state.viewSessions.create({
@@ -1075,7 +1376,7 @@ describe('extension IPC security bridge', () => {
     )
   })
 
-  it('routes replayed broker notifications only to the owning guest', async () => {
+  it('routes only View-safe replayed broker notifications to the owning guest', async () => {
     const state = fixture()
     const record = state.viewSessions.create({
       sessionId: 'view_12345678-1234-1234-1234-123456789abc',
@@ -1099,15 +1400,33 @@ describe('extension IPC security bridge', () => {
       ok: true,
       status: 200,
       body: JSON.stringify({
-        events: [{
-          sequence: 2,
-          type: 'bridge',
-          payload: {
-            method: 'agent.event',
-            params: { subscriptionId: 'agentsub-1', event: { sequence: 7 } }
+        events: [
+          {
+            sequence: 2,
+            type: 'bridge',
+            payload: {
+              method: 'agent.event',
+              params: { subscriptionId: 'agentsub-1', event: { sequence: 7 } }
+            }
+          },
+          {
+            sequence: 3,
+            type: 'bridge',
+            payload: {
+              method: 'jobs.event',
+              params: { subscriptionId: 'jobsub-1', event: { jobId: 'job_12345678', sequence: 3 } }
+            }
+          },
+          {
+            sequence: 4,
+            type: 'bridge',
+            payload: {
+              method: 'workspace.changed',
+              params: { path: 'private.txt' }
+            }
           }
-        }],
-        nextCursor: 2,
+        ],
+        nextCursor: 4,
         hasMore: false
       })
     })
@@ -1122,6 +1441,16 @@ describe('extension IPC security bridge', () => {
       sessionId: record.sessionId,
       method: 'agent.event',
       params: { subscriptionId: 'agentsub-1', event: { sequence: 7 } }
+    })
+    expect(guest.send).toHaveBeenCalledWith('extension:view:notification', {
+      sessionId: record.sessionId,
+      method: 'jobs.event',
+      params: { subscriptionId: 'jobsub-1', event: { jobId: 'job_12345678', sequence: 3 } }
+    })
+    expect(guest.send).not.toHaveBeenCalledWith('extension:view:notification', {
+      sessionId: record.sessionId,
+      method: 'workspace.changed',
+      params: { path: 'private.txt' }
     })
   })
 
@@ -1805,16 +2134,83 @@ describe('extension IPC security bridge', () => {
     })
   })
 
-  it('revokes active Direct DOM principals after disablement succeeds', async () => {
+  it('revokes only the disabled extension workspace in Main-owned surfaces', async () => {
     const state = fixture()
+    const workspaceA = state.viewSessions.create({
+      sessionId: 'view-workspace-a',
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      contributionId: 'issues',
+      workspaceRoot: '/workspace/a',
+      entryPath: 'dist/index.html',
+      parentWebContentsId: 1
+    })
+    const workspaceB = state.viewSessions.create({
+      sessionId: 'view-workspace-b',
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      contributionId: 'issues',
+      workspaceRoot: '/workspace/b',
+      entryPath: 'dist/index.html',
+      parentWebContentsId: 1
+    })
     await electronMock.handlers.get('extension:disable')!(state.trustedEvent, {
       extensionId: 'acme.example',
-      workspaceRoot: '/workspace'
+      workspaceRoot: '/workspace/a'
+    })
+    expect(state.viewSessions.get(workspaceA.sessionId)).toBeUndefined()
+    expect(state.viewSessions.get(workspaceB.sessionId)).toMatchObject({
+      workspaceRoot: '/workspace/b'
     })
     expect(state.contentScripts.revokeExtension).toHaveBeenCalledWith(
       state.trustedEvent.sender,
       'acme.example',
-      'disable'
+      'disable',
+      '/workspace/a'
+    )
+  })
+
+  it('revokes only the permission-changed extension workspace in Main-owned surfaces', async () => {
+    const state = fixture()
+    state.descriptors.resolvePackage.mockResolvedValue({
+      extensionVersion: '1.0.0',
+      grantedPermissions: ['ui.views']
+    })
+    const workspaceA = state.viewSessions.create({
+      sessionId: 'permission-workspace-a',
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      contributionId: 'issues',
+      workspaceRoot: '/workspace/a',
+      entryPath: 'dist/index.html',
+      parentWebContentsId: 1
+    })
+    const workspaceB = state.viewSessions.create({
+      sessionId: 'permission-workspace-b',
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      contributionId: 'issues',
+      workspaceRoot: '/workspace/b',
+      entryPath: 'dist/index.html',
+      parentWebContentsId: 1
+    })
+
+    await electronMock.handlers.get('extension:set-permissions')!(state.trustedEvent, {
+      extensionId: 'acme.example',
+      workspaceRoot: '/workspace/a',
+      expectedVersion: '1.0.0',
+      permissions: []
+    })
+
+    expect(state.viewSessions.get(workspaceA.sessionId)).toBeUndefined()
+    expect(state.viewSessions.get(workspaceB.sessionId)).toMatchObject({
+      workspaceRoot: '/workspace/b'
+    })
+    expect(state.contentScripts.revokeExtension).toHaveBeenCalledWith(
+      state.trustedEvent.sender,
+      'acme.example',
+      'permission-change',
+      '/workspace/a'
     )
   })
 
@@ -1845,10 +2241,19 @@ describe('extension IPC security bridge', () => {
 
     await electronMock.handlers.get('extension:workbench:get')!(
       state.trustedEvent,
-      { workspaceRoot: '/workspace one' }
+      { workspaceRoot: '/workspace one', locale: 'zh-CN' }
     )
     expect(state.runtimeRequest).toHaveBeenLastCalledWith(
-      '/v1/extensions/workbench?workspace_root=%2Fworkspace+one',
+      '/v1/extensions/workbench?workspace_root=%2Fworkspace+one&locale=zh-CN',
+      'GET'
+    )
+
+    await electronMock.handlers.get('extension:list')!(
+      state.trustedEvent,
+      { limit: 50, workspaceRoot: '/workspace one', locale: 'zh-CN' }
+    )
+    expect(state.runtimeRequest).toHaveBeenLastCalledWith(
+      '/v1/extensions?limit=50&workspace_root=%2Fworkspace+one&locale=zh-CN',
       'GET'
     )
 

@@ -82,6 +82,30 @@ export type MediaPickSaveTargetResult = z.infer<typeof MediaPickSaveTargetResult
 export const MediaStatRequestSchema = z.strictObject({ handleId: MediaHandleIdSchema })
 export type MediaStatRequest = z.infer<typeof MediaStatRequestSchema>
 
+export const MAX_MEDIA_TEXT_BYTES = 512 * 1024
+
+export const MediaReadTextRequestSchema = z.strictObject({
+  handleId: MediaHandleIdSchema,
+  maxBytes: z.number().int().min(1).max(MAX_MEDIA_TEXT_BYTES).default(MAX_MEDIA_TEXT_BYTES)
+})
+export type MediaReadTextRequest = z.input<typeof MediaReadTextRequestSchema>
+
+export const MediaReadTextResultSchema = z.strictObject({
+  handleId: MediaHandleIdSchema,
+  displayName: z.string().min(1).max(256),
+  mimeType: z.string().min(3).max(128),
+  byteSize: z.number().int().nonnegative().max(MAX_MEDIA_TEXT_BYTES),
+  content: z.string().max(MAX_MEDIA_TEXT_BYTES)
+}).superRefine((value, context) => {
+  if (new TextEncoder().encode(value.content).byteLength !== value.byteSize) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Media text byteSize must match its UTF-8 content'
+    })
+  }
+})
+export type MediaReadTextResult = z.infer<typeof MediaReadTextResultSchema>
+
 export const MediaReleaseRequestSchema = z.discriminatedUnion('resource', [
   z.strictObject({ resource: z.literal('handle'), handleId: MediaHandleIdSchema }),
   z.strictObject({ resource: z.literal('lease'), leaseId: MediaLeaseIdSchema })
@@ -156,6 +180,29 @@ export const MediaProbeResultSchema = z.strictObject({
 })
 export type MediaProbeResult = z.infer<typeof MediaProbeResultSchema>
 
+export const MediaCapabilityFeatureSchema = z.enum([
+  'libx264-encoder',
+  'aac-encoder',
+  'drawtext-filter',
+  'subtitles-filter'
+])
+export type MediaCapabilityFeature = z.infer<typeof MediaCapabilityFeatureSchema>
+
+export const MediaExecutableCapabilitySchema = z.strictObject({
+  name: z.enum(['ffprobe', 'ffmpeg']),
+  available: z.boolean(),
+  version: z.string().min(1).max(512).optional(),
+  features: z.array(MediaCapabilityFeatureSchema).max(16).default([])
+})
+export type MediaExecutableCapability = z.infer<typeof MediaExecutableCapabilitySchema>
+
+export const MediaCapabilitiesSchema = z.strictObject({
+  probedAt: z.string().datetime(),
+  ffprobe: MediaExecutableCapabilitySchema,
+  ffmpeg: MediaExecutableCapabilitySchema
+})
+export type MediaCapabilities = z.infer<typeof MediaCapabilitiesSchema>
+
 const FfmpegBindingNameSchema = z.string().min(1).max(64).regex(/^[a-z][a-z0-9_-]*$/)
 
 export const MediaTextOutputMimeTypeSchema = z.enum([
@@ -194,12 +241,57 @@ const MediaTextOutputsSchema = z
   })
 
 export const MediaStartFfmpegJobRequestSchema = z.strictObject({
-  arguments: z.array(z.string().min(1).max(8192)).min(1).max(1024),
+  arguments: z.array(z.string().min(1).max(8192)).max(1024),
   inputs: z.record(FfmpegBindingNameSchema, MediaHandleIdSchema),
   outputs: z.record(FfmpegBindingNameSchema, MediaHandleIdSchema),
   textOutputs: MediaTextOutputsSchema.optional(),
   idempotencyKey: z.string().min(1).max(256).optional(),
   metadata: JsonObjectSchema.optional()
+}).superRefine((request, context) => {
+  const inputCount = Object.keys(request.inputs).length
+  const outputCount = Object.keys(request.outputs).length
+  const textOutputCount = Object.keys(request.textOutputs ?? {}).length
+  const textOnly = outputCount === 0
+
+  if (textOnly) {
+    if (textOutputCount === 0) {
+      context.addIssue({
+        code: 'custom',
+        path: ['textOutputs'],
+        message: 'A text-only media job requires at least one text output'
+      })
+    }
+    if (inputCount !== 0) {
+      context.addIssue({
+        code: 'custom',
+        path: ['inputs'],
+        message: 'A text-only media job cannot declare FFmpeg inputs'
+      })
+    }
+    if (request.arguments.length !== 0) {
+      context.addIssue({
+        code: 'custom',
+        path: ['arguments'],
+        message: 'A text-only media job cannot declare FFmpeg arguments'
+      })
+    }
+    return
+  }
+
+  if (inputCount === 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['inputs'],
+      message: 'An FFmpeg media job requires at least one input'
+    })
+  }
+  if (request.arguments.length === 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['arguments'],
+      message: 'An FFmpeg media job requires at least one argument'
+    })
+  }
 })
 export type MediaStartFfmpegJobRequest = z.infer<typeof MediaStartFfmpegJobRequestSchema>
 

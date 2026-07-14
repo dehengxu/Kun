@@ -4,6 +4,7 @@ import type {
   ExtensionWorkbenchNotification
 } from '@shared/extension-ipc'
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../store/chat-store'
 import {
   DeclarativeNotifications,
@@ -30,6 +31,7 @@ import { useActiveExtensionWorkspaceRoot } from './active-extension-workspace'
  * and execution-policy controls.
  */
 export function ExtensionWorkbenchLifecycle(): ReactElement {
+  const { i18n } = useTranslation()
   const route = useChatStore((state) => state.route)
   const extensionWorkspaceRoot = useActiveExtensionWorkspaceRoot()
   const runtimeConnection = useChatStore((state) => state.runtimeConnection)
@@ -45,11 +47,13 @@ export function ExtensionWorkbenchLifecycle(): ReactElement {
   )
   const contributionLoadState = useExtensionContributionBootstrap(
     extensionWorkspaceRoot,
-    runtimeConnection
+    runtimeConnection,
+    i18n.language
   )
   const contributionSnapshotReady = isExtensionContributionSnapshotReady(
     contributionLoadState,
-    extensionWorkspaceRoot
+    extensionWorkspaceRoot,
+    i18n.language
   )
   const contentScripts = useWorkbenchContributions(
     'hostContentScripts',

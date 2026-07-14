@@ -251,6 +251,36 @@ describe('ExtensionTestHarness', () => {
     await harness.dispose()
   })
 
+  it('returns deterministic and configurable public media capabilities', async () => {
+    const harness = createExtensionTestHarness({ permissions: mediaPermissions })
+    expect(await harness.client.media.getCapabilities()).toMatchObject({
+      ffprobe: { name: 'ffprobe', available: true },
+      ffmpeg: {
+        name: 'ffmpeg',
+        available: true,
+        features: expect.arrayContaining(['libx264-encoder', 'aac-encoder', 'drawtext-filter'])
+      }
+    })
+
+    harness.media.setCapabilities({
+      probedAt: '2026-01-02T00:00:00.000Z',
+      ffprobe: { name: 'ffprobe', available: false, features: [] },
+      ffmpeg: { name: 'ffmpeg', available: true, features: ['libx264-encoder'] }
+    })
+    expect(await harness.client.media.getCapabilities()).toEqual({
+      probedAt: '2026-01-02T00:00:00.000Z',
+      ffprobe: { name: 'ffprobe', available: false, features: [] },
+      ffmpeg: { name: 'ffmpeg', available: true, features: ['libx264-encoder'] }
+    })
+
+    harness.media.executablesAvailable = false
+    expect(await harness.client.media.getCapabilities()).toMatchObject({
+      ffprobe: { available: false },
+      ffmpeg: { available: false, features: [] }
+    })
+    await harness.dispose()
+  })
+
   it('fakes permission denial, picker cancellation, executable absence, cancellation races, and restart', async () => {
     const denied = createExtensionTestHarness({ permissions: [] })
     await expect(denied.client.media.pickFiles()).rejects.toMatchObject({

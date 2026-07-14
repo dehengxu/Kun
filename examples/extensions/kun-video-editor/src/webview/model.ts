@@ -5,10 +5,13 @@ import type {
   JobEvent,
   JobSnapshot,
   Locale,
+  MediaCapabilities,
   MediaMetadata,
   MediaResourceLease,
+  ResultPreviewOpenPayload,
   Theme
 } from '@kun/extension-api'
+import type { MessageKey } from './i18n.js'
 
 export const VIEW_LIMITS = Object.freeze({
   projects: 100,
@@ -163,7 +166,7 @@ export type RenderTicket = {
   jobId: string
   projectId: string
   pinnedRevision: number
-  renderKind: 'proof-frame' | 'preview' | 'h264-mp4' | 'audio-aac'
+  renderKind: 'proof-frame' | 'preview' | 'h264-mp4' | 'audio-aac' | 'subtitles'
   createdAt: string
 }
 
@@ -171,6 +174,8 @@ export type EditorNotice = {
   id: string
   severity: 'info' | 'warning' | 'error'
   message: string
+  messageKey?: MessageKey
+  messageValues?: Readonly<Record<string, string | number>>
   interactionRequired?: boolean
   retryable?: boolean
 }
@@ -194,6 +199,8 @@ export type EditorState = {
   reconnectToken: number
   theme?: Theme
   locale?: Locale
+  mediaCapabilities?: MediaCapabilities
+  resultPreview?: ResultPreviewOpenPayload
   projects: ProjectSummary[]
   project?: ProjectProjection
   selectedItemId?: string
@@ -246,6 +253,8 @@ export type EditorAction =
   | { type: 'reconnect' }
   | { type: 'theme'; value: Theme }
   | { type: 'locale'; value: Locale }
+  | { type: 'media-capabilities'; value: MediaCapabilities }
+  | { type: 'result-preview'; value: ResultPreviewOpenPayload }
   | { type: 'projects'; value: ProjectSummary[] }
   | { type: 'project'; value: ProjectProjection }
   | { type: 'clear-project' }
@@ -291,23 +300,48 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'reconnect': return { ...state, connection: 'reconnecting', reconnectToken: state.reconnectToken + 1 }
     case 'theme': return { ...state, theme: action.value }
     case 'locale': return { ...state, locale: action.value }
+    case 'media-capabilities': return { ...state, mediaCapabilities: action.value }
+    case 'result-preview': return { ...state, resultPreview: action.value }
     case 'projects': return { ...state, projects: dedupeById(action.value).slice(0, VIEW_LIMITS.projects) }
     case 'project': {
       const project = boundProject(action.value)
-      const selectedItemId = state.selectedItemId && project.items.some(({ id }) => id === state.selectedItemId)
+      const switchingProject = state.project !== undefined && state.project.id !== project.id
+      const selectedItemId = !switchingProject && state.selectedItemId && project.items.some(({ id }) => id === state.selectedItemId)
         ? state.selectedItemId
         : undefined
+      const projectTicketIds = new Set(
+        state.renderTickets.filter(({ projectId }) => projectId === project.id).map(({ jobId }) => jobId)
+      )
       return {
         ...state,
         project,
         selectedItemId,
-        selectedCaptionId: state.selectedCaptionId && project.captions.some(({ id }) => id === state.selectedCaptionId)
+        selectedCaptionId: !switchingProject && state.selectedCaptionId && project.captions.some(({ id }) => id === state.selectedCaptionId)
           ? state.selectedCaptionId
           : undefined,
-        selectedAssetId: state.selectedAssetId && project.assets.some(({ id }) => id === state.selectedAssetId)
+        selectedAssetId: !switchingProject && state.selectedAssetId && project.assets.some(({ id }) => id === state.selectedAssetId)
           ? state.selectedAssetId
           : project.assets[0]?.id,
-        playheadFrame: Math.min(state.playheadFrame, Math.max(0, project.durationFrames)),
+        playheadFrame: switchingProject
+          ? 0
+          : Math.min(state.playheadFrame, Math.max(0, project.durationFrames)),
+        ...(switchingProject ? {
+          playing: false,
+          media: {},
+          leases: {},
+          activeMediaHandleId: undefined,
+          activeMediaUrl: undefined,
+          revokedHandles: [],
+          script: undefined,
+          agentRun: undefined,
+          agentEvents: [],
+          jobs: state.jobs.filter(({ id }) => projectTicketIds.has(id)),
+          jobEvents: Object.fromEntries(
+            Object.entries(state.jobEvents).filter(([jobId]) => projectTicketIds.has(jobId))
+          ),
+          timelineWindowStart: 0,
+          transcriptWindowStart: 0
+        } : {}),
         conflict: undefined
       }
     }
@@ -317,10 +351,21 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       selectedItemId: undefined,
       selectedCaptionId: undefined,
       selectedAssetId: undefined,
+      playing: false,
+      media: {},
+      leases: {},
       activeMediaHandleId: undefined,
       activeMediaUrl: undefined,
+      revokedHandles: [],
       script: undefined,
-      playheadFrame: 0
+      playheadFrame: 0,
+      agentRun: undefined,
+      agentEvents: [],
+      jobs: [],
+      jobEvents: {},
+      timelineWindowStart: 0,
+      transcriptWindowStart: 0,
+      conflict: undefined
     }
     case 'selection': return {
       ...state,
@@ -371,7 +416,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       ...state,
       agentEvents: mergeSequenced(state.agentEvents, action.value, VIEW_LIMITS.agentEvents)
     }
-    case 'jobs': return { ...state, jobs: boundJobs(action.value) }
+    case 'jobs': return { ...state, jobs: mergeJobSnapshots(state.jobs, action.value) }
     case 'job-event': {
       const jobEvents = {
         ...state.jobEvents,
@@ -410,7 +455,6 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 export function toPersistedState(state: EditorState): PersistedEditorState {
   return {
     schemaVersion: 1,
-    ...(state.project ? { projectId: state.project.id } : {}),
     ...(state.selectedItemId ? { selectedItemId: state.selectedItemId } : {}),
     playheadFrame: state.playheadFrame,
     ...(state.agentRun ? { activeRunId: state.agentRun.id } : {}),
@@ -458,6 +502,75 @@ export function activeTranscriptSegment(
     ?.segments.find((segment) => segment.startUs <= sourceUs && sourceUs < segment.endUs)
 }
 
+export type TimelineSource = {
+  item: ItemProjection
+  asset: AssetProjection
+  sourceTimeUs: number
+  playbackRate: number
+}
+
+export function timelineSourceAtFrame(
+  project: ProjectProjection,
+  frame: number
+): TimelineSource | undefined {
+  const trackOrder = new Map(project.tracks.map((track) => [track.id, track.order]))
+  const item = project.items
+    .filter((candidate) =>
+      candidate.timelineStartFrame <= frame &&
+      frame < candidate.timelineStartFrame + candidate.durationFrames
+    )
+    .sort((left, right) =>
+      (trackOrder.get(left.trackId) ?? Number.MAX_SAFE_INTEGER) -
+        (trackOrder.get(right.trackId) ?? Number.MAX_SAFE_INTEGER) ||
+      left.id.localeCompare(right.id)
+    )
+    .find((candidate) => project.assets.some(({ id, kind }) => id === candidate.assetId && kind === 'video')) ??
+    project.items
+      .filter((candidate) =>
+        candidate.timelineStartFrame <= frame &&
+        frame < candidate.timelineStartFrame + candidate.durationFrames
+      )
+      .sort((left, right) =>
+        (trackOrder.get(left.trackId) ?? Number.MAX_SAFE_INTEGER) -
+          (trackOrder.get(right.trackId) ?? Number.MAX_SAFE_INTEGER) ||
+        left.id.localeCompare(right.id)
+      )[0]
+  if (!item) return undefined
+  const asset = project.assets.find(({ id }) => id === item.assetId)
+  if (!asset) return undefined
+  const timelineDeltaFrames = frame - item.timelineStartFrame
+  const sourceTimeUs = Math.min(item.sourceEndUs, Math.max(item.sourceStartUs,
+    item.sourceStartUs + Math.round(
+      timelineDeltaFrames * 1_000_000 * project.fps.denominator * item.speed.numerator /
+      (project.fps.numerator * item.speed.denominator)
+    )
+  ))
+  return {
+    item,
+    asset,
+    sourceTimeUs,
+    playbackRate: item.speed.numerator / item.speed.denominator
+  }
+}
+
+export function projectFrameFromSourceTime(
+  project: Pick<ProjectProjection, 'fps'>,
+  source: Pick<TimelineSource, 'item'>,
+  sourceSeconds: number
+): number {
+  const sourceDeltaUs = Math.max(0, sourceSeconds * 1_000_000 - source.item.sourceStartUs)
+  const timelineFrames = sourceDeltaUs * project.fps.numerator * source.item.speed.denominator /
+    (1_000_000 * project.fps.denominator * source.item.speed.numerator)
+  return source.item.timelineStartFrame + Math.round(timelineFrames)
+}
+
+export function activeCaptionAtFrame(
+  project: ProjectProjection,
+  frame: number
+): CaptionProjection | undefined {
+  return project.captions.find(({ startFrame, endFrame }) => startFrame <= frame && frame < endFrame)
+}
+
 function boundProject(project: ProjectProjection): ProjectProjection {
   let segments = VIEW_LIMITS.transcriptSegments
   return {
@@ -480,6 +593,22 @@ function boundJobs(jobs: JobSnapshot[]): JobSnapshot[] {
   return dedupeById(jobs)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, VIEW_LIMITS.jobs)
+}
+
+function mergeJobSnapshots(current: readonly JobSnapshot[], incoming: JobSnapshot[]): JobSnapshot[] {
+  const currentById = new Map(current.map((snapshot) => [snapshot.id, snapshot]))
+  return boundJobs(incoming.map((snapshot) => {
+    const previous = currentById.get(snapshot.id)
+    if (!previous) return snapshot
+    const previousTerminal = isTerminalJobState(previous.state)
+    const incomingTerminal = isTerminalJobState(snapshot.state)
+    if (previousTerminal !== incomingTerminal) return previousTerminal ? previous : snapshot
+    return snapshot.updatedAt >= previous.updatedAt ? snapshot : previous
+  }))
+}
+
+function isTerminalJobState(state: JobSnapshot['state']): boolean {
+  return state === 'completed' || state === 'failed' || state === 'cancelled' || state === 'interrupted'
 }
 
 function snapshotFromEvent(snapshot: JobSnapshot, event: JobEvent): JobSnapshot {
