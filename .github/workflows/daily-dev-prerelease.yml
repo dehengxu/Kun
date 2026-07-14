@@ -273,7 +273,7 @@ jobs:
       - name: Smoke packaged Kun Video Editor native workflow
         run: >
           npm run smoke:packaged-video-editor-native --
-          --archive dist/kun-video-editor-0.1.0.kunx
+          --archive dist/kun-video-editor-0.1.1.kunx
 
       - name: Prepare and verify Linux user namespace sandbox
         run: |
@@ -360,7 +360,7 @@ jobs:
             "extension-native-evidence-darwin.json"
             "extension-native-evidence-win32.json"
             "extension-native-evidence-linux.json"
-            "kun-video-editor-0.1.0.kunx"
+            "kun-video-editor-0.1.1.kunx"
           )
 
           for file in "${required[@]}"; do

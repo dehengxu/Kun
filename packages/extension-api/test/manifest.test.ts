@@ -111,6 +111,16 @@ describe('ExtensionManifestSchema', () => {
         'views.leftSidebar': [{ id: 'issues', title: 'Duplicate', entry: 'dist/webview/index.html' }]
       }
     }).success).toBe(false)
+    expect(ExtensionManifestSchema.safeParse({
+      ...manifest,
+      activationEvents: [...manifest.activationEvents, 'onCommand:open-issues'],
+      contributes: {
+        ...manifest.contributes,
+        commands: [{ id: 'open-issues', title: 'Open issues' }],
+        'actions.composer': [{ id: 'open-issues', command: 'open-issues', title: 'Open issues' }]
+      },
+      permissions: [...manifest.permissions, 'commands.register', 'ui.actions']
+    }).success).toBe(false)
   })
 
   it('requires model Provider authentication references to resolve inside the Manifest', () => {

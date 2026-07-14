@@ -237,7 +237,7 @@ smoke_macos_extensions() {
 
   cyan "Smoking packaged Kun Video Editor native workflow (macOS ${host_arch})..."
   npm run smoke:packaged-video-editor-native -- --resources "${host_resources}" \
-    --archive "${ROOT}/dist/kun-video-editor-0.1.0.kunx" \
+    --archive "${ROOT}/dist/kun-video-editor-0.1.1.kunx" \
     || die "macOS packaged Kun Video Editor native workflow smoke failed"
 
   cyan "Recording commit-bound macOS native evidence..."

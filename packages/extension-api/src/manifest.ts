@@ -306,15 +306,41 @@ export const ExtensionManifestSchema = StructuralExtensionManifestSchema.superRe
       ['authentication', manifest.contributes.authentication],
       ['hostContentScripts', manifest.contributes.hostContentScripts]
     ] as const
+    const workbenchCollections = new Set([
+      'commands',
+      'views.containers',
+      'views',
+      'actions.topBar',
+      'actions.composer',
+      'actions.message',
+      'settings',
+      'contextMenus',
+      'notifications',
+      'hostContentScripts'
+    ])
+    const workbenchIds = new Map<string, string>()
     for (const [collection, entries] of idCollections) {
       const seen = new Set<string>()
       for (const entry of entries) {
-        if (seen.has(entry.id)) {
+        const duplicateInCollection = seen.has(entry.id)
+        if (duplicateInCollection) {
           context.addIssue({
             code: 'custom',
             path: ['contributes', collection],
             message: `Duplicate contribution id: ${entry.id}`
           })
+        }
+        if (!duplicateInCollection && workbenchCollections.has(collection)) {
+          const previousCollection = workbenchIds.get(entry.id)
+          if (previousCollection !== undefined) {
+            context.addIssue({
+              code: 'custom',
+              path: ['contributes', collection],
+              message: `Duplicate workbench contribution id: ${entry.id} (already declared in ${previousCollection})`
+            })
+          } else {
+            workbenchIds.set(entry.id, collection)
+          }
         }
         seen.add(entry.id)
       }

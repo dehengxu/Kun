@@ -64,6 +64,7 @@ import {
 import {
   ExtensionActivityBar,
   firstViewForContainer,
+  isExtensionWorkbenchView,
   readStoredExtensionSurfaceId,
   resolveCommandOpenView,
   type ExtensionRightContainerTarget,
@@ -71,6 +72,7 @@ import {
   type ExtensionWorkbenchViewGroups,
   writeStoredExtensionSurfaceId
 } from '../extensions/ExtensionWorkbenchSurfaces'
+import { workbenchContributionRegistry } from '../extensions/contribution-registry'
 import { getSlashQuery } from './chat/floating-composer-commands'
 
 const FILE_TREE_SIDEBAR_WIDTH = 320
@@ -317,6 +319,25 @@ export function Workbench(): ReactElement {
     setRightPanelMode(null)
     selectExtensionSurface(view.id)
   }, [leftSidebarCollapsed, selectExtensionSurface, setRightPanelMode, toggleLeftSidebar])
+
+  const openManagedExtensionView = useCallback(async (contributionId: string): Promise<void> => {
+    let contribution = workbenchContributionRegistry.get(contributionId, contributionContext)
+    if (!isExtensionWorkbenchView(contribution)) {
+      const snapshot = await extensionWorkbenchClient.loadContributions(workspaceRoot || undefined)
+      workbenchContributionRegistry.replaceExtensions(snapshot)
+      contribution = workbenchContributionRegistry.get(contributionId, contributionContext)
+    }
+    if (!isExtensionWorkbenchView(contribution)) {
+      const diagnostics = workbenchContributionRegistry.getDiagnostics()
+        .filter((diagnostic) => diagnostic.contributionId === contributionId ||
+          contributionId.startsWith(`extension:${diagnostic.extensionId ?? ''}/`))
+      const detail = diagnostics[0]?.message
+      throw new Error(detail
+        ? `扩展视图无法打开：${detail}`
+        : '扩展视图当前不可用。请检查扩展版本、工作区信任和权限。')
+    }
+    openExtensionSurface(contribution)
+  }, [contributionContext, openExtensionSurface, workspaceRoot])
 
   useEffect(() => {
     setActiveExtensionSurfaceId(readStoredExtensionSurfaceId(extensionSurfaceLayoutStorage))
@@ -974,7 +995,7 @@ export function Workbench(): ReactElement {
         extensions={{
           workspaceRoot,
           onOpenIntegrations: openPluginsView,
-          onOpenView: selectExtensionSurface
+          onOpenView: openManagedExtensionView
         }}
       />
       )}

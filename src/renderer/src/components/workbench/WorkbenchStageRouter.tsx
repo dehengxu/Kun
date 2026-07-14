@@ -49,7 +49,7 @@ export type WorkbenchStageRouterProps = {
   extensions: {
     workspaceRoot: string
     onOpenIntegrations: () => void
-    onOpenView: (contributionId: string) => void
+    onOpenView: (contributionId: string) => Promise<void>
   }
 }
 

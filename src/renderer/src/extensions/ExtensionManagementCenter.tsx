@@ -57,7 +57,7 @@ export function ExtensionManagementCenter({
   workspaceRoot: string
   onToggleLeftSidebar: () => void
   onOpenIntegrations: () => void
-  onOpenView: (contributionId: string) => void
+  onOpenView: (contributionId: string) => Promise<void>
 }): ReactElement {
   const { i18n } = useTranslation()
   const zh = i18n.language.toLowerCase().startsWith('zh')
@@ -106,6 +106,18 @@ export function ExtensionManagementCenter({
     } catch (error) {
       setNotice({ tone: 'error', text: error instanceof Error ? error.message : String(error) })
       return false
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const openView = async (extensionId: string, contributionId: string): Promise<void> => {
+    setBusyId(extensionId)
+    setNotice(null)
+    try {
+      await onOpenView(contributionId)
+    } catch (error) {
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : String(error) })
     } finally {
       setBusyId(null)
     }
@@ -310,7 +322,7 @@ export function ExtensionManagementCenter({
                             disabled={busyId !== null || !selected || !workspaceRoot || !entry.globallyEnabled}
                             onClick={() => {
                               if (canOpen) {
-                                onOpenView(`extension:${entry.id}/${view.id}`)
+                                void openView(entry.id, `extension:${entry.id}/${view.id}`)
                                 return
                               }
                               setPermissionEditorId(entry.id)

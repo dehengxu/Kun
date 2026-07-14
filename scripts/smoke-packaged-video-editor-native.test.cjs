@@ -205,7 +205,7 @@ test('requires exactly one video and one ordered deterministic SRT artifact', as
 test('accepts only the exact non-empty release archive for byte-identical lifecycle smoke', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kun-native-release-archive-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const archive = join(directory, 'kun-video-editor-0.1.0.kunx')
+  const archive = join(directory, 'kun-video-editor-0.1.1.kunx')
   await writeFile(archive, 'release archive bytes')
   assert.doesNotThrow(() => assertReleaseArchive(archive))
   const wrong = join(directory, 'kun-video-editor-9.9.9.kunx')
@@ -290,7 +290,7 @@ test('PR, release, and daily jobs run both native media smokes before evidence',
         assert.ok(packIndex < packagedIndex, `${label}/${jobId} smokes before packing release .kunx`)
         assert.match(
           commands[packagedIndex],
-          /--archive dist\/kun-video-editor-0\.1\.0\.kunx/u,
+          /--archive dist\/kun-video-editor-0\.1\.1\.kunx/u,
           `${label}/${jobId} does not smoke the uploaded release .kunx bytes`
         )
       }

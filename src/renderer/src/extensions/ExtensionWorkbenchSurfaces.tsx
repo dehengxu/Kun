@@ -21,6 +21,18 @@ export type ExtensionWorkbenchViewPoint =
 
 export type ExtensionWorkbenchView = RegisteredContribution<ExtensionWorkbenchViewPoint>
 
+export function isExtensionWorkbenchView(
+  contribution: RegisteredContribution | undefined
+): contribution is ExtensionWorkbenchView {
+  return contribution !== undefined && [
+    'views.leftSidebar',
+    'views.rightSidebar',
+    'views.auxiliaryPanel',
+    'views.editorTab',
+    'views.fullPage'
+  ].includes(contribution.point)
+}
+
 export type ExtensionWorkbenchViewGroups = {
   leftSidebar: readonly RegisteredContribution<'views.leftSidebar'>[]
   rightSidebar: readonly RegisteredContribution<'views.rightSidebar'>[]

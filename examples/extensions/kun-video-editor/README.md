@@ -66,15 +66,15 @@ given commit and manifest version. This keeps every capability demonstrated here
 available to third-party authors through documented Extension API surfaces.
 
 Each stable and daily Kun GitHub Release publishes the platform-independent
-`kun-video-editor-0.1.0.kunx` asset beside the desktop installers and the three
+`kun-video-editor-0.1.1.kunx` asset beside the desktop installers and the three
 native evidence JSON files. Download the `.kunx` from the same release as the
 Kun build you are running; do not copy an archive from an untrusted mirror.
 
 Validate and install the downloaded package with the Kun Extension CLI:
 
 ```bash
-kun extension validate ./kun-video-editor-0.1.0.kunx
-kun extension install ./kun-video-editor-0.1.0.kunx
+kun extension validate ./kun-video-editor-0.1.1.kunx
+kun extension install ./kun-video-editor-0.1.1.kunx
 ```
 
 Review and accept the declared permissions, enable the extension in a trusted

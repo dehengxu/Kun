@@ -4,7 +4,7 @@
   "apiVersion": "1.1.0",
   "name": "kun-video-editor",
   "publisher": "kun-examples",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Kun Video Editor",
   "description": "Local transcript-oriented editing for talking-head, interview, and podcast media.",
   "license": "MIT",
@@ -87,7 +87,7 @@
     ],
     "actions.composer": [
       {
-        "id": "open-editor",
+        "id": "open-editor-action",
         "command": "open-editor",
         "title": "Edit Video",
         "group": "media",
