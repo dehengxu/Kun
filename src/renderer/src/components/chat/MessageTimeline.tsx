@@ -1,6 +1,7 @@
 import type { ReactElement, RefObject } from 'react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { GitCommitHorizontal, Hash } from 'lucide-react'
 import type { ChatBlock, RuntimeConnectionStatus } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
@@ -53,6 +54,7 @@ import {
   type ExtensionResultPreviewSource
 } from '../../extensions/ControlledContributionSurfaces'
 import { resolveActiveExtensionWorkspaceRoot } from '../../extensions/active-extension-workspace'
+import { extractDiffFilePath, extractUnifiedDiffText } from '../../lib/diff-stats'
 
 export { summarizeToolBlock } from './message-timeline-process'
 
@@ -89,8 +91,8 @@ type CompactionTimelineBlock = Extract<ChatBlock, { kind: 'compaction' }>
 const TURN_PAGE_SIZE = 18
 const TIMELINE_JUMP_RAIL_FALLBACK_LEFT_PX = 16
 const TIMELINE_JUMP_RAIL_STAGE_INSET_PX = 16
-const TIMELINE_JUMP_RAIL_WIDTH_PX = 30
-const TIMELINE_JUMP_RAIL_PREVIEW_OFFSET_PX = 34
+const TIMELINE_JUMP_RAIL_WIDTH_PX = 62
+const TIMELINE_JUMP_RAIL_PREVIEW_OFFSET_PX = 68
 const TIMELINE_JUMP_RAIL_PREVIEW_WIDTH_PX = 416
 const TIMELINE_JUMP_RAIL_PREVIEW_MARGIN_PX = 16
 const TIMELINE_JUMP_RAIL_PREVIEW_CONTAINER_GUTTER_PX = 88
@@ -173,18 +175,66 @@ function turnPreview(turn: Turn, fallback: string): string {
   return oneLine.length > 48 ? `${oneLine.slice(0, 47).trimEnd()}...` : oneLine
 }
 
-function turnPromptPreview(turn: Turn, fallback: string): string {
-  if (turn.user && isBackgroundShellNoticeBlock(turn.user)) {
-    const display = turn.user.meta?.displayText?.trim()
-    if (display) return display.replace(/\s+/g, ' ')
+function turnResponsePreview(turn: Turn, fallback: string): string {
+  for (let index = turn.blocks.length - 1; index >= 0; index -= 1) {
+    const block = turn.blocks[index]
+    if (block.kind !== 'assistant') continue
+    const content = splitThink(block.text).content.trim()
+    if (content) return content.replace(/\s+/g, ' ')
   }
-  const text = turn.user?.text.trim() ?? ''
-  if (!text) return fallback
-  return text.replace(/\s+/g, ' ')
+  return fallback
 }
 
-export function timelineJumpWaveLevel(index: number): number {
-  return [2, 4, 5, 3, 1][index % 5] ?? 3
+export type TimelineJumpPreviewMetadata = {
+  fileLabels: string[]
+  hasCommit: boolean
+}
+
+function timelineJumpPreviewFileLabel(filePath: string): string {
+  const normalized = filePath.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  return normalized.split('/').at(-1) ?? normalized
+}
+
+export function timelineJumpPreviewMetadata(turn: Turn): TimelineJumpPreviewMetadata {
+  const fileLabels: string[] = []
+  const seenFileLabels = new Set<string>()
+  let hasCommit = false
+
+  for (const block of turn.blocks) {
+    if (block.kind !== 'tool' || block.status !== 'success') continue
+
+    if (block.toolKind === 'file_change') {
+      const filePath = extractDiffFilePath(extractUnifiedDiffText(block.detail), block.filePath)
+      if (filePath) {
+        const label = timelineJumpPreviewFileLabel(filePath)
+        const key = label.toLocaleLowerCase()
+        if (label && !seenFileLabels.has(key)) {
+          seenFileLabels.add(key)
+          fileLabels.push(label)
+        }
+      }
+    }
+
+    const command = typeof block.meta?.command === 'string' ? block.meta.command : ''
+    if (/\bgit(?:\s+-C\s+(?:"[^"]*"|'[^']*'|\S+))?\s+commit\b/i.test(command)) {
+      hasCommit = true
+    }
+  }
+
+  return { fileLabels: fileLabels.slice(0, 32), hasCommit }
+}
+
+export function timelineJumpPreviewTop(
+  buttonTop: number,
+  buttonHeight: number,
+  railAnchorTop: number
+): number {
+  return buttonTop + buttonHeight / 2 - railAnchorTop
+}
+
+export function timelineJumpWaveDistance(index: number, hoveredIndex: number): number | null {
+  if (hoveredIndex < 0) return null
+  return Math.min(Math.abs(index - hoveredIndex), 3)
 }
 
 function processBlockHasError(block: ChatBlock): boolean {
@@ -346,8 +396,12 @@ export function MessageTimeline({
     previewLeft: number
   } | null>(null)
   const [jumpRailPreview, setJumpRailPreview] = useState<{
+    key: string
     title: string
     prompt: string
+    fileLabels: string[]
+    hasCommit: boolean
+    top: number
   } | null>(null)
   const [messageContextMenu, setMessageContextMenu] = useState<{
     position: { x: number; y: number }
@@ -387,7 +441,13 @@ export function MessageTimeline({
   )
   const visibleTurnAnchors = useMemo(
     () => {
-      const anchors: { key: string; label: string; title: string; prompt: string; waveLevel: number }[] = []
+      const anchors: Array<{
+        key: string
+        title: string
+        prompt: string
+        fileLabels: string[]
+        hasCommit: boolean
+      }> = []
       let questionIndex = turns
         .slice(0, hiddenTurnCount)
         .filter((turn) => turn.user)
@@ -398,12 +458,12 @@ export function MessageTimeline({
         questionIndex += 1
         const absoluteTurnIndex = hiddenTurnCount + index
         const key = stableTurnKey(turn, absoluteTurnIndex)
+        const metadata = timelineJumpPreviewMetadata(turn)
         anchors.push({
           key,
-          label: String(questionIndex),
           title: turnPreview(turn, t('timelineJumpTurn', { index: questionIndex })),
-          prompt: turnPromptPreview(turn, t('timelineJumpTurn', { index: questionIndex })),
-          waveLevel: timelineJumpWaveLevel(anchors.length)
+          prompt: turnResponsePreview(turn, t('timelineJumpTurn', { index: questionIndex })),
+          ...metadata
         })
       })
       return anchors
@@ -491,13 +551,31 @@ export function MessageTimeline({
   }
 
   const showJumpRailPreview = (
-    anchor: { label: string; title: string; prompt: string }
+    anchor: {
+      key: string
+      title: string
+      prompt: string
+      fileLabels: string[]
+      hasCommit: boolean
+    },
+    node: HTMLButtonElement
   ): void => {
+    const nodeRect = node.getBoundingClientRect()
+    const railAnchor = node.closest<HTMLElement>('.timeline-jump-rail-anchor')
+    const railAnchorTop = railAnchor?.getBoundingClientRect().top ?? nodeRect.top
     setJumpRailPreview({
-      title: t('timelineJumpTurn', { index: anchor.label }),
-      prompt: anchor.prompt || anchor.title
+      key: anchor.key,
+      title: anchor.title,
+      prompt: anchor.prompt || anchor.title,
+      fileLabels: anchor.fileLabels,
+      hasCommit: anchor.hasCommit,
+      top: timelineJumpPreviewTop(nodeRect.top, nodeRect.height, railAnchorTop)
     })
   }
+
+  const jumpRailHoveredIndex = jumpRailPreview
+    ? visibleTurnAnchors.findIndex((item) => item.key === jumpRailPreview.key)
+    : -1
 
   return (
     <TimelineFilePreviewWorkspaceProvider workspaceRoot={filePreviewWorkspaceRoot}>
@@ -511,34 +589,58 @@ export function MessageTimeline({
             style={{
               left: `${jumpRailLayout.railLeft}px`
             }}
+            onMouseLeave={() => setJumpRailPreview(null)}
           >
-            {visibleTurnAnchors.map((anchor) => (
-              <button
-                key={anchor.key}
-                type="button"
-                className={`timeline-jump-rail-button${activeTurnKey === anchor.key ? ' is-active' : ''}`}
-                data-wave-level={anchor.waveLevel}
-                title={anchor.title}
-                aria-label={anchor.title}
-                aria-current={activeTurnKey === anchor.key ? 'true' : undefined}
-                onMouseEnter={() => showJumpRailPreview(anchor)}
-                onFocus={() => showJumpRailPreview(anchor)}
-                onMouseLeave={() => setJumpRailPreview(null)}
-                onBlur={() => setJumpRailPreview(null)}
-                onClick={() => jumpToTurn(anchor.key)}
-              />
-            ))}
+            {visibleTurnAnchors.map((anchor, index) => {
+              const waveDistance = timelineJumpWaveDistance(index, jumpRailHoveredIndex)
+              return (
+                <button
+                  key={anchor.key}
+                  type="button"
+                  className={`timeline-jump-rail-button${activeTurnKey === anchor.key ? ' is-active' : ''}`}
+                  data-wave-distance={waveDistance ?? undefined}
+                  aria-label={anchor.title}
+                  aria-current={activeTurnKey === anchor.key ? 'true' : undefined}
+                  onMouseEnter={(event) => showJumpRailPreview(anchor, event.currentTarget)}
+                  onFocus={(event) => showJumpRailPreview(anchor, event.currentTarget)}
+                  onBlur={() => setJumpRailPreview(null)}
+                  onClick={() => jumpToTurn(anchor.key)}
+                />
+              )
+            })}
           </nav>
           {jumpRailPreview ? (
             <div
               className="timeline-jump-rail-preview"
               style={{
-                left: `${jumpRailLayout.previewLeft}px`
+                left: `${jumpRailLayout.previewLeft}px`,
+                top: `${jumpRailPreview.top}px`
               }}
               role="tooltip"
             >
               <div className="timeline-jump-rail-preview-title">{jumpRailPreview.title}</div>
               <div className="timeline-jump-rail-preview-text">{jumpRailPreview.prompt}</div>
+              {jumpRailPreview.fileLabels.length > 0 || jumpRailPreview.hasCommit ? (
+                <div className="timeline-jump-rail-preview-meta" aria-hidden="true">
+                  {jumpRailPreview.fileLabels.slice(0, 2).map((fileLabel) => (
+                    <span key={fileLabel} className="timeline-jump-rail-preview-meta-item">
+                      <Hash />
+                      <span className="timeline-jump-rail-preview-file-label">{fileLabel}</span>
+                    </span>
+                  ))}
+                  {jumpRailPreview.fileLabels.length > 2 ? (
+                    <span className="timeline-jump-rail-preview-meta-count">
+                      +{jumpRailPreview.fileLabels.length - 2}
+                    </span>
+                  ) : null}
+                  {jumpRailPreview.hasCommit ? (
+                    <span className="timeline-jump-rail-preview-meta-item">
+                      <GitCommitHorizontal />
+                      {t('userInputSubmit')}
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
