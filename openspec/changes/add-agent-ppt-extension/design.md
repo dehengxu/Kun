@@ -47,7 +47,7 @@ Agent mutations may supply an `operationId`; otherwise the host derives one from
 
 The Webview is contributed only as a right-sidebar entry with a dedicated presentation icon. Its sidebar-first shell presents Slides, Canvas, and Properties as three tabs so a single focused workspace fits the same narrow contribution surface used by other editor extensions. It builds slide DOM with `createElement`, `textContent`, validated style values, and broker-loaded workspace images. It never injects presentation HTML with `innerHTML`, creates a nested iframe, or enables remote network access. The file projection escapes all text and attributes and includes a restrictive standalone CSP.
 
-The editor offers a slide rail, responsive 16:9 canvas, drag/resize, inline text editing, property inspector, slide operations, undo/redo, preview, and debounced save. A revision conflict never overwrites; the UI asks for reload.
+The editor offers a slide rail, responsive 16:9 canvas, drag/resize, inline text editing, property inspector, slide operations, undo/redo, preview, and debounced save. Its sidebar shell uses one explicit bounded workspace row so host-width media queries cannot auto-place the editor into a short content row followed by empty grid tracks. A compact two-row deck header keeps secondary load/export actions in an overflow menu, the slide rail remains persistent down to phone-like sidebar widths, and the canvas toolbar sits directly below the editing surface. A revision conflict never overwrites; the UI asks for reload.
 
 ### 5. The main Kun Agent uses five narrow extension tools
 

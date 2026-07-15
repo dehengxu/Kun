@@ -65,6 +65,13 @@ opens without a restored deck, it discovers and loads the most recently modified
 root-level `.kun-ppt.html` file so a deck created while the View was closed is
 still rendered immediately.
 
+The shell is designed for the workbench sidebar rather than a full document
+window. Its compact header keeps New visible and moves Load/Export into a menu;
+the numbered thumbnail rail remains beside Canvas and Properties from 420 px
+up, the active pane owns the full remaining height, and insert/history controls
+sit directly below the scaled 16:9 canvas. Below 360 px the dedicated Slides tab
+can temporarily take the full width.
+
 Properties also exposes a DOM/Layers tree for the current slide. Text and shape
 elements correspond to projected `div` nodes and images correspond to `img`
 nodes. Selecting a layer reveals a bounded CSS declaration editor for layout,

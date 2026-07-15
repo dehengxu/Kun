@@ -102,6 +102,7 @@ const ui = {
   studio: required<HTMLElement>('#studio'),
   path: required<HTMLInputElement>('#deck-path'),
   newDeck: required<HTMLButtonElement>('#new-deck'),
+  deckMenu: required<HTMLDetailsElement>('#deck-menu'),
   loadDeck: required<HTMLButtonElement>('#load-deck'),
   openExport: required<HTMLButtonElement>('#open-copy'),
   saveState: required<HTMLElement>('#save-state'),
@@ -265,6 +266,7 @@ function isStudioPanel(value: unknown): value is StudioPanel {
 }
 
 function setActivePanel(panel: StudioPanel, focus = false): void {
+  ui.deckMenu.open = false
   activePanel = panel
   ui.studio.dataset.activePanel = panel
   // The slide rail stays visible beside Canvas and Properties at normal sidebar
@@ -1482,6 +1484,7 @@ function bindEvents(): void {
     void createDeck(normalizePath(ui.path.value)).catch((error) => setSaveStatus(errorMessage(error), 'error'))
   })
   ui.loadDeck.addEventListener('click', () => {
+    ui.deckMenu.open = false
     void loadDeck(normalizePath(ui.path.value)).catch((error) => setSaveStatus(errorMessage(error), 'error'))
   })
   ui.reloadConflict.addEventListener('click', () => {
@@ -1522,6 +1525,7 @@ function bindEvents(): void {
       .catch((error) => { ui.imageError.textContent = errorMessage(error) })
   })
   ui.openExport.addEventListener('click', () => {
+    ui.deckMenu.open = false
     ui.exportError.textContent = ''
     ui.exportPath.value = activePath.replace(/\.kun-ppt\.html$/u, '-copy.kun-ppt.html')
     ui.exportDialog.showModal()

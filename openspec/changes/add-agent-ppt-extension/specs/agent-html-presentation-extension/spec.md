@@ -52,6 +52,10 @@ The extension SHALL contribute the editor only as a responsive right-sidebar Vie
 - **WHEN** a presentation is loaded in a normal-width right sidebar
 - **THEN** its authored background renders without a host CSS override, its page thumbnails remain visible beside the active editor pane, and the user can click deck actions, tabs, thumbnails, toolbar controls, and property inputs
 
+#### Scenario: Resize the editor to a narrow workbench sidebar
+- **WHEN** the right sidebar is resized between 420 and 640 CSS pixels while Canvas or Properties is active
+- **THEN** the active pane stretches through the remaining sidebar height, the numbered thumbnail rail stays visible, the 16:9 canvas scales without horizontal clipping, and compact deck and editing actions remain reachable without producing empty implicit grid rows
+
 #### Scenario: Edit the HTML presentation as bounded DIV and CSS layers
 - **WHEN** a user selects a text, shape, or image from the DOM layer tree, changes its order, or applies supported CSS declarations for layout and appearance
 - **THEN** the editor maps those changes to the same typed element operations, keeps undo and autosave behavior, and regenerates the standalone HTML projection with matching DIV or image styles

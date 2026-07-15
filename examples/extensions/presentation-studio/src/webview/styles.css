@@ -951,117 +951,6 @@ select:focus-visible,
   border: 0;
 }
 
-@media (max-width: 1180px) {
-  .topbar {
-    grid-template-columns: auto minmax(220px, 1fr) auto;
-  }
-
-  .save-state {
-    display: none;
-  }
-
-  .workspace-grid {
-    grid-template-columns: 180px minmax(380px, 1fr) 245px;
-  }
-
-  .brand-copy small {
-    display: none;
-  }
-}
-
-@media (max-width: 900px) {
-  body {
-    overflow: auto;
-  }
-
-  .studio {
-    height: auto;
-    min-height: 100vh;
-    overflow: visible;
-  }
-
-  .topbar {
-    grid-template-columns: auto minmax(180px, 1fr);
-  }
-
-  .topbar-actions {
-    grid-column: 1 / -1;
-  }
-
-  .workspace-grid {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(620px, 1fr) auto;
-    overflow: visible;
-  }
-
-  .slide-rail {
-    grid-template-rows: auto auto auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .slide-list {
-    flex-direction: row;
-    overflow-x: auto;
-  }
-
-  .slide-card {
-    flex: 0 0 150px;
-  }
-
-  .editor-column {
-    min-height: 620px;
-  }
-
-  .inspector {
-    min-height: 320px;
-    border-top: 1px solid var(--border);
-    border-left: 0;
-  }
-}
-
-@media (max-width: 560px) {
-  .topbar {
-    grid-template-columns: 1fr;
-  }
-
-  .brand,
-  .path-field,
-  .topbar-actions {
-    grid-column: 1;
-  }
-
-  .path-field {
-    grid-template-columns: 1fr;
-  }
-
-  .topbar-actions .button {
-    flex: 1;
-  }
-
-  .canvas-toolbar {
-    flex-wrap: wrap;
-  }
-
-  .toolbar-spacer {
-    display: none;
-  }
-
-  .canvas-viewport {
-    padding: 12px;
-  }
-
-  .slide-canvas {
-    min-width: 260px;
-  }
-
-  .conflict-banner,
-  .conflict-banner > div {
-    align-items: stretch;
-    flex-direction: column;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -1073,40 +962,35 @@ select:focus-visible,
   }
 }
 
-/* The extension lives in Kun's right sidebar. Keep one focused workspace pane visible. */
+/* Kun PPT is always embedded in the right workbench sidebar. These rules are
+   intentionally self-contained so generic desktop breakpoints cannot create
+   implicit grid rows or push the active editor above an empty workspace. */
+html,
 body {
+  width: 100%;
+  height: 100%;
+  min-width: 280px;
   overflow: hidden;
 }
 
 .studio {
   grid-template-rows: auto auto auto minmax(0, 1fr);
-  height: 100vh;
+  width: 100%;
+  height: 100dvh;
   min-height: 0;
   overflow: hidden;
 }
 
 .topbar {
+  z-index: 5;
+  display: grid;
   grid-row: 1;
-}
-
-.conflict-banner {
-  grid-row: 2;
-}
-
-.studio-tabs {
-  grid-row: 3;
-}
-
-.workspace-grid {
-  grid-row: 4;
-}
-
-.topbar {
   grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
   gap: 9px 10px;
-  align-items: center;
+  align-items: end;
   min-height: 0;
-  padding: 12px;
+  padding: 10px 12px;
 }
 
 .brand {
@@ -1115,57 +999,169 @@ body {
   min-width: 0;
 }
 
+.brand-mark {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 11px;
+}
+
+.brand-mark svg {
+  width: 23px;
+  height: 23px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.brand-copy strong {
+  font-size: 14px;
+}
+
 .brand-copy small {
-  display: none;
+  display: block;
+  font-size: 9px;
 }
 
 .save-state {
   display: block;
   grid-column: 2;
   grid-row: 1;
-  max-width: 132px;
+  max-width: 144px;
+  align-self: center;
+}
+
+.save-state[data-tone="saved"]::before {
+  content: "●";
+  margin-right: 5px;
+  font-size: 8px;
 }
 
 .path-field {
-  grid-column: 1 / -1;
+  display: grid;
+  grid-column: 1;
   grid-row: 2;
   grid-template-columns: 1fr;
-  gap: 5px;
+  gap: 4px;
+}
+
+.path-field input {
+  height: 36px;
+  border-radius: 9px;
 }
 
 .topbar-actions {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-row: 3;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  position: relative;
+  display: flex;
+  grid-column: 2;
+  grid-row: 2;
+  gap: 6px;
+  align-items: center;
 }
 
-.topbar-actions .button {
-  width: 100%;
-  min-width: 0;
-  padding-inline: 7px;
+.button-new-deck {
+  display: inline-flex;
+  gap: 4px;
+  min-width: 70px;
+  height: 36px;
+  padding-inline: 10px;
+}
+
+.deck-menu {
+  position: relative;
+}
+
+.deck-menu > summary {
+  width: 36px;
+  height: 36px;
+  list-style: none;
+  letter-spacing: 1px;
+}
+
+.deck-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.deck-menu[open] > summary {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.deck-menu-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 7px);
+  right: 0;
+  display: grid;
+  width: 178px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: var(--panel-raised);
+  box-shadow: var(--shadow);
+}
+
+.deck-menu-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 9px;
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  background: transparent;
+}
+
+.deck-menu-item:hover:not(:disabled) {
+  background: var(--panel-hover);
+}
+
+.menu-item-icon {
+  color: var(--accent-strong);
+  font-size: 16px;
+  text-align: center;
+}
+
+.conflict-banner {
+  grid-row: 2;
 }
 
 .studio-tabs {
   z-index: 3;
   display: grid;
+  grid-row: 3;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 4px;
+  gap: 5px;
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
 
 .studio-tab {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
   min-width: 0;
-  min-height: 32px;
-  padding: 0 6px;
+  min-height: 34px;
+  padding: 0 7px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   background: transparent;
+}
+
+.tab-icon {
+  color: var(--faint);
+  font-size: 14px;
 }
 
 .studio-tab:hover {
@@ -1179,24 +1175,37 @@ body {
   background: var(--accent-soft);
 }
 
+.studio-tab[aria-selected="true"] .tab-icon {
+  color: currentColor;
+}
+
 .workspace-grid {
   display: grid;
-  grid-template-columns: clamp(138px, 27%, 184px) minmax(0, 1fr);
+  grid-row: 4;
+  grid-template-columns: clamp(104px, 22%, 148px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
   min-height: 0;
+  align-self: stretch;
   overflow: hidden;
 }
 
 .slide-rail,
 .editor-column,
 .inspector {
+  grid-row: 1;
   width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   border: 0;
 }
 
 .slide-rail {
   display: grid;
+  grid-column: 1;
   grid-template-rows: auto minmax(0, 1fr) auto;
   border-right: 1px solid var(--border);
 }
@@ -1204,6 +1213,7 @@ body {
 .editor-column,
 .inspector {
   display: none;
+  grid-column: 2;
 }
 
 .studio[data-active-panel="slides"] .workspace-grid {
@@ -1212,12 +1222,18 @@ body {
 
 .studio[data-active-panel="slides"] .slide-rail {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-column: 1;
+}
+
+.studio[data-active-panel="slides"] .slide-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  align-content: start;
 }
 
 .studio[data-active-panel="canvas"] .editor-column {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
 }
 
 .studio[data-active-panel="properties"] .inspector {
@@ -1225,40 +1241,129 @@ body {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+.slide-rail .panel-header {
+  min-height: 52px;
+  padding: 9px 8px;
+}
+
+.slide-rail .panel-header .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
 .slide-list {
   flex-direction: column;
+  gap: 9px;
+  padding: 9px 8px;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .slide-card {
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 5px;
   flex: initial;
+}
+
+.slide-card-number {
+  padding-top: 2px;
+  font-size: 9px;
+}
+
+.slide-thumbnail {
+  border-radius: 6px;
+}
+
+.slide-thumbnail-title {
+  font-size: 9px;
+}
+
+.rail-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  padding: 7px 8px;
+}
+
+.rail-actions .button {
+  display: inline-flex;
+  gap: 4px;
+  justify-content: center;
+  min-width: 0;
+  padding-inline: 5px;
+}
+
+.rail-action-icon {
+  font-size: 14px;
 }
 
 .editor-column {
   background:
-    radial-gradient(circle at 50% 34%, var(--panel-hover), transparent 52%),
+    radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--panel-hover) 82%, transparent), transparent 56%),
     var(--bg);
 }
 
-.canvas-toolbar {
-  flex-wrap: wrap;
-  min-height: 0;
-  padding: 8px;
-}
-
-.toolbar-spacer {
-  display: none;
-}
-
 .canvas-viewport {
-  padding: 12px;
+  min-width: 0;
+  min-height: 0;
+  padding: clamp(12px, 3.2vw, 28px);
+  overflow: auto;
+  place-items: center;
 }
 
 .slide-canvas {
-  width: 100%;
+  width: min(100%, calc((100dvh - 274px) * 16 / 9));
   min-width: 0;
   max-width: none;
+  max-height: calc(100dvh - 274px);
+  border-radius: 5px;
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.3);
+}
+
+.canvas-toolbar {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 7px;
+  min-height: 48px;
+  padding: 7px 9px;
+  overflow-x: auto;
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  scrollbar-width: none;
+}
+
+.canvas-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+.canvas-toolbar .toolbar-group {
+  flex: 0 0 auto;
+}
+
+.toolbar-spacer {
+  display: block;
+  min-width: 4px;
+}
+
+.tool-button {
+  display: inline-flex;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.tool-icon {
+  display: inline-grid;
+  min-width: 14px;
+  place-items: center;
+  color: var(--accent-strong);
+  font-size: 13px;
+}
+
+.canvas-footer {
+  min-height: 29px;
+  padding-inline: 10px;
 }
 
 .empty-state {
@@ -1273,7 +1378,134 @@ body {
   background: var(--panel);
 }
 
-@media (max-width: 520px) {
+.inspector .panel-header {
+  min-height: 52px;
+  padding: 9px 12px;
+}
+
+.inspector-body {
+  padding: 12px;
+}
+
+@media (max-width: 640px) {
+  .workspace-grid {
+    grid-template-columns: 100px minmax(0, 1fr);
+  }
+
+  .slide-rail .panel-header strong,
+  .slide-thumbnail-title,
+  .rail-action-label {
+    display: none;
+  }
+
+  .slide-rail .panel-header > div {
+    gap: 0;
+  }
+
+  .slide-rail .panel-header .eyebrow {
+    font-size: 8px;
+  }
+
+  .slide-card {
+    grid-template-columns: 13px minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  .rail-actions .button {
+    min-height: 30px;
+  }
+
+  .tool-label {
+    display: none;
+  }
+
+  .tool-button {
+    width: 31px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .canvas-viewport {
+    padding: 10px;
+  }
+
+  .inspector-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 460px) {
+  .topbar {
+    padding: 9px 10px;
+  }
+
+  .brand-copy small {
+    display: none;
+  }
+
+  .save-state {
+    max-width: 112px;
+    font-size: 10px;
+  }
+
+  .studio-tab {
+    gap: 4px;
+    padding-inline: 4px;
+    font-size: 10px;
+  }
+
+  .workspace-grid {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .slide-list {
+    padding-inline: 6px;
+  }
+
+  .slide-card {
+    display: block;
+  }
+
+  .slide-card-number {
+    display: block;
+    padding: 0 0 3px;
+    text-align: left;
+  }
+
+  .rail-actions {
+    padding-inline: 6px;
+  }
+
+  .canvas-caption {
+    max-width: 62%;
+  }
+}
+
+@media (max-width: 360px) {
+  .brand-mark {
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
+  }
+
+  .save-state {
+    max-width: 94px;
+  }
+
+  .path-field > span {
+    display: none;
+  }
+
+  .button-new-deck {
+    min-width: 36px;
+    width: 36px;
+    padding: 0;
+  }
+
+  .button-new-deck span:last-child {
+    display: none;
+  }
+
   .workspace-grid {
     display: block;
   }
@@ -1286,41 +1518,14 @@ body {
   .studio[data-active-panel="slides"] .slide-rail {
     display: grid;
   }
-}
 
-@media (max-width: 390px) {
-  html,
-  body {
-    min-width: 280px;
+  .studio[data-active-panel="slides"] .slide-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .topbar {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .brand,
-  .save-state,
-  .path-field,
-  .topbar-actions {
-    grid-column: 1;
-  }
-
-  .save-state {
-    grid-row: 2;
-    max-width: none;
-    text-align: left;
-  }
-
-  .path-field {
-    grid-row: 3;
-  }
-
-  .topbar-actions {
-    grid-row: 4;
-  }
-
-  .inspector-grid {
-    grid-template-columns: 1fr;
+  .editor-column,
+  .inspector {
+    width: 100%;
   }
 
   .canvas-footer {

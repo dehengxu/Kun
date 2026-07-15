@@ -35,6 +35,7 @@
 - [x] 5.5 Fix the inherited Electron drag region, preserve authored slide backgrounds, keep page thumbnails visible beside the active editor pane at usable sidebar widths, and add interaction/layout regressions.
 - [x] 5.6 Preserve cached workspace authorization across immutable same/subset-permission updates, require review for permission additions, and make repeated identical permission application idempotent.
 - [x] 5.7 Add a DOM layer tree and bounded CSS declaration editor that maps human HTML-style edits to typed operations without allowing arbitrary HTML, script, URL, selector, or CSS injection.
+- [x] 5.8 Generate a sidebar-first UI concept, remove the conflicting desktop breakpoint tracks, compact deck actions, and verify the slide rail, canvas, toolbar, and properties pane at 420-640 px widths.
 
 ## 6. Presentation Artifact Handoff
 

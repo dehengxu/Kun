@@ -11,11 +11,22 @@
     <div id="studio" class="studio" data-theme="dark" data-active-panel="canvas">
       <header class="topbar">
         <div class="brand" aria-label="Kun PPT">
-          <span class="brand-mark" aria-hidden="true">K</span>
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <rect x="4.25" y="5.25" width="15.5" height="10.5" rx="2"></rect>
+              <path d="M8 19h8M12 15.75V19"></path>
+              <circle cx="9" cy="10.5" r="1"></circle>
+              <path d="m12 12 2.1-2.15L17 13"></path>
+            </svg>
+          </span>
           <span class="brand-copy">
             <strong>Kun PPT</strong>
-            <small>Main Agent · display HTML</small>
+            <small>Presentation editor</small>
           </span>
+        </div>
+
+        <div id="save-state" class="save-state" role="status" aria-live="polite">
+          No deck loaded
         </div>
 
         <label class="path-field" for="deck-path">
@@ -31,13 +42,23 @@
         </label>
 
         <div class="topbar-actions" role="group" aria-label="Deck actions">
-          <button id="new-deck" type="button" class="button button-primary">New</button>
-          <button id="load-deck" type="button" class="button">Load</button>
-          <button id="open-copy" type="button" class="button" disabled>Export copy</button>
-        </div>
-
-        <div id="save-state" class="save-state" role="status" aria-live="polite">
-          No deck loaded
+          <button id="new-deck" type="button" class="button button-primary button-new-deck">
+            <span aria-hidden="true">＋</span>
+            <span>New</span>
+          </button>
+          <details id="deck-menu" class="deck-menu">
+            <summary class="icon-button" aria-label="More deck actions" title="More deck actions">•••</summary>
+            <div class="deck-menu-popover" role="menu" aria-label="More deck actions">
+              <button id="load-deck" type="button" class="deck-menu-item" role="menuitem">
+                <span class="menu-item-icon" aria-hidden="true">↗</span>
+                <span>Load deck</span>
+              </button>
+              <button id="open-copy" type="button" class="deck-menu-item" role="menuitem" disabled>
+                <span class="menu-item-icon" aria-hidden="true">⇩</span>
+                <span>Export copy</span>
+              </button>
+            </div>
+          </details>
         </div>
       </header>
 
@@ -59,7 +80,7 @@
           aria-selected="false"
           tabindex="-1"
           data-studio-tab="slides"
-        >Slides</button>
+        ><span class="tab-icon" aria-hidden="true">▤</span><span>Slides</span></button>
         <button
           id="studio-tab-canvas"
           type="button"
@@ -68,7 +89,7 @@
           aria-controls="canvas-panel"
           aria-selected="true"
           data-studio-tab="canvas"
-        >Canvas</button>
+        ><span class="tab-icon" aria-hidden="true">✎</span><span>Canvas</span></button>
         <button
           id="studio-tab-properties"
           type="button"
@@ -78,7 +99,7 @@
           aria-selected="false"
           tabindex="-1"
           data-studio-tab="properties"
-        >Properties</button>
+        ><span class="tab-icon" aria-hidden="true">☷</span><span>Properties</span></button>
       </nav>
 
       <main class="workspace-grid">
@@ -92,27 +113,18 @@
           </header>
           <ol id="slide-list" class="slide-list" role="listbox" aria-label="Presentation slides"></ol>
           <div class="rail-actions" role="group" aria-label="Selected slide actions">
-            <button id="duplicate-slide" type="button" class="button button-compact" disabled>Duplicate</button>
-            <button id="delete-slide" type="button" class="button button-compact button-danger" disabled>Delete</button>
+            <button id="duplicate-slide" type="button" class="button button-compact" aria-label="Duplicate slide" title="Duplicate slide" disabled>
+              <span class="rail-action-icon" aria-hidden="true">⧉</span>
+              <span class="rail-action-label">Duplicate</span>
+            </button>
+            <button id="delete-slide" type="button" class="button button-compact button-danger" aria-label="Delete slide" title="Delete slide" disabled>
+              <span class="rail-action-icon" aria-hidden="true">⌫</span>
+              <span class="rail-action-label">Delete</span>
+            </button>
           </div>
         </aside>
 
         <section id="canvas-panel" class="editor-column" role="tabpanel" aria-labelledby="studio-tab-canvas">
-          <div class="canvas-toolbar">
-            <div class="toolbar-group" role="group" aria-label="Edit history">
-              <button id="undo" type="button" class="icon-button" aria-label="Undo" title="Undo (Ctrl/Cmd+Z)" disabled>↶</button>
-              <button id="redo" type="button" class="icon-button" aria-label="Redo" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷</button>
-            </div>
-            <span class="toolbar-divider" aria-hidden="true"></span>
-            <div class="toolbar-group" role="group" aria-label="Insert element">
-              <button id="add-text" type="button" class="button button-compact" disabled>Text</button>
-              <button id="add-shape" type="button" class="button button-compact" disabled>Shape</button>
-              <button id="open-image" type="button" class="button button-compact" disabled>Image</button>
-            </div>
-            <span class="toolbar-spacer"></span>
-            <button id="open-preview" type="button" class="button button-compact" disabled>Preview</button>
-          </div>
-
           <div id="canvas-viewport" class="canvas-viewport">
             <div id="canvas-empty" class="empty-state">
               <div class="empty-icon" aria-hidden="true">▣</div>
@@ -137,6 +149,28 @@
                 </div>
               </foreignObject>
             </svg>
+          </div>
+
+          <div class="canvas-toolbar">
+            <div class="toolbar-group" role="group" aria-label="Insert element">
+              <button id="add-text" type="button" class="button button-compact tool-button" aria-label="Add text" title="Add text" disabled>
+                <span class="tool-icon" aria-hidden="true">T</span><span class="tool-label">Text</span>
+              </button>
+              <button id="add-shape" type="button" class="button button-compact tool-button" aria-label="Add shape" title="Add shape" disabled>
+                <span class="tool-icon" aria-hidden="true">◇</span><span class="tool-label">Shape</span>
+              </button>
+              <button id="open-image" type="button" class="button button-compact tool-button" aria-label="Add image" title="Add image" disabled>
+                <span class="tool-icon" aria-hidden="true">▧</span><span class="tool-label">Image</span>
+              </button>
+            </div>
+            <span class="toolbar-spacer"></span>
+            <div class="toolbar-group" role="group" aria-label="Edit history and preview">
+              <button id="undo" type="button" class="icon-button" aria-label="Undo" title="Undo (Ctrl/Cmd+Z)" disabled>↶</button>
+              <button id="redo" type="button" class="icon-button" aria-label="Redo" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷</button>
+              <button id="open-preview" type="button" class="button button-compact tool-button" aria-label="Preview presentation" title="Preview presentation" disabled>
+                <span class="tool-icon" aria-hidden="true">▶</span><span class="tool-label">Preview</span>
+              </button>
+            </div>
           </div>
 
           <footer class="canvas-footer">
