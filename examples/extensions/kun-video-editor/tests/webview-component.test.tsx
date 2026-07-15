@@ -303,7 +303,7 @@ describe('video editor docked workbench', () => {
     }
   })
 
-  it('keeps the narrow Chinese transcript heading separate from its actions', () => {
+  it('keeps the narrow Chinese transcript heading and readiness status separate from edit actions', () => {
     const project = makeViewProject()
     const reduced = editorReducer(
       editorReducer(INITIAL_EDITOR_STATE, { type: 'initialized' }),
@@ -316,7 +316,7 @@ describe('video editor docked workbench', () => {
     }
     const html = renderToStaticMarkup(<VideoEditorWorkbench controller={stubController(state)} />)
 
-    expect(html).toMatch(/<header class="panel-header"><h2>智能脚本<\/h2><\/header>/u)
+    expect(html).toMatch(/<header class="panel-header"><h2>智能脚本<\/h2><div class="panel-actions"><span class="local-ready-status">/u)
     expect(html).toContain('class="transcript-toolbar"')
     expect(html).toContain('本地转写就绪')
     expect(html).toContain('导入逐字稿')

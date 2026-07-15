@@ -25,11 +25,11 @@ test('resolves only the catalogued bundled video editor archive or an explicit .
   t.after(() => rm(root, { recursive: true, force: true }))
   const bundled = join(root, 'bundled-extensions')
   await mkdir(bundled, { recursive: true })
-  const archive = join(bundled, 'kun-video-editor-0.4.2.kunx')
+  const archive = join(bundled, 'kun-video-editor-0.4.3.kunx')
   await writeFile(archive, 'archive bytes')
   await writeFile(join(bundled, 'catalog.json'), `${JSON.stringify({
     schemaVersion: 1,
-    extensions: [{ id: EXTENSION_ID, archive: 'kun-video-editor-0.4.2.kunx' }]
+    extensions: [{ id: EXTENSION_ID, archive: 'kun-video-editor-0.4.3.kunx' }]
   })}\n`)
 
   assert.equal(await resolveVideoEditorArchive(root), archive)

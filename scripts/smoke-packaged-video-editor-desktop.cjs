@@ -41,7 +41,7 @@ const {
 } = require('./lib/extension-native-media-smoke.cjs')
 
 const EXTENSION_ID = 'kun-examples.kun-video-editor'
-const EXTENSION_VERSION = '0.4.2'
+const EXTENSION_VERSION = '0.4.3'
 const CONTRIBUTION_ID = `extension:${EXTENSION_ID}/editor`
 const VIDEO_EDITOR_PERMISSIONS = Object.freeze([
   'agent.run',

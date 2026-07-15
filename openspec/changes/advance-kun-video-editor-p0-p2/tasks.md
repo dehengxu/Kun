@@ -8,6 +8,7 @@
 - [x] 1.6 Exercise the real right-sidebar View in development and packaged macOS builds and capture actionable visual evidence at narrow and preferred widths
 - [x] 1.7 Redesign the complete sidebar workbench from an ImageGen visual reference and local OpenReel/Palmier interaction research, then implement the compact project chrome, preview transport, icon navigation, timeline hierarchy, contextual editing bar, and responsive empty state without changing editor authority contracts
 - [x] 1.8 Generate and version a dedicated ImageGen reference for initial setup plus every primary workspace, then align the live initialization, Script, Clips, Timeline, Properties, and Output layouts at current Host widths and advance the bundled extension patch version so existing managed installs receive the redesign
+- [x] 1.9 Audit the current Host rendering against all six versioned ImageGen references and refine shared chrome, preview/status/navigation composition, per-workspace hierarchy, typography, spacing, colors, and control states until the live 760–920 px and 280–360 px layouts closely match the intended design without fabricating media or capability state
 
 ## 2. P0 shared editing command and project migration
 

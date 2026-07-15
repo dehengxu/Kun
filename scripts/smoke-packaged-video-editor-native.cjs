@@ -30,7 +30,7 @@ const {
 } = require('./lib/extension-native-media-smoke.cjs')
 
 const EXTENSION_ID = 'kun-examples.kun-video-editor'
-const EXTENSION_VERSION = '0.4.2'
+const EXTENSION_VERSION = '0.4.3'
 const SUCCESS_MARKER = 'Packaged Kun Video Editor native smoke OK ('
 const REEXEC_MARKER = 'KUN_PACKAGED_VIDEO_EDITOR_NATIVE_SMOKE_REEXEC'
 const DEFAULT_COMMAND_TIMEOUT_MS = 180_000

@@ -49,7 +49,7 @@ describe('video editor manifest and Agent catalog', () => {
   it('declares one private profile, stable tools, complete activation, and least privilege', async () => {
     const manifest = await loadManifest()
     expect(manifest.apiVersion).toBe('1.2.0')
-    expect(manifest.version).toBe('0.4.2')
+    expect(manifest.version).toBe('0.4.3')
     expect(manifest.contributes['views.rightSidebar']).toEqual([
       expect.objectContaining({
         id: 'editor',

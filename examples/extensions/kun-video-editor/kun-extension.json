@@ -4,7 +4,7 @@
   "apiVersion": "1.2.0",
   "name": "kun-video-editor",
   "publisher": "kun-examples",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "displayName": "Kun Video Editor",
   "description": "Local transcript-oriented editing for talking-head, interview, and podcast media.",
   "localizations": {
