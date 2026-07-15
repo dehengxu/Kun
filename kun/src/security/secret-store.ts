@@ -263,9 +263,13 @@ export type CreateKeyProviderOptions = {
   keyFilePath: string
   platform?: NodeJS.Platform
   run?: CommandRunner
-  /** Disable OS keychain usage (force the key-file fallback). */
+  /** Disable OS credential-store usage (force the key-file fallback). */
   disableOsKeychain?: boolean
+  /** Injectable environment used to resolve the non-interactive automation override. */
+  environment?: NodeJS.ProcessEnv
 }
+
+export const DISABLE_OS_CREDENTIAL_STORE_ENV = 'KUN_DISABLE_OS_CREDENTIAL_STORE'
 
 /**
  * Resolve a secret encryptor. Tries the OS keychain first (storing a random key
@@ -275,7 +279,10 @@ export type CreateKeyProviderOptions = {
 export async function createSecretEncryptor(options: CreateKeyProviderOptions): Promise<KeyProviderResult> {
   const platform = options.platform ?? process.platform
   const run = options.run
-  const useKeychain = !options.disableOsKeychain && run && (platform === 'darwin' || platform === 'linux')
+  const environment = options.environment ?? process.env
+  const disableOsCredentialStore = options.disableOsKeychain ??
+    environment[DISABLE_OS_CREDENTIAL_STORE_ENV] === '1'
+  const useKeychain = !disableOsCredentialStore && run && (platform === 'darwin' || platform === 'linux')
   // Migration rule: an existing raw key is authoritative because it may be the
   // only key capable of decrypting already-persisted OAuth credentials. Never
   // generate a fresh OS key before checking it.
@@ -310,7 +317,7 @@ export async function createSecretEncryptor(options: CreateKeyProviderOptions): 
   // blob in the key file, so the on-disk key cannot be decrypted by another user
   // or off the machine. Falls through to a plain key file if PowerShell/DPAPI is
   // unavailable (tokens are still AES-encrypted at rest either way).
-  if (!options.disableOsKeychain && run && platform === 'win32') {
+  if (!disableOsCredentialStore && run && platform === 'win32') {
     const keyFileText = await readFile(options.keyFilePath, 'utf8').catch(() => '')
     const existing = await readDpapiKeyFile(options.keyFilePath, run)
     if (existing) {
@@ -333,11 +340,14 @@ export async function createSecretEncryptor(options: CreateKeyProviderOptions): 
 
   // Fallback: per-user 0600 key file.
   const existingFileKey = legacyFileKey
+  const fallbackReason = disableOsCredentialStore
+    ? 'OS credential store disabled'
+    : 'OS keychain unavailable'
   if (existingFileKey) {
     return {
       encryptor: createAesEncryptor(existingFileKey),
       osKeychain: false,
-      reason: 'OS keychain unavailable; key loaded from 0600 key file (tokens still encrypted at rest)'
+      reason: `${fallbackReason}; key loaded from 0600 key file (tokens still encrypted at rest)`
     }
   }
   const fileKey = randomBytes(32)
@@ -345,6 +355,6 @@ export async function createSecretEncryptor(options: CreateKeyProviderOptions): 
   return {
     encryptor: createAesEncryptor(fileKey),
     osKeychain: false,
-    reason: 'OS keychain unavailable; created a new 0600 key file (tokens still encrypted at rest)'
+    reason: `${fallbackReason}; created a new 0600 key file (tokens still encrypted at rest)`
   }
 }

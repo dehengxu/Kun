@@ -139,6 +139,7 @@ test('selects host-native packaged resources and never launches desktop Electron
       KUN_RUNTIME_TOKEN: 'inherited-token',
       KUN_RUNTIME_PROVIDER_KIND: 'agent-sdk',
       KUN_CLAUDE_BINARY: '/tmp/claude',
+      KUN_DISABLE_OS_CREDENTIAL_STORE: '0',
       DEEPSEEK_API_KEY: 'inherited-secret',
       DEEPSEEK_GUI_STARTUP_TRACE: '1'
     },
@@ -153,6 +154,7 @@ test('selects host-native packaged resources and never launches desktop Electron
   assert.equal(isolated.HOME, '/isolated-home')
   assert.equal(isolated.NODE_ENV, 'production')
   assert.equal(isolated.KUN_PACKAGED_EXTENSION_DESKTOP_SMOKE, '1')
+  assert.equal(isolated.KUN_DISABLE_OS_CREDENTIAL_STORE, '1')
   for (const key of [
     'ELECTRON_RENDERER_URL',
     'ELECTRON_RUN_AS_NODE',

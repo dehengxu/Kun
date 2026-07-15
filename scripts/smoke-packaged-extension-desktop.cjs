@@ -520,6 +520,7 @@ function createIsolatedEnvironment(environment, paths) {
     TMP: paths.temporaryDirectory,
     TEMP: paths.temporaryDirectory,
     KUN_PACKAGED_EXTENSION_DESKTOP_SMOKE: '1',
+    KUN_DISABLE_OS_CREDENTIAL_STORE: '1',
     ELECTRON_ENABLE_LOGGING: '1',
     NODE_ENV: 'production'
   })
