@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ExtensionManifestSchema, type ModelProviderAdapter } from '@kun/extension-api'
+import {
+  ExtensionManifestSchema,
+  MediaCreateCacheTargetResultSchema,
+  type MediaAnalyzeVisualFramesRequest,
+  type MediaEmbedVisualQueryRequest,
+  type ModelProviderAdapter
+} from '@kun/extension-api'
 import type { ExtensionToolHandler } from '../adapters/tool/extension-tool-provider.js'
 import type { ExtensionBrokerRequest, ExtensionPrincipal as HostPrincipal } from '../extensions/host-process.js'
 import { extensionWorkspaceKey } from '../extensions/paths.js'
@@ -10,6 +16,7 @@ import {
   ExtensionHostBroker,
   requiredExtensionBrokerPermission
 } from './extension-host-broker.js'
+import { ExtensionMediaHandleService } from './extension-media-handle-service.js'
 
 const WORKSPACE_ROOT = '/tmp/workspace'
 const WORKSPACE_ID = extensionWorkspaceKey(WORKSPACE_ROOT)
@@ -105,6 +112,19 @@ function request(method: string, params: unknown): ExtensionBrokerRequest {
 }
 
 describe('ExtensionHostBroker', () => {
+  it('keeps main-composer context attachment behind the authenticated desktop View boundary', async () => {
+    const broker = createBroker()
+    await expect(broker.handle(request('ui.attachComposerContext', {
+      schemaVersion: 1,
+      id: 'selection',
+      title: 'Selection',
+      summary: 'One selected item',
+      reference: { itemIds: ['item-1'] },
+      revision: 1,
+      generation: 1
+    }))).rejects.toThrow(/authenticated desktop Extension View/i)
+  })
+
   it('routes declared configuration through the host-owned service and reserves internal state keys', async () => {
     const configuration = {
       get: vi.fn(async () => 'safe'),
@@ -222,6 +242,10 @@ describe('ExtensionHostBroker', () => {
       available: true,
       createdAt: '2026-01-01T00:00:00.000Z'
     }))
+    const touch = vi.fn(async () => ({
+      ...(await stat()),
+      lastAccessedAt: '2026-01-01T00:01:00.000Z'
+    }))
     const probe = vi.fn(async () => ({
       schemaVersion: 1,
       handleId: 'media_123456789012',
@@ -271,10 +295,111 @@ describe('ExtensionHostBroker', () => {
         features: ['libx264-encoder', 'aac-encoder']
       }
     }))
+    const audioCapabilities = vi.fn(async () => ({
+      schemaVersion: 1,
+      probedAt: '2026-01-01T00:00:00.000Z',
+      analyses: [
+        {
+          analysis: 'silence', available: true,
+          algorithm: 'ffmpeg.silencedetect', algorithmVersion: '1.0.0',
+          local: true, networkUsed: false
+        },
+        {
+          analysis: 'beat-grid', available: false,
+          code: 'AUDIO_ANALYSIS_ALGORITHM_UNAVAILABLE',
+          remediation: 'No verified analyzer is installed.', retryable: false,
+          local: true, networkUsed: false
+        },
+        {
+          analysis: 'sync-features', available: true,
+          algorithm: 'kun.pcm-energy-envelope', algorithmVersion: '1.0.0',
+          local: true, networkUsed: false
+        }
+      ]
+    }))
+    const startAudioAnalysis = vi.fn(async () => ({
+      outcome: 'started' as const,
+      job: {
+        jobId: 'job_audio_12345678',
+        kind: 'media.audio-analysis',
+        state: 'queued' as const,
+        cursor: 'cursor_audio_12345678'
+      }
+    }))
+    const startArchive = vi.fn(async () => ({
+      outcome: 'started' as const,
+      job: {
+        jobId: 'job_archive_12345678',
+        kind: 'media.archive',
+        state: 'queued' as const,
+        cursor: 'cursor_archive_12345678'
+      }
+    }))
+    const visualDescriptor = {
+      adapterId: 'kun.local.visual-features', adapterVersion: '1.0.0',
+      modelId: 'kun-visual-features', modelVersion: '1.0.0',
+      packageId: 'kun-bundled.visual-features-v1', manifestSha256: 'a'.repeat(64),
+      files: [{ name: 'visual-features-v1.json', sha256: 'b'.repeat(64), byteSize: 10 }],
+      embeddingDimensions: 2, execution: 'local' as const,
+      querySemantics: 'bounded-visual-features-v1' as const
+    }
+    const visualReceipt = {
+      broker: 'kun-model-broker' as const, packageSource: 'bundled' as const,
+      packageId: visualDescriptor.packageId, modelId: visualDescriptor.modelId,
+      modelVersion: visualDescriptor.modelVersion,
+      manifestSha256: visualDescriptor.manifestSha256,
+      files: visualDescriptor.files, downloadVerified: false, sourceVerified: true as const,
+      installVerified: true as const, signatureVerified: true as const,
+      installedAt: '2026-01-01T00:00:00.000Z'
+    }
+    const visualStatus = vi.fn(async () => ({
+      schemaVersion: 1 as const, state: 'installed' as const,
+      descriptor: visualDescriptor, receipt: visualReceipt, installSupported: true,
+      checkedAt: '2026-01-01T00:00:00.000Z', remediation: 'Verified local adapter ready.',
+      local: true as const, networkUsedForInference: false as const,
+      rawPathsExposed: false as const, urlsAccepted: false as const
+    }))
+    const analyzeVisualFrames = vi.fn(async (
+      _principal: unknown,
+      request: MediaAnalyzeVisualFramesRequest
+    ) => ({
+      outcome: 'ready' as const,
+      source: {
+        handleId: request.inputHandleId,
+        fingerprint: 'c'.repeat(64),
+        fingerprintAlgorithm: 'sha256-file-identity-v1' as const
+      },
+      adapter: request.adapter,
+      embeddings: request.samples.map(({ sampleId }) => ({ sampleId, vector: [1, 0] })),
+      provenance: {
+        algorithm: 'kun.rgb-edge-features' as const, algorithmVersion: '1.0.0' as const,
+        decodedFrameWidth: 32 as const, decodedFrameHeight: 32 as const,
+        local: true as const, networkUsed: false as const
+      }
+    }))
+    const embedVisualQuery = vi.fn(async (
+      _principal: unknown,
+      request: MediaEmbedVisualQueryRequest
+    ) => ({
+      outcome: 'ready' as const, adapter: request.adapter, vector: [1, 0],
+      matchedConcepts: ['red'], scoreSemantics: 'uncalibrated-cosine' as const,
+      local: true as const, networkUsed: false as const
+    }))
     const broker = createBroker({
-      mediaHandles: { stat, release: vi.fn(async () => true) } as never,
+      mediaHandles: { stat, touch, release: vi.fn(async () => true) } as never,
       mediaProcesses: { probe, capabilities } as never,
       mediaJobs: { start } as never,
+      audioAnalysisJobs: {
+        capabilities: audioCapabilities,
+        start: startAudioAnalysis
+      } as never,
+      archiveJobs: { start: startArchive } as never,
+      visualAnalysis: {
+        status: visualStatus,
+        install: visualStatus,
+        analyzeFrames: analyzeVisualFrames,
+        embedQuery: embedVisualQuery
+      } as never,
       onUiRequest
     })
     const call = (method: string, params: unknown) => broker.handlePrincipal({
@@ -310,8 +435,47 @@ describe('ExtensionHostBroker', () => {
       }
     })
     expect(JSON.stringify(await call('media.getCapabilities', {}))).not.toContain('configured')
+    await expect(call('media.getAudioAnalysisCapabilities', {})).resolves.toMatchObject({
+      analyses: [
+        { analysis: 'silence', available: true },
+        { analysis: 'beat-grid', available: false, networkUsed: false },
+        { analysis: 'sync-features', available: true }
+      ]
+    })
+    const visual = await call('media.getVisualModelStatus', {})
+    await expect(visual).toMatchObject({
+      state: 'installed',
+      receipt: { packageSource: 'bundled', downloadVerified: false, signatureVerified: true },
+      networkUsedForInference: false,
+      rawPathsExposed: false,
+      urlsAccepted: false
+    })
+    expect(JSON.stringify(visual)).not.toMatch(/\/(?:Users|private|tmp)\//u)
+    await expect(call('media.installVisualModel', {})).resolves.toMatchObject({ state: 'installed' })
+    await expect(call('media.installVisualModel', { modelUrl: 'https://example.invalid/model.bin' }))
+      .rejects.toThrow()
+    const visualAdapter = {
+      id: visualDescriptor.adapterId, version: visualDescriptor.adapterVersion,
+      modelId: visualDescriptor.modelId, modelVersion: visualDescriptor.modelVersion,
+      packageId: visualDescriptor.packageId, manifestSha256: visualDescriptor.manifestSha256,
+      embeddingDimensions: visualDescriptor.embeddingDimensions, execution: 'local'
+    }
+    await expect(call('media.analyzeVisualFrames', {
+      inputHandleId: 'media_123456789012',
+      samples: [{
+        sampleId: 'frame:asset-1:0', startMicros: 0, endMicros: 1_000_000,
+        representativeMicros: 500_000
+      }],
+      adapter: visualAdapter
+    })).resolves.toMatchObject({
+      outcome: 'ready', embeddings: [{ sampleId: 'frame:asset-1:0', vector: [1, 0] }]
+    })
+    await expect(call('media.embedVisualQuery', {
+      query: 'red', adapter: visualAdapter
+    })).resolves.toMatchObject({ outcome: 'ready', matchedConcepts: ['red'] })
     await expect(call('media.openViewResource', { handleId: 'media_123456789012' }))
       .resolves.toMatchObject({ url: 'kun-media://resource/opaque-token' })
+    expect(touch).toHaveBeenCalledWith(mediaPrincipal, 'media_123456789012')
     await expect(call('media.performArtifactAction', {
       artifactId: 'artifact_1234567890',
       action: 'reveal'
@@ -326,8 +490,134 @@ describe('ExtensionHostBroker', () => {
       inputs: { source: 'media_123456789012' },
       outputs: { video: 'media_abcdefghijkl' }
     })).resolves.toMatchObject({ job: { jobId: 'job_12345678' } })
+    await expect(call('media.startAudioAnalysisJob', {
+      analysis: 'sync-features',
+      referenceHandleId: 'media_123456789012',
+      targetHandleId: 'media_abcdefghijkl',
+      seed: 42
+    })).resolves.toMatchObject({
+      outcome: 'started',
+      job: { jobId: 'job_audio_12345678', kind: 'media.audio-analysis' }
+    })
+    expect(startAudioAnalysis).toHaveBeenCalledWith(
+      mediaPrincipal,
+      expect.objectContaining({
+        analysis: 'sync-features',
+        seed: 42,
+        samplePeriodMicros: 100_000,
+        maxFeaturePoints: 4_096
+      })
+    )
+    await expect(call('media.startArchiveJob', {
+      format: 'zip',
+      outputHandleId: 'media_archive_output_123456',
+      entries: [
+        {
+          kind: 'inline-text',
+          archivePath: 'manifest/project.json',
+          content: '{"schemaVersion":2}',
+          mimeType: 'application/json'
+        },
+        {
+          kind: 'media',
+          inputHandleId: 'media_123456789012',
+          archivePath: 'media/clip.mp4'
+        }
+      ],
+      idempotencyKey: 'archive-project-revision-7'
+    })).resolves.toMatchObject({
+      outcome: 'started',
+      job: { jobId: 'job_archive_12345678', kind: 'media.archive' }
+    })
+    expect(startArchive).toHaveBeenCalledWith(
+      mediaPrincipal,
+      expect.objectContaining({
+        format: 'zip',
+        outputHandleId: 'media_archive_output_123456',
+        entries: expect.arrayContaining([
+          expect.objectContaining({ archivePath: 'manifest/project.json' }),
+          expect.objectContaining({ archivePath: 'media/clip.mp4' })
+        ])
+      })
+    )
     expect(JSON.stringify(await call('media.stat', { handleId: 'media_123456789012' })))
       .not.toContain('/tmp/workspace')
+  })
+
+  it('allocates a Host-owned cache target without returning its workspace path', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-cache-target-'))
+    const workspace = join(root, 'workspace')
+    const dataDir = join(root, 'data')
+    await mkdir(workspace)
+    const principal = {
+      extensionId: 'acme.broker',
+      extensionVersion: '1.0.0',
+      permissions: ['media.process', 'workspace.write'],
+      workspaceRoots: [workspace],
+      workspaceTrusted: true
+    }
+    const mediaHandles = new ExtensionMediaHandleService({ dataDir })
+    const broker = createBroker({ mediaHandles })
+    try {
+      const result = MediaCreateCacheTargetResultSchema.parse(await broker.handlePrincipal({
+        principal,
+        method: 'media.createCacheTarget',
+        params: { format: 'png', purpose: 'derived-waveform-partial' },
+        signal: new AbortController().signal,
+        requestId: 'create-cache-target'
+      }))
+      expect(result).toEqual({
+        target: {
+          handleId: expect.stringMatching(/^media_[0-9a-f-]+$/u),
+          mode: 'export',
+          kind: 'image',
+          displayName: expect.stringMatching(/^derived-waveform-partial-[a-f0-9-]+\.png$/u),
+          mimeType: 'image/png',
+          revoked: false
+        }
+      })
+      const [stored] = await mediaHandles.list(principal, workspace)
+      expect(stored).toMatchObject({
+        id: result.target.handleId,
+        mode: 'write',
+        source: 'workspace',
+        lifecycle: 'cache',
+        mimeType: 'image/png'
+      })
+      expect(stored?.workspaceRelativePath).toMatch(
+        /^\.kun\/extension-cache\/acme\.broker\/derived-waveform-partial\//u
+      )
+      expect(JSON.stringify(result)).not.toContain(workspace)
+      expect(requiredExtensionBrokerPermission('media.createCacheTarget', {
+        format: 'png', purpose: 'derived-waveform-partial'
+      })).toBe('media.process')
+      expect(requiredExtensionBrokerPermission('media.getAudioAnalysisCapabilities', {}))
+        .toBe('media.process')
+      for (const method of [
+        'media.getVisualModelStatus',
+        'media.installVisualModel',
+        'media.analyzeVisualFrames',
+        'media.embedVisualQuery'
+      ]) expect(requiredExtensionBrokerPermission(method, {})).toBe('media.process')
+      expect(requiredExtensionBrokerPermission('media.startAudioAnalysisJob', {
+        analysis: 'silence', inputHandleId: 'media_123456789012'
+      })).toBe('media.process')
+      expect(requiredExtensionBrokerPermission('media.startArchiveJob', {
+        format: 'zip', outputHandleId: 'media_archive_output_123456', entries: []
+      })).toBe('media.export')
+      await expect(broker.handlePrincipal({
+        principal,
+        method: 'media.release',
+        params: { resource: 'handle', handleId: result.target.handleId },
+        signal: new AbortController().signal,
+        requestId: 'release-cache-target'
+      })).resolves.toEqual({ released: true })
+      await expect(mediaHandles.list(principal, workspace)).resolves.toEqual([
+        expect.objectContaining({ id: result.target.handleId, available: false })
+      ])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it('reads bounded UTF-8 from an owned media handle and rejects invalid text', async () => {
@@ -924,6 +1214,7 @@ describe('ExtensionHostBroker', () => {
   it('returns fixed pre-gate permissions and leaves dynamic network scopes to broker validation', () => {
     expect(requiredExtensionBrokerPermission('storage.get', { scope: 'global', key: 'x' })).toBe('storage.global')
     expect(requiredExtensionBrokerPermission('agent.createRun', {})).toBe('agent.run')
+    expect(requiredExtensionBrokerPermission('ui.attachComposerContext', {})).toBe('ui.actions')
     expect(requiredExtensionBrokerPermission('network.fetch', { url: 'https://api.example.test' })).toBeUndefined()
   })
 

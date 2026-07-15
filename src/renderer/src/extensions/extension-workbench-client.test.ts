@@ -127,6 +127,9 @@ describe('ExtensionWorkbenchClient', () => {
 
     await client.createViewSession('extension:acme.sample/issues', '   ')
     await client.createViewSession('extension:acme.sample/issues', ' /workspace ')
+    await client.createViewSession('extension:acme.sample/issues', '/workspace', {
+      retryHost: true
+    })
 
     expect(create).toHaveBeenNthCalledWith(1, {
       contributionId: 'extension:acme.sample/issues'
@@ -134,6 +137,11 @@ describe('ExtensionWorkbenchClient', () => {
     expect(create).toHaveBeenNthCalledWith(2, {
       contributionId: 'extension:acme.sample/issues',
       workspaceRoot: '/workspace'
+    })
+    expect(create).toHaveBeenNthCalledWith(3, {
+      contributionId: 'extension:acme.sample/issues',
+      workspaceRoot: '/workspace',
+      retryHost: true
     })
   })
 

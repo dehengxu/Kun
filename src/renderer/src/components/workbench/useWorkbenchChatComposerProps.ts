@@ -30,6 +30,8 @@ type UseWorkbenchChatComposerPropsInput = {
   openProvidersSettings: () => void
   handleSend: ComposerProps['onSend']
   composerAttachments: ComposerProps['attachments']
+  contextChips: ComposerProps['contextChips']
+  removeContextChip: ComposerProps['onRemoveContextChip']
   attachmentUploadEnabled: boolean
   attachmentUploadBusy: boolean
   attachmentUploadError: string | null
@@ -93,6 +95,8 @@ export function useWorkbenchChatComposerProps({
   openProvidersSettings,
   handleSend,
   composerAttachments,
+  contextChips,
+  removeContextChip,
   attachmentUploadEnabled,
   attachmentUploadBusy,
   attachmentUploadError,
@@ -165,6 +169,8 @@ export function useWorkbenchChatComposerProps({
     onConfigureProviders: openProvidersSettings,
     onSend: handleSend,
     attachments: composerAttachments,
+    contextChips,
+    onRemoveContextChip: removeContextChip,
     attachmentUploadEnabled,
     attachmentUploadBusy,
     attachmentUploadError,
@@ -219,6 +225,7 @@ export function useWorkbenchChatComposerProps({
     attachmentUploadError,
     busy,
     composerAttachments,
+    contextChips,
     composerChangeSummary,
     composerExecutionApplying,
     composerExecutionSettings,
@@ -247,6 +254,7 @@ export function useWorkbenchChatComposerProps({
     pickComposerFileReferences,
     queuedMessages,
     removeComposerAttachment,
+    removeContextChip,
     removeComposerFileReference,
     removeQueuedMessage,
     reviewActiveThread,

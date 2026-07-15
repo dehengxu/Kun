@@ -15,8 +15,8 @@ import { ModelProviderDeclarationSchema } from './providers.js'
 import { ExtensionToolDeclarationSchema } from './tools.js'
 
 export const CURRENT_MANIFEST_VERSION = 1 as const
-export const CURRENT_EXTENSION_API_VERSION = '1.1.0' as const
-export const SUPPORTED_EXTENSION_API_VERSIONS = [CURRENT_EXTENSION_API_VERSION, '1.0.0'] as const
+export const CURRENT_EXTENSION_API_VERSION = '1.2.0' as const
+export const SUPPORTED_EXTENSION_API_VERSIONS = [CURRENT_EXTENSION_API_VERSION, '1.1.0', '1.0.0'] as const
 
 export const ActivationEventSchema = z.union([
   z.literal('onStartup'),

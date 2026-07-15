@@ -490,12 +490,14 @@ export class ExtensionWorkbenchClient {
 
   async createViewSession(
     contributionId: string,
-    workspaceRoot?: string
+    workspaceRoot?: string,
+    options: { retryHost?: boolean } = {}
   ): Promise<ExtensionViewSession> {
     const normalizedWorkspaceRoot = workspaceRoot?.trim()
     return window.kunGui.extensionCreateViewSession({
       contributionId,
-      ...(normalizedWorkspaceRoot ? { workspaceRoot: normalizedWorkspaceRoot } : {})
+      ...(normalizedWorkspaceRoot ? { workspaceRoot: normalizedWorkspaceRoot } : {}),
+      ...(options.retryHost ? { retryHost: true } : {})
     })
   }
 

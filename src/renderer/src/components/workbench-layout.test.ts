@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { fitWorkbenchWidths, workbenchWidthConstraintsForRightPanel } from './workbench-layout'
+import {
+  captureResizePointer,
+  fitWorkbenchWidths,
+  WORKBENCH_RESIZE_CLASS,
+  workbenchWidthConstraintsForRightPanel
+} from './workbench-layout'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../extensions/contribution-ids'
 
 describe('fitWorkbenchWidths', () => {
@@ -28,5 +33,29 @@ describe('fitWorkbenchWidths', () => {
     expect(next.left).toBe(304)
     expect(next.right).toBeGreaterThan(760)
     expect(next.right).toBe(1126)
+  })
+})
+
+describe('captureResizePointer', () => {
+  it('keeps a divider drag in the Host while the pointer crosses an embedded Webview', () => {
+    let capturedPointer: number | null = null
+    const target = {
+      setPointerCapture(pointerId: number) {
+        capturedPointer = pointerId
+      },
+      hasPointerCapture(pointerId: number) {
+        return capturedPointer === pointerId
+      },
+      releasePointerCapture(pointerId: number) {
+        if (capturedPointer === pointerId) capturedPointer = null
+      }
+    }
+
+    const release = captureResizePointer(target, 17)
+    expect(capturedPointer).toBe(17)
+
+    release()
+    expect(capturedPointer).toBeNull()
+    expect(WORKBENCH_RESIZE_CLASS).toBe('ds-workbench-resizing')
   })
 })

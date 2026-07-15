@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 import {
   AccountSchema,
@@ -23,8 +23,16 @@ import {
   JobGetRequestSchema,
   JobListRequestSchema,
   JobSnapshotSchema,
+  MediaAudioAnalysisCapabilitiesSchema,
+  MediaAnalyzeVisualFramesRequestSchema,
+  MediaAnalyzeVisualFramesResultSchema,
+  MediaEmbedVisualQueryRequestSchema,
+  MediaEmbedVisualQueryResultSchema,
+  MediaInstallVisualModelRequestSchema,
   MediaMetadataSchema,
   MediaCapabilitiesSchema,
+  MediaCreateCacheTargetRequestSchema,
+  MediaCreateCacheTargetResultSchema,
   MediaOpenViewResourceRequestSchema,
   MediaPickFilesRequestSchema,
   MediaPickFilesResultSchema,
@@ -37,6 +45,11 @@ import {
   MediaReleaseRequestSchema,
   MediaResourceLeaseSchema,
   MediaStartFfmpegJobRequestSchema,
+  MediaStartAudioAnalysisJobRequestSchema,
+  MediaStartAudioAnalysisJobResultSchema,
+  MediaStartArchiveJobRequestSchema,
+  MediaStartArchiveJobResultSchema,
+  MediaVisualModelStatusSchema,
   ModelProviderDeclarationSchema,
   ModelProviderStreamEventSchema,
   NetworkRequestSchema,
@@ -85,6 +98,9 @@ import type { ExtensionArtifactService } from './extension-artifact-service.js'
 import type { ExtensionMediaHandleService, MediaHandleProjection } from './extension-media-handle-service.js'
 import type { ExtensionMediaProcessService } from './extension-media-process-service.js'
 import type { ExtensionMediaJobService } from './extension-media-job-service.js'
+import type { ExtensionAudioAnalysisJobService } from './extension-audio-analysis-job-service.js'
+import type { ExtensionMediaArchiveJobService } from './extension-media-archive-job-service.js'
+import type { ExtensionVisualAnalysisService } from './extension-visual-analysis-service.js'
 import type { ExtensionJobService } from './extension-job-service.js'
 import type { ExtensionJobSubscription } from './extension-job-subscription.js'
 import type {
@@ -162,6 +178,9 @@ export type ExtensionHostBrokerOptions = {
   mediaHandles?: ExtensionMediaHandleService
   mediaProcesses?: ExtensionMediaProcessService
   mediaJobs?: ExtensionMediaJobService
+  audioAnalysisJobs?: ExtensionAudioAnalysisJobService
+  archiveJobs?: ExtensionMediaArchiveJobService
+  visualAnalysis?: ExtensionVisualAnalysisService
   jobs?: ExtensionJobService
   invokeExtension(
     extensionId: string,
@@ -719,6 +738,10 @@ export class ExtensionHostBroker {
           signal: request.signal
         })) ??
           (request.method === 'ui.showNotification' ? {} : null)
+      case 'ui.attachComposerContext':
+        throw new Error(
+          'ui.attachComposerContext is available only through an authenticated desktop Extension View'
+        )
       case 'agent.createRun':
         await this.ensureProfiles(principal)
         return this.agentCreateRun(principal, request.params)
@@ -769,6 +792,8 @@ export class ExtensionHostBroker {
         return this.mediaPickFiles(principal, request.params, request.signal)
       case 'media.pickSaveTarget':
         return this.mediaPickSaveTarget(principal, request.params, request.signal)
+      case 'media.createCacheTarget':
+        return this.mediaCreateCacheTarget(principal, request.params)
       case 'media.stat':
         return this.mediaStat(principal, request.params)
       case 'media.readText':
@@ -781,10 +806,24 @@ export class ExtensionHostBroker {
         return this.mediaPerformArtifactAction(principal, request.params, request.signal)
       case 'media.getCapabilities':
         return this.mediaGetCapabilities(principal)
+      case 'media.getAudioAnalysisCapabilities':
+        return this.mediaGetAudioAnalysisCapabilities(principal)
+      case 'media.getVisualModelStatus':
+        return this.mediaGetVisualModelStatus(principal)
+      case 'media.installVisualModel':
+        return this.mediaInstallVisualModel(principal, request.params)
+      case 'media.analyzeVisualFrames':
+        return this.mediaAnalyzeVisualFrames(principal, request.params, request.signal)
+      case 'media.embedVisualQuery':
+        return this.mediaEmbedVisualQuery(principal, request.params, request.signal)
       case 'media.probe':
         return this.mediaProbe(principal, request.params)
       case 'media.startFfmpegJob':
         return this.mediaStartFfmpegJob(principal, request.params)
+      case 'media.startAudioAnalysisJob':
+        return this.mediaStartAudioAnalysisJob(principal, request.params)
+      case 'media.startArchiveJob':
+        return this.mediaStartArchiveJob(principal, request.params)
       case 'jobs.get':
         return this.jobsGet(principal, request.params)
       case 'jobs.list':
@@ -818,6 +857,39 @@ export class ExtensionHostBroker {
     const request = MediaPickSaveTargetRequestSchema.parse(params)
     const result = await this.requireUiOperation(principal, 'media.pickSaveTarget', request, signal)
     return MediaPickSaveTargetResultSchema.parse(result)
+  }
+
+  private async mediaCreateCacheTarget(
+    principal: ExtensionPrincipal,
+    params: JsonValue
+  ) {
+    if (!this.options.mediaHandles) throw new Error('Media handle service is unavailable')
+    const request = MediaCreateCacheTargetRequestSchema.parse(params)
+    if (!principal.workspaceTrusted || principal.workspaceRoots.length !== 1) {
+      throw extensionError(
+        'MEDIA_SCOPE_DENIED',
+        'Cache media requires exactly one active trusted workspace',
+        { operation: 'media.createCacheTarget' }
+      )
+    }
+    const workspaceRoot = principal.workspaceRoots[0]!
+    const format = cacheFormat(request.format)
+    const relativeDirectory = join(
+      '.kun',
+      'extension-cache',
+      principal.extensionId,
+      request.purpose
+    )
+    const displayName = `${request.purpose}-${randomUUID()}.${format.extension}`
+    const handle = await this.options.mediaHandles.registerCacheTarget(principal, {
+      workspaceRoot,
+      path: join(relativeDirectory, displayName),
+      displayName,
+      mimeType: format.mimeType
+    })
+    return MediaCreateCacheTargetResultSchema.parse({
+      target: publicMediaMetadata(handle, false)
+    })
   }
 
   private async mediaStat(principal: ExtensionPrincipal, params: JsonValue) {
@@ -889,7 +961,16 @@ export class ExtensionHostBroker {
     }
     const request = MediaOpenViewResourceRequestSchema.parse(params)
     const result = await this.requireUiOperation(principal, 'media.openViewResource', request, signal)
-    return MediaResourceLeaseSchema.parse(result)
+    const lease = MediaResourceLeaseSchema.parse(result)
+    if (lease.handleId !== request.handleId) {
+      throw extensionError(
+        'MEDIA_INVALID_ARGUMENT',
+        'The protected View lease did not match the requested media handle',
+        { operation: 'media.openViewResource' }
+      )
+    }
+    await this.options.mediaHandles?.touch(principal, request.handleId)
+    return lease
   }
 
   private async mediaPerformArtifactAction(
@@ -920,6 +1001,54 @@ export class ExtensionHostBroker {
     })
   }
 
+  private async mediaGetAudioAnalysisCapabilities(principal: ExtensionPrincipal) {
+    if (!this.options.audioAnalysisJobs) {
+      throw new Error('Audio-analysis job service is unavailable')
+    }
+    return MediaAudioAnalysisCapabilitiesSchema.parse(
+      await this.options.audioAnalysisJobs.capabilities(principal)
+    )
+  }
+
+  private async mediaGetVisualModelStatus(principal: ExtensionPrincipal) {
+    if (!this.options.visualAnalysis) throw new Error('Visual-analysis service is unavailable')
+    return MediaVisualModelStatusSchema.parse(
+      await this.options.visualAnalysis.status(principal)
+    )
+  }
+
+  private async mediaInstallVisualModel(principal: ExtensionPrincipal, params: JsonValue) {
+    if (!this.options.visualAnalysis) throw new Error('Visual-analysis service is unavailable')
+    MediaInstallVisualModelRequestSchema.parse(params)
+    return MediaVisualModelStatusSchema.parse(
+      await this.options.visualAnalysis.install(principal)
+    )
+  }
+
+  private async mediaAnalyzeVisualFrames(
+    principal: ExtensionPrincipal,
+    params: JsonValue,
+    signal: AbortSignal
+  ) {
+    if (!this.options.visualAnalysis) throw new Error('Visual-analysis service is unavailable')
+    const request = MediaAnalyzeVisualFramesRequestSchema.parse(params)
+    return MediaAnalyzeVisualFramesResultSchema.parse(
+      await this.options.visualAnalysis.analyzeFrames(principal, request, signal)
+    )
+  }
+
+  private async mediaEmbedVisualQuery(
+    principal: ExtensionPrincipal,
+    params: JsonValue,
+    signal: AbortSignal
+  ) {
+    if (!this.options.visualAnalysis) throw new Error('Visual-analysis service is unavailable')
+    const request = MediaEmbedVisualQueryRequestSchema.parse(params)
+    return MediaEmbedVisualQueryResultSchema.parse(
+      await this.options.visualAnalysis.embedQuery(principal, request, signal)
+    )
+  }
+
   private async mediaProbe(principal: ExtensionPrincipal, params: JsonValue) {
     if (!this.options.mediaProcesses) throw new Error('Media process service is unavailable')
     const request = MediaProbeRequestSchema.parse(params)
@@ -933,6 +1062,27 @@ export class ExtensionHostBroker {
     if (!this.options.mediaJobs) throw new Error('Media job service is unavailable')
     const request = MediaStartFfmpegJobRequestSchema.parse(params)
     return { job: await this.options.mediaJobs.start(principal, request) }
+  }
+
+  private async mediaStartAudioAnalysisJob(
+    principal: ExtensionPrincipal,
+    params: JsonValue
+  ) {
+    if (!this.options.audioAnalysisJobs) {
+      throw new Error('Audio-analysis job service is unavailable')
+    }
+    const request = MediaStartAudioAnalysisJobRequestSchema.parse(params)
+    return MediaStartAudioAnalysisJobResultSchema.parse(
+      await this.options.audioAnalysisJobs.start(principal, request)
+    )
+  }
+
+  private async mediaStartArchiveJob(principal: ExtensionPrincipal, params: JsonValue) {
+    if (!this.options.archiveJobs) throw new Error('Media archive job service is unavailable')
+    const request = MediaStartArchiveJobRequestSchema.parse(params)
+    return MediaStartArchiveJobResultSchema.parse(
+      await this.options.archiveJobs.start(principal, request)
+    )
   }
 
   private async jobsGet(principal: ExtensionPrincipal, params: JsonValue) {
@@ -2054,10 +2204,18 @@ export function requiredExtensionBrokerPermission(method: string, params: JsonVa
   if (method === 'workspace.writeFile') return 'workspace.write'
   if (method.startsWith('workspace.')) return 'workspace.read'
   if (method === 'media.pickSaveTarget') return 'media.export'
+  if (method === 'media.startArchiveJob') return 'media.export'
+  if (method === 'media.createCacheTarget') return 'media.process'
   if (
     method === 'media.getCapabilities' ||
+    method === 'media.getAudioAnalysisCapabilities' ||
+    method === 'media.getVisualModelStatus' ||
+    method === 'media.installVisualModel' ||
+    method === 'media.analyzeVisualFrames' ||
+    method === 'media.embedVisualQuery' ||
     method === 'media.probe' ||
-    method === 'media.startFfmpegJob'
+    method === 'media.startFfmpegJob' ||
+    method === 'media.startAudioAnalysisJob'
   ) return 'media.process'
   if (
     method === 'media.pickFiles' ||
@@ -2077,11 +2235,15 @@ export function requiredExtensionBrokerPermission(method: string, params: JsonVa
   }
   if (method.startsWith('configuration.')) return 'ui.actions'
   if (method === 'ui.showNotification') return 'ui.notifications'
+  if (method === 'ui.attachComposerContext') return 'ui.actions'
   if (method.startsWith('ui.')) return 'ui.views'
   return undefined
 }
 
-function publicMediaMetadata(handle: MediaHandleProjection) {
+function publicMediaMetadata(
+  handle: MediaHandleProjection,
+  includeWorkspaceLocation = true
+) {
   const kind = handle.mimeType.startsWith('video/')
     ? 'video'
     : handle.mimeType.startsWith('audio/')
@@ -2101,12 +2263,28 @@ function publicMediaMetadata(handle: MediaHandleProjection) {
     mimeType: handle.mimeType,
     ...(handle.byteSize !== undefined ? { byteSize: handle.byteSize } : {}),
     ...(handle.modifiedAt ? { modifiedAt: handle.modifiedAt } : {}),
+    ...(handle.mode === 'read' && handle.lastAccessedAt
+      ? { lastAccessedAt: handle.lastAccessedAt }
+      : {}),
     ...(handle.completionIdentity ? { completionIdentity: handle.completionIdentity } : {}),
-    ...(handle.workspaceRelativePath
+    ...(includeWorkspaceLocation && handle.workspaceRelativePath
       ? { workspaceRelativeDisplayLocation: handle.workspaceRelativePath }
       : {}),
     revoked: !handle.available
   })
+}
+
+function cacheFormat(format: 'png' | 'jpeg' | 'mp4' | 'webm' | 'wav'): {
+  extension: string
+  mimeType: string
+} {
+  switch (format) {
+    case 'png': return { extension: 'png', mimeType: 'image/png' }
+    case 'jpeg': return { extension: 'jpg', mimeType: 'image/jpeg' }
+    case 'mp4': return { extension: 'mp4', mimeType: 'video/mp4' }
+    case 'webm': return { extension: 'webm', mimeType: 'video/webm' }
+    case 'wav': return { extension: 'wav', mimeType: 'audio/wav' }
+  }
 }
 
 function publicMediaCapability(capability: {

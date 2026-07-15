@@ -34,6 +34,10 @@ import {
 } from './common.js'
 import { ExtensionApiError } from './errors.js'
 import {
+  ComposerContextAttachmentRequestSchema,
+  ComposerContextAttachmentSchema
+} from './composer-context.js'
+import {
   JobCancelRequestSchema,
   JobCancellationResultSchema,
   JobEventNotificationSchema,
@@ -67,8 +71,16 @@ import {
   type ModelProviderAdapter
 } from './providers.js'
 import {
+  MediaAudioAnalysisCapabilitiesSchema,
+  MediaAnalyzeVisualFramesRequestSchema,
+  MediaAnalyzeVisualFramesResultSchema,
+  MediaEmbedVisualQueryRequestSchema,
+  MediaEmbedVisualQueryResultSchema,
+  MediaInstallVisualModelRequestSchema,
   MediaMetadataSchema,
   MediaCapabilitiesSchema,
+  MediaCreateCacheTargetRequestSchema,
+  MediaCreateCacheTargetResultSchema,
   MediaOpenViewResourceRequestSchema,
   MediaPickFilesRequestSchema,
   MediaPickFilesResultSchema,
@@ -83,7 +95,12 @@ import {
   MediaResourceLeaseSchema,
   MediaStartFfmpegJobRequestSchema,
   MediaStartFfmpegJobResultSchema,
-  MediaStatRequestSchema
+  MediaStartAudioAnalysisJobRequestSchema,
+  MediaStartAudioAnalysisJobResultSchema,
+  MediaStartArchiveJobRequestSchema,
+  MediaStartArchiveJobResultSchema,
+  MediaStatRequestSchema,
+  MediaVisualModelStatusSchema
 } from './media.js'
 import {
   HostMessageSchema,
@@ -100,6 +117,7 @@ import {
   type CommandsApi,
   type ConfigurationApi,
   type HostRequestContext,
+  type HostRequestOptions,
   type HostTransport,
   type JobsApi,
   type JobSubscription,
@@ -217,10 +235,11 @@ async function requestParsed<T>(
   transport: HostTransport,
   method: string,
   params: unknown,
-  schema: z.ZodType<T>
+  schema: z.ZodType<T>,
+  options?: HostRequestOptions
 ): Promise<T> {
   try {
-    return schema.parse(await transport.request(method, toWire(params)))
+    return schema.parse(await transport.request(method, toWire(params), options))
   } catch (error) {
     if (error instanceof z.ZodError) {
       throw new ExtensionApiError({
@@ -415,7 +434,14 @@ export class ExtensionHostClient implements Disposable {
             NotificationOptionsSchema.parse(options),
             OptionalStringResponseSchema
           )
-        ).value
+        ).value,
+      attachComposerContext: (request) =>
+        requestParsed(
+          transport,
+          'ui.attachComposerContext',
+          ComposerContextAttachmentRequestSchema.parse(request),
+          ComposerContextAttachmentSchema
+        )
     }
 
     this.agent = {
@@ -608,6 +634,13 @@ export class ExtensionHostClient implements Disposable {
           MediaPickSaveTargetRequestSchema.parse(request),
           MediaPickSaveTargetResultSchema
         ),
+      createCacheTarget: (request) =>
+        requestParsed(
+          transport,
+          'media.createCacheTarget',
+          MediaCreateCacheTargetRequestSchema.parse(request),
+          MediaCreateCacheTargetResultSchema
+        ),
       stat: (request) =>
         requestParsed(transport, 'media.stat', MediaStatRequestSchema.parse(request), MediaMetadataSchema),
       readText: (request) =>
@@ -640,6 +673,43 @@ export class ExtensionHostClient implements Disposable {
         ),
       getCapabilities: () =>
         requestParsed(transport, 'media.getCapabilities', {}, MediaCapabilitiesSchema),
+      getAudioAnalysisCapabilities: () =>
+        requestParsed(
+          transport,
+          'media.getAudioAnalysisCapabilities',
+          {},
+          MediaAudioAnalysisCapabilitiesSchema
+        ),
+      getVisualModelStatus: () =>
+        requestParsed(
+          transport,
+          'media.getVisualModelStatus',
+          {},
+          MediaVisualModelStatusSchema
+        ),
+      installVisualModel: (request = {}) =>
+        requestParsed(
+          transport,
+          'media.installVisualModel',
+          MediaInstallVisualModelRequestSchema.parse(request),
+          MediaVisualModelStatusSchema
+        ),
+      analyzeVisualFrames: (request, options) =>
+        requestParsed(
+          transport,
+          'media.analyzeVisualFrames',
+          MediaAnalyzeVisualFramesRequestSchema.parse(request),
+          MediaAnalyzeVisualFramesResultSchema,
+          options
+        ),
+      embedVisualQuery: (request, options) =>
+        requestParsed(
+          transport,
+          'media.embedVisualQuery',
+          MediaEmbedVisualQueryRequestSchema.parse(request),
+          MediaEmbedVisualQueryResultSchema,
+          options
+        ),
       probe: (request) =>
         requestParsed(
           transport,
@@ -653,6 +723,20 @@ export class ExtensionHostClient implements Disposable {
           'media.startFfmpegJob',
           MediaStartFfmpegJobRequestSchema.parse(request),
           MediaStartFfmpegJobResultSchema
+        ),
+      startAudioAnalysisJob: (request) =>
+        requestParsed(
+          transport,
+          'media.startAudioAnalysisJob',
+          MediaStartAudioAnalysisJobRequestSchema.parse(request),
+          MediaStartAudioAnalysisJobResultSchema
+        ),
+      startArchiveJob: (request) =>
+        requestParsed(
+          transport,
+          'media.startArchiveJob',
+          MediaStartArchiveJobRequestSchema.parse(request),
+          MediaStartArchiveJobResultSchema
         )
     }
 

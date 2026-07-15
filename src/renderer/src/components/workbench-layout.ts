@@ -35,6 +35,7 @@ const CODE_CANVAS_RIGHT_PANEL_MAX = Number.POSITIVE_INFINITY
 const SIDEBAR_HARD_MIN = 180
 const MAIN_MIN_WIDTH = 560
 const PANEL_RESIZE_HANDLE_WIDTH = 5
+export const WORKBENCH_RESIZE_CLASS = 'ds-workbench-resizing'
 // The code/chat workspace pins a fixed-width vertical action rail at the far
 // right edge; reserve its width so the resizable panels don't overrun it.
 export const RAIL_WIDTH = 48
@@ -84,6 +85,21 @@ function readStoredBoolean(key: string, fallback: boolean): boolean {
 
 function persistBoolean(key: string, value: boolean): void {
   writeBrowserStorageItem(key, value ? '1' : '0')
+}
+
+type ResizePointerCaptureTarget = Pick<
+  HTMLDivElement,
+  'hasPointerCapture' | 'releasePointerCapture' | 'setPointerCapture'
+>
+
+export function captureResizePointer(
+  target: ResizePointerCaptureTarget,
+  pointerId: number
+): () => void {
+  target.setPointerCapture(pointerId)
+  return () => {
+    if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
+  }
 }
 
 function readStoredRightPanelMode(): RightPanelMode {
@@ -361,8 +377,10 @@ export function useWorkbenchLayout({
     const startX = event.clientX
     const startLeft = leftSidebarWidth
     const startRight = rightSidebarWidth
+    const releasePointer = captureResizePointer(event.currentTarget, event.pointerId)
     const prevCursor = document.body.style.cursor
     const prevUserSelect = document.body.style.userSelect
+    document.body.classList.add(WORKBENCH_RESIZE_CLASS)
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
 
@@ -385,15 +403,19 @@ export function useWorkbenchLayout({
       if (next.right !== rightSidebarWidth) setRightSidebarWidth(next.right)
     }
 
-    const onUp = (): void => {
+    const onEnd = (): void => {
+      releasePointer()
+      document.body.classList.remove(WORKBENCH_RESIZE_CLASS)
       document.body.style.cursor = prevCursor
       document.body.style.userSelect = prevUserSelect
       window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointerup', onEnd)
+      window.removeEventListener('pointercancel', onEnd)
     }
 
     window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointerup', onEnd)
+    window.addEventListener('pointercancel', onEnd)
   }
 
   const beginRightResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
@@ -402,8 +424,10 @@ export function useWorkbenchLayout({
     const startX = event.clientX
     const startLeft = leftSidebarWidth
     const startRight = rightSidebarWidth
+    const releasePointer = captureResizePointer(event.currentTarget, event.pointerId)
     const prevCursor = document.body.style.cursor
     const prevUserSelect = document.body.style.userSelect
+    document.body.classList.add(WORKBENCH_RESIZE_CLASS)
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
 
@@ -426,15 +450,19 @@ export function useWorkbenchLayout({
       setRightSidebarWidth(next.right)
     }
 
-    const onUp = (): void => {
+    const onEnd = (): void => {
+      releasePointer()
+      document.body.classList.remove(WORKBENCH_RESIZE_CLASS)
       document.body.style.cursor = prevCursor
       document.body.style.userSelect = prevUserSelect
       window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointerup', onEnd)
+      window.removeEventListener('pointercancel', onEnd)
     }
 
     window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointerup', onEnd)
+    window.addEventListener('pointercancel', onEnd)
   }
 
   // Bottom terminal drawer: dragging the top edge up grows the panel. The

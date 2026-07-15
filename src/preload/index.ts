@@ -387,6 +387,14 @@ const api = {
     ipcRenderer.on('extension:view-event', wrapped)
     return () => ipcRenderer.removeListener('extension:view-event', wrapped)
   },
+  onExtensionComposerContext: (handler) => {
+    const wrapped = (
+      _: Electron.IpcRendererEvent,
+      payload: Parameters<typeof handler>[0]
+    ) => handler(payload)
+    ipcRenderer.on('extension:composer-context-attached', wrapped)
+    return () => ipcRenderer.removeListener('extension:composer-context-attached', wrapped)
+  },
   onExtensionNotifications: (handler) => {
     const wrapped = (
       _: Electron.IpcRendererEvent,

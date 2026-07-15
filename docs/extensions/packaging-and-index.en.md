@@ -162,7 +162,7 @@ Kun retains at least the immediately previous selected version until explicit re
 
 ## Product-bundled default packages
 
-Kun desktop ships `kun-examples.kun-video-editor` as both a default local extension and the repository's complete Extension API v1.1 reference example. Its only source tree is `examples/extensions/kun-video-editor`; product code does not import that implementation or register its contributions privately.
+Kun desktop ships `kun-examples.kun-video-editor` as both a default local extension and the repository's complete Extension API v1.2 reference example. Its only source tree is `examples/extensions/kun-video-editor`; product code does not import that implementation or register its contributions privately.
 
 The product build runs the normal validate/pack CLI and places the resulting deterministic `.kunx` beside `bundled-extensions/catalog.json`. The catalog pins ID, version, archive name, SHA-256, engine range, API version, and exact permissions. On a fresh profile, `kun serve` verifies that catalog and calls the same `ExtensionPackageManager.installArchive` transaction used for local side-loading. It does not copy an extracted tree into the registry or bypass compatibility, integrity, migration, permission, or activation checks.
 

@@ -9,9 +9,13 @@ import type { CreateGeneratedArtifactInput } from './extension-artifact-service.
 import { ExtensionArtifactService } from './extension-artifact-service.js'
 import { ExtensionJobService } from './extension-job-service.js'
 import { ExtensionJobStore } from './extension-job-store.js'
-import { ExtensionMediaFfmpegService } from './extension-media-ffmpeg-service.js'
+import {
+  ExtensionMediaFfmpegError,
+  ExtensionMediaFfmpegService
+} from './extension-media-ffmpeg-service.js'
 import { ExtensionMediaHandleService } from './extension-media-handle-service.js'
 import { ExtensionMediaJobService } from './extension-media-job-service.js'
+import { ExtensionMediaProcessError } from './extension-media-process-service.js'
 
 const roots: string[] = []
 
@@ -19,7 +23,10 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
-async function fixture() {
+async function fixture(options: {
+  maxConcurrent?: number
+  retryDelay?: (delayMs: number, signal: AbortSignal) => Promise<void>
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), 'kun-media-job-'))
   roots.push(root)
   const workspace = join(root, 'workspace')
@@ -101,7 +108,9 @@ async function fixture() {
             ? 'audio' as const
             : media.mimeType.startsWith('image/')
               ? 'image' as const
-              : 'subtitle' as const,
+              : media.mimeType === 'application/x-otio+json'
+                ? 'document' as const
+                : 'subtitle' as const,
         mimeType: media.mimeType,
         byteSize: media.byteSize,
         completionIdentity: media.completionIdentity,
@@ -153,7 +162,8 @@ async function fixture() {
     jobs,
     ffmpeg: ffmpeg as never,
     media: media as never,
-    artifacts: artifacts as never
+    artifacts: artifacts as never,
+    ...options
   })
   const principal: ExtensionPrincipal = {
     extensionId: 'kun.video-editor',
@@ -195,7 +205,16 @@ describe('ExtensionMediaJobService', () => {
     const request = {
       arguments: ['-i', '{{input:source}}', '{{output:video}}'],
       inputs: { source: 'media_abcdefghijklmnop' },
-      outputs: { video: 'media_qrstuvwxyz12345' }
+      outputs: { video: 'media_qrstuvwxyz12345' },
+      scheduling: {
+        priority: 'background' as const,
+        maxAttempts: 3 as const,
+        retryBaseDelayMs: 250
+      },
+      metadata: {
+        derivedKind: 'proxy',
+        pinnedRevision: 7
+      }
     }
     const created = await test.jobs.createJob({
       owner: {
@@ -426,6 +445,176 @@ describe('ExtensionMediaJobService', () => {
     )
   })
 
+  it('runs opted-in media jobs through a real priority/FIFO concurrency gate', async () => {
+    const test = await fixture({ maxConcurrent: 1 })
+    const blockerStarted = deferred<void>()
+    const releaseBlocker = deferred<void>()
+    const order: string[] = []
+    test.ffmpeg.executeTransaction.mockImplementation(async (_principal, request) => {
+      const marker = String(request.metadata.marker)
+      order.push(marker)
+      if (marker === 'active-user') {
+        blockerStarted.resolve()
+        await releaseBlocker.promise
+      }
+      return test.transactionFor()
+    })
+    const request = (marker: string, priority: 'background' | 'user' | 'export') => ({
+      arguments: ['-i', '{{input:source}}', '{{output:video}}'],
+      inputs: { source: `media_source_${marker.replaceAll('-', '_')}_0001` },
+      outputs: { video: `media_output_${marker.replaceAll('-', '_')}_0001` },
+      metadata: { marker },
+      scheduling: { priority, maxAttempts: 1, retryBaseDelayMs: 25 },
+      idempotencyKey: marker
+    })
+
+    const active = await test.adapter.start(test.principal, request('active-user', 'user'))
+    await blockerStarted.promise
+    const background = await test.adapter.start(test.principal, request('queued-background', 'background'))
+    const exporting = await test.adapter.start(test.principal, request('queued-export', 'export'))
+    expect(order).toEqual(['active-user'])
+
+    releaseBlocker.resolve()
+    await Promise.all([
+      test.jobs.waitForIdle(active.jobId),
+      test.jobs.waitForIdle(background.jobId),
+      test.jobs.waitForIdle(exporting.jobId)
+    ])
+    expect(order).toEqual(['active-user', 'queued-export', 'queued-background'])
+  })
+
+  it('cancels work while it waits in the runtime scheduler queue', async () => {
+    const test = await fixture({ maxConcurrent: 1 })
+    const blockerStarted = deferred<void>()
+    const releaseBlocker = deferred<void>()
+    test.ffmpeg.executeTransaction.mockImplementation(async (_principal, request) => {
+      if (request.metadata.marker === 'blocker') {
+        blockerStarted.resolve()
+        await releaseBlocker.promise
+      }
+      return test.transactionFor()
+    })
+    const start = (marker: string, priority: 'user' | 'background') => test.adapter.start(test.principal, {
+      arguments: ['-i', '{{input:source}}', '{{output:video}}'],
+      inputs: { source: `media_source_${marker}_00000001` },
+      outputs: { video: `media_output_${marker}_00000001` },
+      metadata: { marker },
+      scheduling: { priority, maxAttempts: 1, retryBaseDelayMs: 25 }
+    })
+    const blocker = await start('blocker', 'user')
+    await blockerStarted.promise
+    const queued = await start('queued', 'background')
+
+    await expect(test.jobs.cancel({
+      extensionId: test.principal.extensionId,
+      workspaceIds: [test.workspaceId]
+    }, queued.jobId)).resolves.toMatchObject({
+      accepted: true,
+      snapshot: { state: 'cancelled' }
+    })
+    expect(test.ffmpeg.executeTransaction).toHaveBeenCalledTimes(1)
+    releaseBlocker.resolve()
+    await test.jobs.waitForIdle(blocker.jobId)
+  })
+
+  it('retries only explicit transient process failures and cancellation interrupts backoff', async () => {
+    const retryDelays: number[] = []
+    const retried = await fixture({
+      retryDelay: async (delayMs, signal) => {
+        signal.throwIfAborted()
+        retryDelays.push(delayMs)
+      }
+    })
+    retried.ffmpeg.executeTransaction
+      .mockRejectedValueOnce(new ExtensionMediaProcessError(
+        'process_timeout',
+        'Temporary process timeout',
+        true
+      ))
+      .mockImplementationOnce(async () => retried.transactionFor())
+    const retriedReference = await retried.adapter.start(retried.principal, {
+      arguments: ['-i', '{{input:source}}', '{{output:video}}'],
+      inputs: { source: 'media_transient_source_0001' },
+      outputs: { video: 'media_transient_output_0001' },
+      scheduling: { priority: 'interactive', maxAttempts: 3, retryBaseDelayMs: 50 }
+    })
+    await retried.jobs.waitForIdle(retriedReference.jobId)
+    expect(await retried.store.get(retriedReference.jobId)).toMatchObject({ state: 'completed' })
+    expect(retried.ffmpeg.executeTransaction).toHaveBeenCalledTimes(2)
+    expect(retryDelays).toEqual([50])
+
+    const nonTransient = await fixture({ retryDelay: async () => undefined })
+    nonTransient.ffmpeg.executeTransaction.mockRejectedValueOnce(
+      new ExtensionMediaFfmpegError('process_failed', 'Unknown FFmpeg exit')
+    )
+    const failedReference = await nonTransient.adapter.start(nonTransient.principal, {
+      arguments: ['-i', '{{input:source}}', '{{output:video}}'],
+      inputs: { source: 'media_nontransient_source_01' },
+      outputs: { video: 'media_nontransient_output_01' },
+      scheduling: { priority: 'interactive', maxAttempts: 3, retryBaseDelayMs: 50 }
+    })
+    await nonTransient.jobs.waitForIdle(failedReference.jobId)
+    expect(await nonTransient.store.get(failedReference.jobId)).toMatchObject({ state: 'failed' })
+    expect(nonTransient.ffmpeg.executeTransaction).toHaveBeenCalledTimes(1)
+
+    const backoffStarted = deferred<void>()
+    const backingOff = await fixture({
+      retryDelay: async (_delayMs, signal) => {
+        backoffStarted.resolve()
+        await new Promise<void>((_resolve, reject) => {
+          const abort = () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }))
+          if (signal.aborted) abort()
+          else signal.addEventListener('abort', abort, { once: true })
+        })
+      }
+    })
+    backingOff.ffmpeg.executeTransaction.mockRejectedValueOnce(
+      new ExtensionMediaProcessError('process_timeout', 'Temporary process timeout', true)
+    )
+    const backingOffReference = await backingOff.adapter.start(backingOff.principal, {
+      arguments: ['-i', '{{input:source}}', '{{output:video}}'],
+      inputs: { source: 'media_backoff_source_00001' },
+      outputs: { video: 'media_backoff_output_00001' },
+      scheduling: { priority: 'background', maxAttempts: 3, retryBaseDelayMs: 50 }
+    })
+    await backoffStarted.promise
+    await expect(backingOff.jobs.cancel({
+      extensionId: backingOff.principal.extensionId,
+      workspaceIds: [backingOff.workspaceId]
+    }, backingOffReference.jobId)).resolves.toMatchObject({ snapshot: { state: 'cancelled' } })
+    expect(backingOff.ffmpeg.executeTransaction).toHaveBeenCalledTimes(1)
+  })
+
+  it('binds idempotent deduplication to complete handles, metadata, and scheduling', async () => {
+    const test = await fixture()
+    const base = {
+      arguments: ['-i', '{{input:source}}', '{{output:video}}'],
+      inputs: { source: 'media_dedupe_source_000001' },
+      outputs: { video: 'media_dedupe_output_000001' },
+      metadata: {
+        projectId: 'project-dedupe',
+        pinnedRevision: 7,
+        derivedKind: 'preview',
+        sourceFingerprint: 'a'.repeat(64)
+      },
+      scheduling: { priority: 'interactive' as const, maxAttempts: 2 as const, retryBaseDelayMs: 50 },
+      idempotencyKey: 'friendly-derived-preview-key'
+    }
+    const first = await test.adapter.start(test.principal, base)
+    const duplicate = await test.adapter.start(test.principal, structuredClone(base))
+    const changedRevision = await test.adapter.start(test.principal, {
+      ...base,
+      metadata: { ...base.metadata, pinnedRevision: 8 }
+    })
+    expect(duplicate.jobId).toBe(first.jobId)
+    expect(changedRevision.jobId).not.toBe(first.jobId)
+    await Promise.all([
+      test.jobs.waitForIdle(first.jobId),
+      test.jobs.waitForIdle(changedRevision.jobId)
+    ])
+    expect(await test.store.list()).toHaveLength(2)
+  })
+
   it('accepts duration-less SRT and atomically publishes safe render provenance', async () => {
     const test = await fixture()
     const subtitle = {
@@ -479,11 +668,27 @@ describe('ExtensionMediaJobService', () => {
       metadata: {
         projectId: 'project-1',
         pinnedRevision: 7,
+        sequenceId: 'sequence-main',
+        renderIrDigest: 'd'.repeat(64),
+        backendCapabilitiesDigest: 'e'.repeat(64),
+        renderRange: { startFrame: 12, endFrame: 48 },
+        playbackMode: 'composed-proof',
         renderKind: 'h264-mp4',
         canvasPreset: '9:16',
         proofFrame: 42,
         captionMode: 'both',
         subtitleFormat: 'srt',
+        derivedId: 'derived-preview-1',
+        assetId: 'asset-interview-1',
+        dedupeKey: 'b'.repeat(64),
+        derivedKind: 'preview',
+        sourceFingerprint: 'c'.repeat(64),
+        producerId: 'kun-video-editor.preview',
+        producerVersion: '1.1.0',
+        priority: 'interactive',
+        derivedPhase: 'final',
+        derivedPhaseIndex: 0,
+        derivedPhaseCount: 1,
         sourcePath: '/must/not/leak',
         invalidRevision: -1
       }
@@ -501,11 +706,27 @@ describe('ExtensionMediaJobService', () => {
     const expectedMetadata = {
       projectId: 'project-1',
       pinnedRevision: 7,
+      sequenceId: 'sequence-main',
+      renderIrDigest: 'd'.repeat(64),
+      backendCapabilitiesDigest: 'e'.repeat(64),
+      renderRange: { startFrame: 12, endFrame: 48 },
+      playbackMode: 'composed-proof',
       renderKind: 'h264-mp4',
       canvasPreset: '9:16',
       proofFrame: 42,
       captionMode: 'both',
-      subtitleFormat: 'srt'
+      subtitleFormat: 'srt',
+      derivedId: 'derived-preview-1',
+      assetId: 'asset-interview-1',
+      dedupeKey: 'b'.repeat(64),
+      derivedKind: 'preview',
+      sourceFingerprint: 'c'.repeat(64),
+      producerId: 'kun-video-editor.preview',
+      producerVersion: '1.1.0',
+      priority: 'interactive',
+      derivedPhase: 'final',
+      derivedPhaseIndex: 0,
+      derivedPhaseCount: 1
     }
     expect(test.artifacts.createMany).toHaveBeenCalledWith(
       expect.any(Object),
@@ -595,6 +816,79 @@ describe('ExtensionMediaJobService', () => {
         }
       })]
     )
+  })
+
+  it('publishes a schema-validated OTIO document without probing it as media', async () => {
+    const test = await fixture()
+    const content = JSON.stringify({
+      OTIO_SCHEMA: 'SerializableCollection.1',
+      name: 'Revision 8',
+      children: [],
+      metadata: { kun: { projectId: 'project-1', projectRevision: 8 } }
+    })
+    const interchange = {
+      ...test.generated,
+      id: 'media_otio_document_0001',
+      displayName: 'revision-8.otio',
+      mimeType: 'application/x-otio+json',
+      byteSize: Buffer.byteLength(content, 'utf8'),
+      completionIdentity: 'identity_otio_document_0001'
+    }
+    test.generatedMedia.set(interchange.id, interchange)
+    test.ffmpeg.executeTransaction.mockResolvedValueOnce(test.transactionFor([interchange]))
+    const request = {
+      arguments: [],
+      inputs: {},
+      outputs: {},
+      textOutputs: {
+        interchange: {
+          handleId: 'media_otio_target_00001',
+          mimeType: 'application/x-otio+json' as const,
+          content
+        }
+      },
+      metadata: {
+        projectId: 'project-1',
+        sequenceId: 'sequence-main',
+        pinnedRevision: 8,
+        interchangeAdapterId: 'kun.otio-json',
+        interchangeAdapterVersion: '1.0.0',
+        documentDigest: 'a'.repeat(64),
+        projectDigest: 'b'.repeat(64),
+        lossCount: 3,
+        portableLossless: false,
+        kunRoundTripLossless: true,
+        sourcePath: '/must/not/leak'
+      }
+    }
+
+    const reference = await test.adapter.start(test.principal, request)
+    await test.jobs.waitForIdle(reference.jobId)
+
+    expect(test.media.probe).not.toHaveBeenCalled()
+    expect(await test.store.get(reference.jobId)).toMatchObject({
+      state: 'completed',
+      result: {
+        generatedArtifacts: [{
+          mediaKind: 'document',
+          mimeType: 'application/x-otio+json',
+          provenance: {
+            metadata: {
+              projectId: 'project-1',
+              sequenceId: 'sequence-main',
+              pinnedRevision: 8,
+              interchangeAdapterId: 'kun.otio-json',
+              documentDigest: 'a'.repeat(64),
+              projectDigest: 'b'.repeat(64),
+              lossCount: 3,
+              portableLossless: false,
+              kunRoundTripLossless: true
+            }
+          }
+        }]
+      }
+    })
+    expect(JSON.stringify(test.artifacts.createMany.mock.calls)).not.toContain('/must/not/leak')
   })
 
   it('fails before publication when generated output does not match its MIME contract', async () => {

@@ -196,10 +196,52 @@ Changelog 记录公开 Extension API，而不是 Kun 内部重构。每项包含
 下面的 public surface 快照由文档门禁从 package 入口、公开 export 和可达 `.d.ts` 计算。只有在本节已经解释兼容性影响后才更新快照；不能把更新 hash 当成 Changelog 条目。
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.1.0 sha256:23d962fa42a44e9c1a14be639158b794cf659c3875a1c502dea272ada2f870a7 -->
-<!-- sdk-surface-snapshot @kun/extension-react@1.1.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
-<!-- sdk-surface-snapshot @kun/extension-test@1.1.0 sha256:c7937552f87d719626aa28df9f5e72bec325209636625fb1b78680aeec489ea5 -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:cacbf1fe7ac21f7309848776f6c7ef70a8a09ffa6a592cd91eac21e13179c5bf -->
+<!-- sdk-surface-snapshot @kun/extension-react@1.2.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
+<!-- sdk-surface-snapshot @kun/extension-test@1.2.0 sha256:386c2beca46c240f957af2c92925c410a6d801a3bcc9f87697944d9f6d23337e -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
+
+### v1.2.0 — 媒体调度、本地分析与项目交换
+
+Compatible Kun: 待随同一 release line 锁定；在 public package、canonical supported-version
+list 和三平台 release gate 全部完成前，不得把扩展 Manifest 提前声明为 `apiVersion: 1.2.0`。
+
+Added:
+
+- `MediaApi.createCacheTarget()`：由 Host 为 waveform、thumbnail、filmstrip、proxy、proof 与 preview 分配 disposable opaque 输出授权；扩展只选择有界格式和 purpose，不选择 cache path。
+- `MediaStartFfmpegJobRequest.scheduling` 与 `MediaJobScheduling`：提供 `background` / `user` / `interactive` / `export` priority、1–3 次尝试和有界 retry base delay。Host 保持并发、排队和 transient 分类的最终权威。
+- `application/x-otio+json` text output：允许最多 2 MiB 的有界 OTIO JSON 作为 text-only durable job 原子导出，并校验 root、结构界限与不透明 `kun-media://` target reference。
+- `MediaApi.getAudioAnalysisCapabilities()` 和 `startAudioAnalysisJob()`：以 owner-scoped durable job 提供本地 `silence`、`beat-grid` 与 `sync-features`，结果携带 source fingerprint、算法 provenance、`local: true` 与 `networkUsed: false`。
+- `MediaApi.getVisualModelStatus()`、`installVisualModel()`、`analyzeVisualFrames()` 和 `embedVisualQuery()`：提供可验证 bundled adapter receipt、真实有界 frame decode、可解释 visual feature 与明确 unsupported-query 结果；不声称通用语义模型。
+- `MediaApi.startArchiveJob()`：用 opaque input/output handle、规范 archive-relative path 和有界 inline text 创建 core-owned deterministic ZIP job，返回 digest 与新 readable generated-media handle。
+- `UiApi.attachComposerContext()`：已认证 View 可把有界、无路径的结构化 selection 显式挂到匹配 workspace 的主会话输入框；Host 补充 extension/version/View/workspace provenance，成功建 turn 后仅消费一次。
+- `@kun/extension-test` 增加 cache target、调度/retry、OTIO、audio analysis、visual adapter、archive、取消和 restart fixture，以覆盖相同的公开 Schema 与 owner fence。
+
+Changed:
+
+- `MediaApi.readText()` 的公开 `MAX_MEDIA_TEXT_BYTES` 从 512 KiB 提升到 2 MiB，并继续要求严格 UTF-8、调用者可收紧的 `maxBytes`、opaque handle 与无路径结果。
+- SRT/VTT text output 仍保持单项 192 KiB；全部 text output 总量上限为 2 MiB。纯文本、媒体与 OTIO 输出继续共同 staging、校验、提升或回滚。
+- FFmpeg Job 现在由全局有界 priority/FIFO gate 排队。只有显式 transient 且已完整回滚的尝试可 backoff 重试；取消、普通失败和 unknown side effect 不自动重试。Idempotency 绑定完整规范请求而不只绑定友好 key。
+- `MediaApi.getCapabilities()` 的 allowlist feature 扩展到 H.265、ProRes/FFV1、更多 audio codec、color/effect filter、silence primitive 与 muxer；返回值仍不含 executable path。
+- Public fail-closed View-safe method catalog 增加上述可由认证 View 调用的方法；注册、任意 worker、secret reveal 与 credential mutation 仍不在其中。
+
+Fixed:
+
+- 排队和 retry backoff 可在 process spawn 前取消；运行中取消会等待 process tree 退出、staging 清理与 reservation 释放，terminal fence 拒绝晚到输出。
+- 非终态 FFmpeg、音频分析和 archive 尝试在 Kun 重启后明确投影为 `interrupted` 并回滚不完整事务；已 durable 完成的输出保持原终态。
+
+Security:
+
+- 音频与视觉分析只接收 owner/workspace-bound opaque handle 和有界参数；固定 Host profile 执行真实本地解码，结果记录算法/模型 identity，不接受 path、URL、filter、command 或隐式 cloud fallback。
+- Bundled visual package 的 manifest、payload、签名和 install receipt 全部校验；当前 adapter 只提供可解释颜色/亮度/边缘 feature，无法支持任意语义时返回 `VISUAL_QUERY_UNSUPPORTED`，不生成伪 embedding。
+- Archive entry 拒绝绝对路径、反斜线、`.`/`..`、重复项、symlink escape 和 input/output alias；OTIO export 拒绝外部 `target_url`。所有输出留在 private staging，直到原子终态提交。
+- Composer context 只接受有界、无绝对路径的 JSON reference；Main 对当前 guest main frame、View contribution、精确扩展版本、workspace trust 和 `ui.actions` 重新鉴权。扩展不能提供 provenance，payload 只进入 user message content，不进入稳定 system prefix。
+- Provider-neutral generation 不新增 secret-bearing Media API 或任意 Provider URL。Bundled 示例在没有已批准 broker 时返回 `unavailable`；provider permission、媒体上传和费用 authority 必须继续由 Host receipt 与公开 Network/Account/Provider 边界承担。
+
+Migration:
+
+- 既有 v1.1 扩展无需 source migration；新增字段与方法是 additive。使用新方法前更新 SDK、声明精确 media/jobs/workspace permission，并进行 capability negotiation。
+- 使用新增方法的扩展应声明 `apiVersion: 1.2.0` 并随兼容 Kun Host 分发；Host 仍会协商 v1.1 与 v1.0 Manifest，不要求 source migration。
 
 ### v1.1.0 — Brokered media、durable job 与 generated artifact
 

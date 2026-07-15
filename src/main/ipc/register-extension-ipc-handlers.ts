@@ -2,6 +2,8 @@ import {
   AccountSessionSchema,
   ArtifactHostActionRequestSchema,
   ArtifactHostActionResultSchema,
+  ComposerContextAttachmentRequestSchema,
+  ComposerContextAttachmentSchema,
   ExtensionManifestSchema,
   LocaleSchema,
   PermissionSchema,
@@ -25,6 +27,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type {
+  ExtensionComposerContextEvent,
   ExtensionConsentRequest,
   ExtensionNotificationSnapshot,
   ExtensionRuntimeRequestResult,
@@ -837,10 +840,20 @@ function registerViewIpcHandlers(
       request.workspaceRoot
     )
     await workbenchEnvironmentSync.syncToRuntime()
+    if (request.retryHost) {
+      const retried = await options.runtimeRequest(
+        `/v1/extensions/${encodeURIComponent(identity.extensionId)}/retry`,
+        'POST'
+      )
+      if (!retried.ok) throw runtimeResultError(retried)
+    }
     const result = await options.runtimeRequest(
       '/v1/extensions/view-sessions',
       'POST',
-      JSON.stringify(request)
+      JSON.stringify({
+        contributionId: request.contributionId,
+        ...(request.workspaceRoot ? { workspaceRoot: request.workspaceRoot } : {})
+      })
     )
     if (!result.ok) throw runtimeResultError(result)
     const runtimeSession = parseRuntimeViewSession(result.body)
@@ -947,6 +960,76 @@ function registerViewIpcHandlers(
     if (!isAllowedExtensionViewMethod(request.method)) throw new Error('View method is not available.')
     const release = limiter.begin(event.sender, payload)
     try {
+      if (request.method === 'ui.attachComposerContext') {
+        const currentRecord = options.viewSessions.requireCurrentGuestMainFrame(
+          event.sender.id,
+          record.sessionId,
+          record.nonce,
+          event.senderFrame
+        )
+        const input = ComposerContextAttachmentRequestSchema.parse(request.params)
+        const identity = parseQualifiedContributionId(currentRecord.contributionId)
+        const view = await options.descriptors.resolveView(
+          identity.extensionId,
+          identity.localId,
+          currentRecord.workspaceRoot
+        )
+        const reboundRecord = options.viewSessions.requireCurrentGuestMainFrame(
+          event.sender.id,
+          currentRecord.sessionId,
+          currentRecord.nonce,
+          event.senderFrame
+        )
+        if (
+          view.extensionId !== reboundRecord.extensionId ||
+          view.extensionVersion !== reboundRecord.extensionVersion ||
+          view.contributionId !== identity.localId
+        ) {
+          throw new Error('Extension View identity changed; attach the context again.')
+        }
+        if (!view.grantedPermissions.includes('ui.actions')) {
+          throw new Error('Composer context permission is not granted.')
+        }
+        const parent = options.getMainWindow()
+        if (
+          !parent ||
+          parent.isDestroyed() ||
+          parent.webContents.id !== reboundRecord.parentWebContentsId ||
+          parent.webContents.isDestroyed()
+        ) {
+          throw new Error('The owning workbench is unavailable.')
+        }
+        const canonicalWorkspaceRoot = reboundRecord.workspaceRoot
+          ? resolve(reboundRecord.workspaceRoot)
+          : undefined
+        const workspaceId = createHash('sha256')
+          .update(canonicalWorkspaceRoot ?? '')
+          .digest('hex')
+        const attachment = ComposerContextAttachmentSchema.parse({
+          ...input,
+          attachmentId: `extension-context:${createHash('sha256')
+            .update([
+              reboundRecord.extensionId,
+              reboundRecord.extensionVersion,
+              reboundRecord.contributionId,
+              workspaceId,
+              input.id
+            ].join('\0'))
+            .digest('hex')}`,
+          provenance: {
+            extensionId: reboundRecord.extensionId,
+            extensionVersion: reboundRecord.extensionVersion,
+            viewContributionId: reboundRecord.contributionId,
+            workspaceId
+          }
+        })
+        const contextEvent: ExtensionComposerContextEvent = {
+          ...(canonicalWorkspaceRoot ? { workspaceRoot: canonicalWorkspaceRoot } : {}),
+          attachment
+        }
+        parent.webContents.send('extension:composer-context-attached', contextEvent)
+        return attachment
+      }
       if (request.method === 'ui.getTheme' || request.method === 'ui.getLocale') {
         const environment = await loadWorkbenchEnvironment(options)
         return request.method === 'ui.getTheme' ? environment.theme : environment.locale

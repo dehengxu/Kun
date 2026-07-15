@@ -6,7 +6,7 @@
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM"],
     "strict": true,
-    "rootDir": "src/webview",
+    "rootDir": "src",
     "outDir": "dist/webview",
     "noEmit": true,
     "skipLibCheck": true

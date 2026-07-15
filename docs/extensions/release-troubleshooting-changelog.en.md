@@ -196,10 +196,53 @@ The Changelog records public Extension API, not Kun internal refactors. Each ent
 The public surface snapshots below are computed from package entries, public exports, and reachable `.d.ts` declarations. Update them only after this section explains the compatibility impact; changing a hash is not itself a Changelog entry.
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.1.0 sha256:23d962fa42a44e9c1a14be639158b794cf659c3875a1c502dea272ada2f870a7 -->
-<!-- sdk-surface-snapshot @kun/extension-react@1.1.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
-<!-- sdk-surface-snapshot @kun/extension-test@1.1.0 sha256:c7937552f87d719626aa28df9f5e72bec325209636625fb1b78680aeec489ea5 -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:cacbf1fe7ac21f7309848776f6c7ef70a8a09ffa6a592cd91eac21e13179c5bf -->
+<!-- sdk-surface-snapshot @kun/extension-react@1.2.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
+<!-- sdk-surface-snapshot @kun/extension-test@1.2.0 sha256:386c2beca46c240f957af2c92925c410a6d801a3bcc9f87697944d9f6d23337e -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
+
+### v1.2.0 — Media scheduling, local analysis, and project interchange
+
+Compatible Kun: to be locked with the same release line. Do not set an
+extension Manifest to `apiVersion: 1.2.0` until the public packages, canonical
+supported-version list, and three-platform release gates are complete.
+
+Added:
+
+- `MediaApi.createCacheTarget()` allocates a Host-owned disposable opaque output grant for waveforms, thumbnails, filmstrips, proxies, proofs, and previews. The extension chooses a bounded format and purpose, never a cache path.
+- `MediaStartFfmpegJobRequest.scheduling` and `MediaJobScheduling` provide `background` / `user` / `interactive` / `export` priority, 1–3 attempts, and a bounded retry base delay. The Host remains authoritative for concurrency, queueing, and transient classification.
+- `application/x-otio+json` text output allows up to 2 MiB of bounded OTIO JSON to export atomically as a text-only durable job, with root, structural-bound, and opaque `kun-media://` target-reference validation.
+- `MediaApi.getAudioAnalysisCapabilities()` and `startAudioAnalysisJob()` provide local `silence`, `beat-grid`, and `sync-features` through owner-scoped durable jobs. Results carry source fingerprints, algorithm provenance, `local: true`, and `networkUsed: false`.
+- `MediaApi.getVisualModelStatus()`, `installVisualModel()`, `analyzeVisualFrames()`, and `embedVisualQuery()` provide a verifiable bundled-adapter receipt, real bounded frame decode, interpretable visual features, and an explicit unsupported-query result; they make no general semantic-model claim.
+- `MediaApi.startArchiveJob()` creates a core-owned deterministic ZIP job from opaque input/output handles, normalized archive-relative paths, and bounded inline text, and returns a digest plus a new readable generated-media handle.
+- `UiApi.attachComposerContext()` lets an authenticated View explicitly attach bounded, path-free structured selection to the matching workspace's main composer. The Host supplies extension/version/View/workspace provenance and consumes it once after successful turn creation.
+- `@kun/extension-test` adds cache-target, scheduling/retry, OTIO, audio-analysis, visual-adapter, archive, cancellation, and restart fixtures covering the same public schemas and owner fences.
+
+Changed:
+
+- `MediaApi.readText()` raises public `MAX_MEDIA_TEXT_BYTES` from 512 KiB to 2 MiB while retaining strict UTF-8, a caller-tightenable `maxBytes`, opaque handles, and path-free results.
+- SRT/VTT text output remains limited to 192 KiB per item; all text output combined is limited to 2 MiB. Text-only, media, and OTIO outputs continue to stage, validate, promote, or roll back together.
+- FFmpeg jobs now queue through a global bounded priority/FIFO gate. Only an explicitly transient attempt that rolled back completely can retry with backoff; cancellation, ordinary failure, and unknown side effects do not retry automatically. Idempotency binds the complete canonical request rather than only a friendly key.
+- The `MediaApi.getCapabilities()` allowlisted feature set expands to H.265, ProRes/FFV1, more audio codecs, color/effect filters, the silence primitive, and muxers; the result still contains no executable path.
+- The public fail-closed View-safe method catalog adds the authenticated-View methods above. Registration, arbitrary workers, secret reveal, and credential mutation remain absent.
+
+Fixed:
+
+- Queued and retry-backoff work can be cancelled before process spawn. Running cancellation waits for process-tree exit, staging cleanup, and reservation release, and terminal fencing rejects late output.
+- Non-terminal FFmpeg, audio-analysis, and archive attempts project explicitly as `interrupted` after Kun restart and roll back incomplete transactions; durably completed output retains its terminal outcome.
+
+Security:
+
+- Audio and visual analysis accept only owner/workspace-bound opaque handles and bounded parameters. Fixed Host profiles decode real media locally and record algorithm/model identity; they accept no path, URL, filter, command, or implicit cloud fallback.
+- The bundled visual package verifies its manifest, payload, signature, and install receipt. The current adapter exposes only interpretable color/brightness/edge features and returns `VISUAL_QUERY_UNSUPPORTED` when it cannot support arbitrary semantics; it does not fabricate an embedding.
+- Archive entries reject absolute paths, backslashes, `.`/`..`, duplicates, symlink escape, and input/output aliasing. OTIO export rejects external `target_url` values. Output stays in private staging until atomic terminal commit.
+- Composer context accepts only bounded JSON references without absolute paths. Main reauthorizes the current guest main frame, View contribution, exact extension version, workspace trust, and `ui.actions`. Extensions cannot supply provenance, and the payload enters only user-message content, never the stable system prefix.
+- Provider-neutral generation adds no secret-bearing Media API or arbitrary Provider URL. The bundled example returns `unavailable` without an approved broker; provider permission, media-upload, and cost authority remain behind Host receipts and public Network/Account/Provider boundaries.
+
+Migration:
+
+- Existing v1.1 extensions need no source migration; the new fields and methods are additive. Before using them, update the SDK, declare exact media/jobs/workspace permissions, and negotiate capabilities.
+- Extensions that use the new methods declare `apiVersion: 1.2.0` and ship with a compatible Kun Host. The Host still negotiates v1.1 and v1.0 manifests without a source migration.
 
 ### v1.1.0 — Brokered media, durable jobs, and generated artifacts
 

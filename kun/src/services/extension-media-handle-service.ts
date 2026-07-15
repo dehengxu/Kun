@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, realpath, stat } from 'node:fs/promises'
+import { lstat, mkdir, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
@@ -9,6 +9,7 @@ import type { ExtensionPrincipal } from './extension-agent-service.js'
 
 const MediaHandleModeSchema = z.enum(['read', 'write'])
 const MediaHandleSourceSchema = z.enum(['workspace', 'picker', 'generated'])
+const MediaHandleLifecycleSchema = z.enum(['persistent', 'cache'])
 const FileIdentitySchema = z.strictObject({
   size: z.number().int().nonnegative(),
   mtimeMs: z.number().nonnegative(),
@@ -24,10 +25,12 @@ const StoredMediaHandleSchema = z.strictObject({
   displayName: z.string().min(1).max(256),
   mode: MediaHandleModeSchema,
   source: MediaHandleSourceSchema,
+  lifecycle: MediaHandleLifecycleSchema.default('persistent'),
   mimeType: z.string().min(1).max(128),
   identity: FileIdentitySchema.optional(),
   previousIdentity: FileIdentitySchema.optional(),
   createdAt: z.string().datetime(),
+  lastAccessedAt: z.string().datetime().optional(),
   reservationId: z.string().min(1).max(256).optional(),
   completedAt: z.string().datetime().optional(),
   revokedAt: z.string().datetime().optional()
@@ -41,6 +44,7 @@ const MediaHandleDocumentSchema = z.strictObject({
 type StoredMediaHandle = z.infer<typeof StoredMediaHandleSchema>
 type MediaHandleMode = z.infer<typeof MediaHandleModeSchema>
 type MediaHandleSource = z.infer<typeof MediaHandleSourceSchema>
+type MediaHandleLifecycle = z.infer<typeof MediaHandleLifecycleSchema>
 type FileIdentity = z.infer<typeof FileIdentitySchema>
 
 export type MediaHandleProjection = {
@@ -48,6 +52,8 @@ export type MediaHandleProjection = {
   displayName: string
   mode: MediaHandleMode
   source: MediaHandleSource
+  /** Core-only lifecycle. Public metadata deliberately omits this field. */
+  lifecycle?: MediaHandleLifecycle
   mimeType: string
   byteSize?: number
   modifiedAt?: string
@@ -55,6 +61,7 @@ export type MediaHandleProjection = {
   workspaceRelativePath?: string
   available: boolean
   createdAt: string
+  lastAccessedAt: string
 }
 
 export type ResolvedMediaHandle = MediaHandleProjection & {
@@ -116,9 +123,15 @@ export type RegisterMediaHandleInput = {
   path: string
   mode: MediaHandleMode
   source: MediaHandleSource
+  lifecycle?: MediaHandleLifecycle
   displayName?: string
   mimeType?: string
 }
+
+export type RegisterCacheMediaTargetInput = Pick<
+  RegisterMediaHandleInput,
+  'workspaceRoot' | 'path' | 'displayName' | 'mimeType'
+>
 
 const emptyDocument = () => ({
   schemaVersion: 1 as const,
@@ -155,19 +168,53 @@ export class ExtensionMediaHandleService {
     const workspaceRoot = await authorizeWorkspace(principal, input.workspaceRoot)
     requirePermission(principal, input.mode === 'read' ? 'media.read' : 'media.export')
     requirePermission(principal, input.mode === 'read' ? 'workspace.read' : 'workspace.write')
-    const candidate = await resolveCandidate({ ...input, workspaceRoot })
+    return await this.registerAuthorized(principal, { ...input, workspaceRoot })
+  }
+
+  /**
+   * Core-only cache authority used by the Host broker. A cache target is not a
+   * user export grant: it is confined to the Host-owned extension cache and is
+   * authorized by media processing plus workspace write access. Public callers
+   * cannot choose its lifecycle, source, or access mode.
+   */
+  async registerCacheTarget(
+    principal: ExtensionPrincipal,
+    input: RegisterCacheMediaTargetInput
+  ): Promise<MediaHandleProjection> {
+    const workspaceRoot = await authorizeWorkspace(principal, input.workspaceRoot)
+    requirePermission(principal, 'media.process')
+    requirePermission(principal, 'workspace.write')
+    const target = assertExtensionCacheTarget(principal, workspaceRoot, input.path)
+    await ensureCacheParent(workspaceRoot, target)
+    return await this.registerAuthorized(principal, {
+      ...input,
+      workspaceRoot,
+      mode: 'write',
+      source: 'workspace',
+      lifecycle: 'cache'
+    })
+  }
+
+  private async registerAuthorized(
+    principal: ExtensionPrincipal,
+    input: RegisterMediaHandleInput & { workspaceRoot: string }
+  ): Promise<MediaHandleProjection> {
+    const candidate = await resolveCandidate(input)
+    const createdAt = this.now().toISOString()
     const record: StoredMediaHandle = {
       id: `media_${randomUUID()}`,
       ownerExtensionId: principal.extensionId,
       ownerExtensionVersion: principal.extensionVersion,
-      workspaceRoot,
+      workspaceRoot: input.workspaceRoot,
       absolutePath: candidate.absolutePath,
       displayName: boundedDisplayName(input.displayName ?? basename(candidate.absolutePath)),
       mode: input.mode,
       source: input.source,
+      lifecycle: input.lifecycle ?? 'persistent',
       mimeType: input.mimeType?.trim() || inferMediaMime(candidate.absolutePath),
       ...(candidate.identity ? { identity: candidate.identity } : {}),
-      createdAt: this.now().toISOString()
+      createdAt,
+      lastAccessedAt: createdAt
     }
     await this.store.update(emptyDocument, (document) => {
       const owned = Object.values(document.handles).filter(
@@ -188,8 +235,43 @@ export class ExtensionMediaHandleService {
   async stat(principal: ExtensionPrincipal, handleId: string): Promise<MediaHandleProjection> {
     const record = await this.requireOwned(principal, handleId)
     await authorizeWorkspace(principal, record.workspaceRoot)
-    requirePermission(principal, record.mode === 'read' ? 'media.read' : 'media.export')
+    requireRecordAccess(principal, record, record.mode)
     return project(await refreshIdentity(record))
+  }
+
+  /**
+   * Runtime-only access accounting. It is called only after a protected View
+   * resource lease succeeds, so metadata polling does not artificially refresh
+   * cache LRU order.
+   */
+  async touch(principal: ExtensionPrincipal, handleId: string): Promise<MediaHandleProjection> {
+    const current = await this.requireOwned(principal, handleId)
+    await authorizeWorkspace(principal, current.workspaceRoot)
+    if (current.mode !== 'read') {
+      throw new ExtensionMediaHandleError('mode_denied', 'Only readable media can be opened in a View')
+    }
+    requireRecordAccess(principal, current, 'read')
+    await refreshIdentity(current)
+    const lastAccessedAt = this.now().toISOString()
+    let touched: StoredMediaHandle | undefined
+    await this.store.update(emptyDocument, (document) => {
+      const record = document.handles[handleId]
+      assertOwnedRecord(record, principal)
+      if (record.mode !== 'read') {
+        throw new ExtensionMediaHandleError('mode_denied', 'Only readable media can be opened in a View')
+      }
+      if ((record.lastAccessedAt ?? record.createdAt) >= lastAccessedAt) {
+        touched = record
+        return document
+      }
+      touched = { ...record, lastAccessedAt }
+      return {
+        ...document,
+        revision: document.revision + 1,
+        handles: { ...document.handles, [handleId]: touched }
+      }
+    })
+    return project(touched ?? current)
   }
 
   async resolve(
@@ -202,8 +284,7 @@ export class ExtensionMediaHandleService {
     if (record.mode !== requiredMode) {
       throw new ExtensionMediaHandleError('mode_denied', 'Media handle access mode is not permitted')
     }
-    requirePermission(principal, requiredMode === 'read' ? 'media.read' : 'media.export')
-    requirePermission(principal, requiredMode === 'read' ? 'workspace.read' : 'workspace.write')
+    requireRecordAccess(principal, record, requiredMode)
     const refreshed = await refreshIdentity(record)
     return {
       ...project(refreshed),
@@ -217,21 +298,34 @@ export class ExtensionMediaHandleService {
 
   async release(principal: ExtensionPrincipal, handleId: string): Promise<boolean> {
     let released = false
+    let cachePath: string | undefined
     await this.store.update(emptyDocument, (document) => {
       const record = document.handles[handleId]
       if (!record || record.ownerExtensionId !== principal.extensionId ||
         record.ownerExtensionVersion !== principal.extensionVersion) return document
       if (record.revokedAt) return document
       released = true
+      if (record.lifecycle === 'cache') cachePath = record.absolutePath
+      const revokedAt = this.now().toISOString()
+      const handles = cachePath === undefined
+        ? { ...document.handles, [handleId]: { ...record, revokedAt } }
+        : Object.fromEntries(Object.entries(document.handles).map(([id, candidate]) => [
+            id,
+            candidate.ownerExtensionId === principal.extensionId &&
+            candidate.ownerExtensionVersion === principal.extensionVersion &&
+            candidate.lifecycle === 'cache' &&
+            candidate.absolutePath === cachePath &&
+            !candidate.revokedAt
+              ? { ...candidate, revokedAt }
+              : candidate
+          ]))
       return {
         ...document,
         revision: document.revision + 1,
-        handles: {
-          ...document.handles,
-          [handleId]: { ...record, revokedAt: this.now().toISOString() }
-        }
+        handles
       }
     })
+    if (cachePath !== undefined) await rm(cachePath, { force: true })
     return released
   }
 
@@ -351,7 +445,8 @@ export class ExtensionMediaHandleService {
         mode: 'read',
         source: 'generated',
         identity,
-        createdAt
+        createdAt,
+        lastAccessedAt: createdAt
       }
       delete record.completedAt
       delete record.revokedAt
@@ -658,15 +753,18 @@ export class ExtensionMediaHandleService {
 
   async revokeExtension(extensionId: string): Promise<number> {
     let count = 0
+    const cachePaths = new Set<string>()
     await this.store.update(emptyDocument, (document) => {
       const revokedAt = this.now().toISOString()
       const handles = Object.fromEntries(Object.entries(document.handles).map(([id, record]) => {
         if (record.ownerExtensionId !== extensionId || record.revokedAt) return [id, record]
         count += 1
+        if (record.lifecycle === 'cache') cachePaths.add(record.absolutePath)
         return [id, { ...record, revokedAt }]
       }))
       return count === 0 ? document : { ...document, revision: document.revision + 1, handles }
     })
+    await deleteCachePaths(cachePaths)
     return count
   }
 
@@ -680,6 +778,7 @@ export class ExtensionMediaHandleService {
       ? undefined
       : await canonicalExistingDirectory(workspaceRoot)
     let count = 0
+    const cachePaths = new Set<string>()
     await this.store.update(emptyDocument, (document) => {
       const revokedAt = this.now().toISOString()
       const handles = Object.fromEntries(Object.entries(document.handles).map(([id, record]) => {
@@ -692,25 +791,30 @@ export class ExtensionMediaHandleService {
           record.revokedAt
         ) return [id, record]
         count += 1
+        if (record.lifecycle === 'cache') cachePaths.add(record.absolutePath)
         return [id, { ...record, revokedAt }]
       }))
       return count === 0 ? document : { ...document, revision: document.revision + 1, handles }
     })
+    await deleteCachePaths(cachePaths)
     return count
   }
 
   async revokeWorkspace(workspaceRoot: string): Promise<number> {
     const canonical = await canonicalExistingDirectory(workspaceRoot)
     let count = 0
+    const cachePaths = new Set<string>()
     await this.store.update(emptyDocument, (document) => {
       const revokedAt = this.now().toISOString()
       const handles = Object.fromEntries(Object.entries(document.handles).map(([id, record]) => {
         if (record.workspaceRoot !== canonical || record.revokedAt) return [id, record]
         count += 1
+        if (record.lifecycle === 'cache') cachePaths.add(record.absolutePath)
         return [id, { ...record, revokedAt }]
       }))
       return count === 0 ? document : { ...document, revision: document.revision + 1, handles }
     })
+    await deleteCachePaths(cachePaths)
     return count
   }
 
@@ -789,10 +893,84 @@ async function authorizeWorkspace(
   return canonical
 }
 
+function assertExtensionCacheTarget(
+  principal: ExtensionPrincipal,
+  workspaceRoot: string,
+  path: string
+): string {
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u.test(principal.extensionId) ||
+    isAbsolute(path)
+  ) {
+    throw new ExtensionMediaHandleError('path_escape', 'Invalid Host-owned extension cache target')
+  }
+  const cacheRoot = resolve(workspaceRoot, '.kun', 'extension-cache', principal.extensionId)
+  const candidate = resolve(workspaceRoot, path)
+  const rel = relative(cacheRoot, candidate)
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new ExtensionMediaHandleError(
+      'path_escape',
+      'Cache target must remain inside the owning extension cache'
+    )
+  }
+  return candidate
+}
+
+async function ensureCacheParent(workspaceRoot: string, target: string): Promise<void> {
+  const parentRelative = relative(workspaceRoot, dirname(target))
+  if (
+    parentRelative === '' || parentRelative === '..' ||
+    parentRelative.startsWith(`..${sep}`) || isAbsolute(parentRelative)
+  ) {
+    throw new ExtensionMediaHandleError('path_escape', 'Cache parent escapes the workspace')
+  }
+  let current = workspaceRoot
+  for (const segment of parentRelative.split(sep).filter(Boolean)) {
+    current = join(current, segment)
+    try {
+      const info = await lstat(current)
+      if (info.isSymbolicLink() || !info.isDirectory()) {
+        throw new ExtensionMediaHandleError(
+          'path_escape',
+          'Host-owned cache directories cannot contain links or non-directories'
+        )
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      try {
+        await mkdir(current, { mode: 0o700 })
+      } catch (mkdirError) {
+        if ((mkdirError as NodeJS.ErrnoException).code !== 'EEXIST') throw mkdirError
+      }
+      const info = await lstat(current)
+      if (info.isSymbolicLink() || !info.isDirectory()) {
+        throw new ExtensionMediaHandleError(
+          'path_escape',
+          'Host-owned cache directories cannot contain links or non-directories'
+        )
+      }
+    }
+  }
+}
+
 function requirePermission(principal: ExtensionPrincipal, permission: string): void {
   if (!principal.permissions.includes(permission)) {
     throw new ExtensionMediaHandleError('permission_denied', `Missing permission: ${permission}`)
   }
+}
+
+function requireRecordAccess(
+  principal: ExtensionPrincipal,
+  record: StoredMediaHandle,
+  mode: MediaHandleMode
+): void {
+  if (mode === 'write' && record.lifecycle === 'cache') {
+    requirePermission(principal, 'media.process')
+    requirePermission(principal, 'workspace.write')
+    return
+  }
+  requirePermission(principal, mode === 'read' ? 'media.read' : 'media.export')
+  requirePermission(principal, mode === 'read' ? 'workspace.read' : 'workspace.write')
 }
 
 async function canonicalExistingDirectory(path: string): Promise<string> {
@@ -902,6 +1080,7 @@ function project(record: StoredMediaHandle): MediaHandleProjection {
     displayName: record.displayName,
     mode: record.mode,
     source: record.source,
+    lifecycle: record.lifecycle,
     mimeType: record.mimeType,
     ...(record.identity ? {
       byteSize: record.identity.size,
@@ -910,8 +1089,20 @@ function project(record: StoredMediaHandle): MediaHandleProjection {
     } : {}),
     ...(workspaceRelativePath ? { workspaceRelativePath } : {}),
     available: !record.revokedAt,
-    createdAt: record.createdAt
+    createdAt: record.createdAt,
+    lastAccessedAt: record.lastAccessedAt ?? record.createdAt
   }
+}
+
+async function deleteCachePaths(paths: ReadonlySet<string>): Promise<void> {
+  await Promise.all([...paths].map(async (path) => {
+    try {
+      await rm(path, { force: true })
+    } catch {
+      // Revocation is authoritative even if best-effort filesystem cleanup is
+      // temporarily blocked; no cache handle remains usable after this point.
+    }
+  }))
 }
 
 function completionIdentity(record: StoredMediaHandle): string {
@@ -950,6 +1141,7 @@ function inferMediaMime(path: string): string {
     case '.webp': return 'image/webp'
     case '.srt': return 'application/x-subrip'
     case '.vtt': return 'text/vtt'
+    case '.otio': return 'application/x-otio+json'
     default: return 'application/octet-stream'
   }
 }

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { generateRenderPlan, type FfmpegRenderStep } from '../src/engine/index.js'
+import { generateRenderPlan, type FfmpegRenderStep, type RenderKind } from '../src/engine/index.js'
 import { makeItem, makeProject } from './fixtures.js'
 
 const ffmpeg = process.env.FFMPEG_PATH?.trim() || 'ffmpeg'
@@ -23,7 +23,7 @@ afterEach(() => {
 })
 
 describe('render plans against the installed FFmpeg', () => {
-  ffmpegIt('executes FFmpeg 8-compatible proof, preview, and thirty-cut H.264 plans', () => {
+  ffmpegIt('technically validates aligned proof, preview, and H.264 outputs without claiming visual review', () => {
     const directory = mkdtempSync(join(tmpdir(), 'kun-video-render-plan-'))
     temporaryDirectories.push(directory)
     const source = join(directory, 'source.mp4')
@@ -52,9 +52,10 @@ describe('render plans against the installed FFmpeg', () => {
         scaleY: 0.5
       }
     }]
-    const proof = ffmpegStep(transformedProject, 'proof-frame', 15)
+    const proofPlan = renderPlan(transformedProject, 'proof-frame', 15)
+    const proof = proofPlan.steps[0] as FfmpegRenderStep
     const proofGraph = proof.args[proof.args.indexOf('-filter_complex') + 1]!
-    expect(proofGraph).toContain(':d=1.000000[base]')
+    expect(proofGraph).toContain(':d=0.533333[base]')
     const proofOutput = join(directory, 'proof.png')
     runFfmpeg(['-y', '-hide_banner', '-loglevel', 'error', ...materialize(
       proof,
@@ -63,7 +64,18 @@ describe('render plans against the installed FFmpeg', () => {
     )])
     expect(statSync(proofOutput).size).toBeGreaterThan(0)
 
-    const transformed = ffmpegStep(transformedProject, 'preview')
+    const previewPlan = renderPlan(transformedProject, 'preview')
+    const finalPlan = renderPlan(transformedProject, 'h264-mp4')
+    expect(previewPlan.renderIrDigest).toBe(finalPlan.renderIrDigest)
+    expect(previewPlan.backendCapabilitiesDigest).toBe(finalPlan.backendCapabilitiesDigest)
+    expect(previewPlan.renderIr).toEqual(finalPlan.renderIr)
+    expect(proofPlan.renderIr.layers[0]!.visual).toEqual(previewPlan.renderIr.layers[0]!.visual)
+    expect([proofPlan, previewPlan, finalPlan].map(({ verification }) => verification)).toEqual([
+      { technicalValidation: 'pending', visualInspection: 'not-performed' },
+      { technicalValidation: 'pending', visualInspection: 'not-performed' },
+      { technicalValidation: 'pending', visualInspection: 'not-performed' }
+    ])
+    const transformed = previewPlan.steps[0] as FfmpegRenderStep
     const transformedGraph = transformed.args[transformed.args.indexOf('-filter_complex') + 1]!
     expect(transformedGraph).toContain(':d=1.000000[base]')
     const transformedOutput = join(directory, 'transformed.mp4')
@@ -74,6 +86,15 @@ describe('render plans against the installed FFmpeg', () => {
     )])
     expect(statSync(transformedOutput).size).toBeGreaterThan(0)
     expect(probeDurationSeconds(transformedOutput)).toBeGreaterThan(0.8)
+
+    const finalOutput = join(directory, 'transformed-final.mp4')
+    runFfmpeg(['-y', '-hide_banner', '-loglevel', 'error', ...materialize(
+      finalPlan.steps[0] as FfmpegRenderStep,
+      source,
+      finalOutput
+    )])
+    expect(statSync(finalOutput).size).toBeGreaterThan(0)
+    expect(probeDurationSeconds(finalOutput)).toBeGreaterThan(0.8)
 
     const cutsProject = makeProject()
     cutsProject.captions = []
@@ -105,6 +126,10 @@ describe('render plans against the installed FFmpeg', () => {
     ])
     runFfmpeg([
       '-nostdin', '-hide_banner', '-loglevel', 'error',
+      '-i', finalOutput, '-f', 'null', '-'
+    ])
+    runFfmpeg([
+      '-nostdin', '-hide_banner', '-loglevel', 'error',
       '-i', cutsOutput, '-f', 'null', '-'
     ])
   }, 150_000)
@@ -115,12 +140,20 @@ function ffmpegStep(
   kind: 'proof-frame' | 'preview' | 'h264-mp4',
   proofFrame?: number
 ): FfmpegRenderStep {
+  return renderPlan(project, kind, proofFrame).steps[0] as FfmpegRenderStep
+}
+
+function renderPlan(
+  project: ReturnType<typeof makeProject>,
+  kind: Extract<RenderKind, 'proof-frame' | 'preview' | 'h264-mp4'>,
+  proofFrame?: number
+): ReturnType<typeof generateRenderPlan> {
   return generateRenderPlan(project, {
     kind,
     expectedRevision: project.currentRevision,
     outputHandleId: 'render-output',
     ...(proofFrame === undefined ? {} : { proofFrame })
-  }).steps[0] as FfmpegRenderStep
+  })
 }
 
 function materialize(step: FfmpegRenderStep, source: string, output: string): string[] {

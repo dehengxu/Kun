@@ -352,6 +352,122 @@ describe('extension IPC security bridge', () => {
     )
   })
 
+  it('attaches bounded View context through the owning workbench with Host provenance', async () => {
+    const state = fixture()
+    const workspaceRoot = '/tmp/workspace'
+    const record = state.viewSessions.create({
+      sessionId: 'view_12345678-1234-1234-1234-123456789abc',
+      runtimeSessionId: 'view_12345678-1234-1234-1234-123456789abc',
+      nonce: 'n'.repeat(43),
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      contributionId: 'extension:acme.example/issues',
+      workspaceRoot,
+      entryPath: 'dist/index.html',
+      parentWebContentsId: 1
+    })
+    state.viewSessions.prepareAttach(1, record.sourceUrl)
+    const mainFrame = { processId: 300, routingId: 400 }
+    const guest = { id: 20, mainFrame, once: vi.fn() }
+    state.viewSessions.bindNextGuest(1, guest as never)
+    state.descriptors.resolveView.mockResolvedValue({
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      contributionId: 'issues',
+      grantedPermissions: ['webview', 'ui.views', 'ui.actions'],
+      enabled: true,
+      workspaceTrusted: true
+    })
+
+    const response = await electronMock.handlers.get('extension:view:request')!(
+      { sender: guest, senderFrame: mainFrame },
+      {
+        sessionId: record.sessionId,
+        sessionNonce: record.nonce,
+        requestId: 'request-attach-context',
+        method: 'ui.attachComposerContext',
+        params: {
+          schemaVersion: 1,
+          id: 'video-selection',
+          title: 'Interview selection',
+          summary: 'Revision 4, two preview sources',
+          reference: { projectId: 'project-1', selectedItemIds: ['clip-1'] },
+          revision: 4,
+          generation: 7
+        }
+      }
+    )
+
+    const workspaceId = createHash('sha256').update(workspaceRoot).digest('hex')
+    expect(response).toMatchObject({
+      schemaVersion: 1,
+      title: 'Interview selection',
+      provenance: {
+        extensionId: 'acme.example',
+        extensionVersion: '1.0.0',
+        viewContributionId: 'extension:acme.example/issues',
+        workspaceId
+      }
+    })
+    expect(response).toMatchObject({ attachmentId: expect.stringMatching(/^extension-context:[a-f0-9]{64}$/) })
+    expect(JSON.stringify(response)).not.toContain(workspaceRoot)
+    expect(state.mainContents.send).toHaveBeenCalledWith(
+      'extension:composer-context-attached',
+      expect.objectContaining({ workspaceRoot, attachment: response })
+    )
+    expect(state.runtimeRequest).not.toHaveBeenCalled()
+  })
+
+  it('denies composer context attachment without ui.actions or from a stale frame', async () => {
+    const state = fixture()
+    const record = state.viewSessions.create({
+      sessionId: 'view_12345678-1234-1234-1234-123456789abc',
+      nonce: 'n'.repeat(43),
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      contributionId: 'extension:acme.example/issues',
+      entryPath: 'dist/index.html',
+      parentWebContentsId: 1
+    })
+    state.viewSessions.prepareAttach(1, record.sourceUrl)
+    const mainFrame = { processId: 300, routingId: 400 }
+    const guest = { id: 20, mainFrame, once: vi.fn() }
+    state.viewSessions.bindNextGuest(1, guest as never)
+    state.descriptors.resolveView.mockResolvedValue({
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      contributionId: 'issues',
+      grantedPermissions: ['webview', 'ui.views'],
+      enabled: true,
+      workspaceTrusted: true
+    })
+    const payload = {
+      sessionId: record.sessionId,
+      sessionNonce: record.nonce,
+      requestId: 'request-attach-context',
+      method: 'ui.attachComposerContext',
+      params: {
+        schemaVersion: 1,
+        id: 'selection',
+        title: 'Selection',
+        summary: 'One selected clip',
+        reference: { selectedItemIds: ['clip-1'] },
+        revision: 1,
+        generation: 1
+      }
+    }
+
+    await expect(electronMock.handlers.get('extension:view:request')!(
+      { sender: guest, senderFrame: mainFrame },
+      payload
+    )).rejects.toThrow(/permission is not granted/i)
+    await expect(electronMock.handlers.get('extension:view:request')!(
+      { sender: guest, senderFrame: { processId: 999, routingId: 999 } },
+      payload
+    )).rejects.toThrow(/current guest main frame/i)
+    expect(state.mainContents.send).not.toHaveBeenCalled()
+  })
+
   it('keeps protected media paths and one-time operation tokens in Main while returning opaque handles', async () => {
     const state = fixture()
     const record = state.viewSessions.create({
@@ -1584,6 +1700,58 @@ describe('extension IPC security bridge', () => {
       '/v1/extensions/view-sessions/view_12345678-1234-1234-1234-123456789abc',
       'DELETE'
     ))
+  })
+
+  it('clears Host crash state before an explicit View retry without forwarding the recovery flag', async () => {
+    const state = fixture()
+    state.descriptors.resolveView.mockResolvedValue({
+      extensionId: 'acme.example',
+      extensionVersion: '1.0.0',
+      packageRoot: '/extensions/acme.example/1.0.0',
+      entry: 'dist/index.html',
+      localResourceRoots: ['dist/assets']
+    })
+    state.runtimeRequest.mockImplementation(async (path: string, method?: string) => {
+      if (path === '/v1/extensions/acme.example/retry' && method === 'POST') {
+        return { ok: true, status: 200, body: '{}' }
+      }
+      if (path === '/v1/extensions/view-sessions' && method === 'POST') {
+        return {
+          ok: true,
+          status: 201,
+          body: JSON.stringify({
+            sessionId: 'view_12345678-1234-1234-1234-123456789abc',
+            nonce: 'n'.repeat(43),
+            extensionId: 'acme.example',
+            extensionVersion: '1.0.0',
+            contributionId: 'extension:acme.example/issues'
+          })
+        }
+      }
+      return { ok: true, status: 200, body: '{}' }
+    })
+
+    await electronMock.handlers.get('extension:view-session:create')!(state.trustedEvent, {
+      contributionId: 'extension:acme.example/issues',
+      workspaceRoot: '/workspace',
+      retryHost: true
+    })
+
+    expect(state.runtimeRequest).toHaveBeenCalledWith(
+      '/v1/extensions/acme.example/retry',
+      'POST'
+    )
+    expect(state.runtimeRequest).toHaveBeenCalledWith(
+      '/v1/extensions/view-sessions',
+      'POST',
+      JSON.stringify({
+        contributionId: 'extension:acme.example/issues',
+        workspaceRoot: '/workspace'
+      })
+    )
+    expect(state.runtimeRequest.mock.invocationCallOrder[1]).toBeLessThan(
+      state.runtimeRequest.mock.invocationCallOrder[2]!
+    )
   })
 
   it('binds cleanup to a Main window created after IPC registration', () => {

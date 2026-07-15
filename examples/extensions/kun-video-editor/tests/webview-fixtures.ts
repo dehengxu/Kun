@@ -11,8 +11,35 @@ export function makeViewProject(): ProjectProjection {
     fps: project.fps,
     canvas: project.canvas,
     currentRevision: project.currentRevision,
+    eventGeneration: project.eventGeneration,
+    activeSequenceId: project.activeSequenceId,
+    selection: project.selection,
     updatedAt: project.updatedAt,
     durationFrames: 180,
+    playback: {
+      mode: 'source-fast-path',
+      projectId: project.id,
+      sequenceId: project.activeSequenceId,
+      revision: project.currentRevision,
+      irDigest: '0'.repeat(64),
+      sourceAssetId: project.assets[0]!.id,
+      reasons: []
+    },
+    sequences: project.sequences.map((sequence) => ({
+      id: sequence.id,
+      name: sequence.name,
+      durationFrames: Math.max(
+        0,
+        ...sequence.items.map((item) => item.timelineStartFrame + item.durationFrames),
+        ...sequence.captions.map((caption) => caption.endFrame)
+      ),
+      itemCount: sequence.items.length,
+      captionCount: sequence.captions.length,
+      viewState: sequence.viewState
+    })),
+    mediaFolders: project.mediaFolders ?? [],
+    linkGroups: project.linkGroups,
+    multicamGroups: project.multicamGroups ?? [],
     assets: project.assets,
     tracks: project.tracks,
     items: project.items,

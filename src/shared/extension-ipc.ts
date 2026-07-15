@@ -1,4 +1,5 @@
 import type {
+  ComposerContextAttachment,
   HostContentScriptContext,
   HostContentScriptDiagnostic,
   JsonValue
@@ -130,6 +131,8 @@ export type ExtensionCommandInvocationRequest = {
 export type ExtensionViewSessionCreateRequest = {
   contributionId: string
   workspaceRoot?: string
+  /** Explicit user recovery after a Host crash/backoff/circuit failure. */
+  retryHost?: boolean
 }
 
 export type ExtensionViewSessionDescriptor = {
@@ -160,6 +163,13 @@ export type ExtensionViewEventPayload = {
   sessionId: string
   cursor?: number
   events: unknown[]
+}
+
+/** Main-authenticated handoff from an isolated extension View to the composer. */
+export type ExtensionComposerContextEvent = {
+  /** Host-only scope fence; never forwarded to Kun as model-visible context. */
+  workspaceRoot?: string
+  attachment: ComposerContextAttachment
 }
 
 export type ExtensionWorkbenchNotification = {
@@ -393,6 +403,9 @@ export type ExtensionIpcApi = {
   ) => Promise<ExtensionRuntimeRequestResult>
   onExtensionViewEvent: (
     handler: (payload: ExtensionViewEventPayload) => void
+  ) => () => void
+  onExtensionComposerContext: (
+    handler: (payload: ExtensionComposerContextEvent) => void
   ) => () => void
   onExtensionNotifications: (
     handler: (payload: ExtensionNotificationSnapshot) => void

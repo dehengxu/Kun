@@ -12,11 +12,13 @@ const {
   resolveHostMediaExecutable
 } = require('./lib/extension-native-media-smoke.cjs')
 const {
+  EXPECTED_TOOL_IDS,
   SUCCESS_MARKER,
   assertContent,
   assertCompletedArtifacts,
   assertH264Probe,
   assertPackagedReexecResult,
+  assertRegisteredToolIds,
   assertReleaseArchive,
   assertSrtSidecar,
   createNpmInvocation,
@@ -32,6 +34,22 @@ const PACKAGED_COMMAND = 'npm run smoke:packaged-video-editor-native'
 const NATIVE_BROKER_COMMAND = 'npm run smoke:extension-native-media'
 const EVIDENCE_COMMAND = 'npm run evidence:extension-native'
 const VIDEO_EDITOR_PACK_COMMAND = 'npm run pack:kun-video-editor'
+
+test('requires the complete packaged P0-P2 video tool surface', () => {
+  const registrations = EXPECTED_TOOL_IDS.map((name) => ({ declaration: { name } }))
+  assert.doesNotThrow(() => assertRegisteredToolIds(registrations))
+  assert.throws(
+    () => assertRegisteredToolIds(registrations.slice(1)),
+    /missing: video-project/
+  )
+  assert.throws(
+    () => assertRegisteredToolIds([
+      ...registrations.slice(1),
+      { declaration: { name: 'video-unknown' } }
+    ]),
+    /unexpected: video-unknown/
+  )
+})
 
 test('keeps burned captions strict by default and allows an explicit sidecar fallback', () => {
   assert.equal(parseCaptionMode(undefined), 'both')
@@ -228,7 +246,7 @@ test('requires exactly one video and one ordered deterministic SRT artifact', as
 test('accepts only the exact non-empty release archive for byte-identical lifecycle smoke', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kun-native-release-archive-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const archive = join(directory, 'kun-video-editor-0.3.0.kunx')
+  const archive = join(directory, 'kun-video-editor-0.4.1.kunx')
   await writeFile(archive, 'release archive bytes')
   assert.doesNotThrow(() => assertReleaseArchive(archive))
   const wrong = join(directory, 'kun-video-editor-9.9.9.kunx')
@@ -324,7 +342,7 @@ test('PR, release, and daily jobs run both native media smokes before evidence',
         assert.ok(packIndex < packagedIndex, `${label}/${jobId} smokes before packing release .kunx`)
         assert.match(
           commands[packagedIndex],
-          /--archive dist\/kun-video-editor-0\.3\.0\.kunx/u,
+          /--archive dist\/kun-video-editor-0\.4\.0\.kunx/u,
           `${label}/${jobId} does not smoke the uploaded release .kunx bytes`
         )
       }

@@ -25,11 +25,11 @@ test('resolves only the catalogued bundled video editor archive or an explicit .
   t.after(() => rm(root, { recursive: true, force: true }))
   const bundled = join(root, 'bundled-extensions')
   await mkdir(bundled, { recursive: true })
-  const archive = join(bundled, 'kun-video-editor-0.3.0.kunx')
+  const archive = join(bundled, 'kun-video-editor-0.4.1.kunx')
   await writeFile(archive, 'archive bytes')
   await writeFile(join(bundled, 'catalog.json'), `${JSON.stringify({
     schemaVersion: 1,
-    extensions: [{ id: EXTENSION_ID, archive: 'kun-video-editor-0.3.0.kunx' }]
+    extensions: [{ id: EXTENSION_ID, archive: 'kun-video-editor-0.4.1.kunx' }]
   })}\n`)
 
   assert.equal(await resolveVideoEditorArchive(root), archive)
@@ -88,12 +88,9 @@ test('does not toggle a persisted right-rail View closed while its guest is rest
   assert.equal(shouldClickRightRailContribution(null), true)
 })
 
-test('requires the first locked-rail prompt to expose localized permissions and host risks', () => {
+test('requires the first locked-rail protected prompt to expose localized permissions and host risks', () => {
   const workspaceRoot = '/isolated/workspace'
   const detail = [
-    `扩展: ${EXTENSION_ID} ${EXTENSION_VERSION}`,
-    '操作: extension.permissions',
-    `工作区: ${workspaceRoot}`,
     '此次权限变更仅适用于所选工作区。',
     '变更后的 Broker 权限：',
     ...VIDEO_EDITOR_PERMISSIONS.map((permission) => `• ${permission}`),
@@ -108,34 +105,54 @@ test('requires the first locked-rail prompt to expose localized permissions and 
     '扩展 Node Host 本身并不是操作系统沙箱。'
   ].join('\n')
   const prompt = {
-    kind: 'message',
-    type: 'warning',
     title: '更改扩展权限',
+    heading: '更改扩展权限',
     message: `要更改 ${EXTENSION_ID} ${EXTENSION_VERSION} 的权限吗？`,
     detail,
-    buttons: ['继续', '取消'],
-    defaultId: 1,
-    cancelId: 1,
-    noLink: true,
-    normalizeAccessKeys: true,
-    matchesPermissionPrompt: true,
-    response: 0
+    meta: {
+      扩展: `${EXTENSION_ID} ${EXTENSION_VERSION}`,
+      操作: 'extension.permissions',
+      工作区: workspaceRoot
+    },
+    approveLabel: '同意更改',
+    cancelLabel: '取消',
+    approveVisible: true,
+    cancelVisible: true,
+    scrollOverflowY: 'auto',
+    scrollClientHeight: 480,
+    scrollHeight: 760,
+    scrollTop: 100,
+    scrollBottom: 580,
+    footerTop: 580,
+    footerBottom: 640,
+    viewportHeight: 640
   }
 
   assert.equal(
-    assertLocalizedFirstLaunchPermissionPrompt([prompt], { workspaceRoot }),
+    assertLocalizedFirstLaunchPermissionPrompt(prompt, { workspaceRoot }),
     prompt
   )
   assert.throws(
-    () => assertLocalizedFirstLaunchPermissionPrompt([{
+    () => assertLocalizedFirstLaunchPermissionPrompt({
       ...prompt,
       detail: detail.replace('扩展 Node Host 本身并不是操作系统沙箱。', '')
-    }], { workspaceRoot }),
+    }, { workspaceRoot }),
     /并不是操作系统沙箱/
   )
   assert.throws(
-    () => assertLocalizedFirstLaunchPermissionPrompt([{ ...prompt, response: 1 }], { workspaceRoot }),
-    /response mismatch/
+    () => assertLocalizedFirstLaunchPermissionPrompt({
+      ...prompt,
+      meta: { ...prompt.meta, 操作: 'extension.install' }
+    }, { workspaceRoot }),
+    /metadata mismatch/
+  )
+  assert.throws(
+    () => assertLocalizedFirstLaunchPermissionPrompt({ ...prompt, approveVisible: false }, { workspaceRoot }),
+    /approveVisible mismatch/
+  )
+  assert.throws(
+    () => assertLocalizedFirstLaunchPermissionPrompt({ ...prompt, footerBottom: 642 }, { workspaceRoot }),
+    /outside the visible protected window/
   )
 })
 
@@ -150,7 +167,6 @@ test('source smoke covers the real right-sidebar desktop workflow and actionable
     'electronApplication.evaluate',
     'dialog.showOpenDialog',
     'dialog.showSaveDialog',
-    'dialog.showMessageBox',
     'webContents.getAllWebContents',
     'data-contribution-id',
     "data-extension-trusted')",
@@ -158,7 +174,13 @@ test('source smoke covers the real right-sidebar desktop workflow and actionable
     'shouldClickRightRailContribution(pressedState)',
     "'审核权限后打开'",
     "'更改扩展权限'",
-    "'操作: extension.permissions'",
+    "操作: 'extension.permissions'",
+    "window.locator('#consent-approve')",
+    "window.locator('#consent-cancel')",
+    "permissionPromptWindow.locator('#consent-approve').click()",
+    "document.querySelectorAll('.meta-row')",
+    'scrollOverflowY',
+    'footerBottom',
     "'变更后的 Broker 权限：'",
     "'扩展 Node Host 本身并不是操作系统沙箱。'",
     "'新建项目'",
@@ -181,6 +203,7 @@ test('source smoke covers the real right-sidebar desktop workflow and actionable
     'jobStates.includes(\'completed\')'
   ]) assert.ok(source.includes(marker), `desktop video E2E omits source marker: ${marker}`)
   assert.doesNotMatch(source, /grantVideoEditorWorkspaceTrust/u)
+  assert.doesNotMatch(source, /queues\.permissionPrompt|matchesPermissionPrompt/u)
   assert.doesNotMatch(source, /['"]--no-sandbox['"]/u)
   assert.doesNotMatch(source, /https?:\/\/(?!127\.0\.0\.1|invalid\.example)/u)
 })

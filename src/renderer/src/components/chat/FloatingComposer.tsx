@@ -25,6 +25,7 @@ import {
   PauseCircle,
   Pencil,
   Plus,
+  Puzzle,
   PlayCircle,
   SearchCode,
   Send,
@@ -1465,7 +1466,9 @@ export function FloatingComposer({
             <div className="flex flex-wrap items-center gap-2 px-1">
               {contextChips.map((chip) => {
                 const Icon =
-                  chip.kind === 'design-target' || chip.kind === 'canvas-selection'
+                  chip.kind === 'extension-context'
+                    ? Puzzle
+                    : chip.kind === 'design-target' || chip.kind === 'canvas-selection'
                     ? Target
                     : chip.kind === 'html-element'
                       ? TypeIcon

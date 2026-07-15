@@ -1,4 +1,7 @@
 import { GUI_PLAN_CREATE_PLAN_TOOL_NAME } from '@shared/gui-plan'
+import type { ComposerContextAttachment } from '@kun/extension-api'
+
+export type CoreComposerContextAttachmentJson = ComposerContextAttachment
 
 export type CoreThreadStatus = 'idle' | 'running' | 'archived' | 'deleted'
 export type CoreTurnStatus = 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
@@ -427,6 +430,7 @@ export type CoreTurnJson = {
   finishedAt?: string
   items?: CoreTurnItemJson[]
   attachmentIds?: string[]
+  composerContexts?: CoreComposerContextAttachmentJson[]
   activeSkillIds?: string[]
   injectedMemoryIds?: string[]
   injectedMemorySummaries?: Array<{ id: string; content: string }>
@@ -490,6 +494,7 @@ export type CoreTurnItemJson = {
   details?: unknown
   severity?: 'info' | 'warning' | 'error'
   attachmentIds?: string[]
+  composerContexts?: CoreComposerContextAttachmentJson[]
   fileReferences?: CoreUserFileReferenceJson[]
   workspaceCheckpointId?: string
   activeSkillIds?: string[]

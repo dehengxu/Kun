@@ -119,8 +119,14 @@ export function ExtensionWebview({
     let opened: ExtensionViewSession | null = null
     setSession(null)
     setFailure(null)
-    void extensionWorkbenchClient
-      .createViewSession(contributionId, normalizedWorkspaceRoot)
+    const opening = attempt > 0
+      ? extensionWorkbenchClient.createViewSession(
+          contributionId,
+          normalizedWorkspaceRoot,
+          { retryHost: true }
+        )
+      : extensionWorkbenchClient.createViewSession(contributionId, normalizedWorkspaceRoot)
+    void opening
       .then((next) => {
         if (disposed) {
           void extensionWorkbenchClient.disposeViewSession(next.sessionId)
@@ -229,7 +235,7 @@ export function ExtensionWebview({
           webpreferences="contextIsolation=yes,nodeIntegration=no,sandbox=yes"
           data-extension-view-session={session.sessionId}
           data-contribution-id={session.contributionId}
-          className="block min-h-0 flex-1 bg-white"
+          className="flex min-h-0 w-full flex-1 bg-white"
         />
       ) : (
         <div role="status" className="flex min-h-0 flex-1 items-center justify-center text-[12px] text-ds-muted">

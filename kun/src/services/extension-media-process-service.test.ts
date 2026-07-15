@@ -9,6 +9,7 @@ import {
   EXTENSION_MEDIA_INPUT_PROTOCOL_WHITELIST,
   ExtensionMediaProcessError,
   ExtensionMediaProcessService,
+  detectBeatGridFromPcm,
   defaultMediaDiscoveryDirectories
 } from './extension-media-process-service.js'
 
@@ -88,8 +89,9 @@ describe('ExtensionMediaProcessService', () => {
     const test = await fixture(`
       const args = process.argv.slice(2)
       if (args.includes('-version')) process.stdout.write('ffmpeg version 8.0-test\\n')
-      else if (args.includes('-encoders')) process.stdout.write(' V..... libx264 H.264\\n A..... aac AAC\\n V..... dangerous_extra ignored\\n')
-      else if (args.includes('-filters')) process.stdout.write(' T.. drawtext V->V\\n ..S subtitles V->V\\n ... arbitrary ignored\\n')
+      else if (args.includes('-encoders')) process.stdout.write(' V..... libx264 H.264\\n V..... libx265 HEVC\\n V..... prores_ks ProRes\\n V..... ffv1 FFV1\\n A..... aac AAC\\n A..... flac FLAC\\n A..... pcm_s24le PCM\\n V..... dangerous_extra ignored\\n')
+      else if (args.includes('-filters')) process.stdout.write(' T.. drawtext V->V\\n ..S subtitles V->V\\n T.. eq V->V\\n T.. colorbalance V->V\\n T.. boxblur V->V\\n T.. unsharp V->V\\n T.. vignette V->V\\n ... arbitrary ignored\\n')
+      else if (args.includes('-muxers')) process.stdout.write('  E mp4 MP4\\n  E mov MOV\\n  E matroska Matroska\\n  E dangerous ignored\\n')
     `)
     const service = new ExtensionMediaProcessService({
       handleService: test.handles,
@@ -103,9 +105,22 @@ describe('ExtensionMediaProcessService', () => {
         version: '8.0-test',
         features: [
           'libx264-encoder',
+          'libx265-encoder',
+          'prores-ks-encoder',
+          'ffv1-encoder',
           'aac-encoder',
+          'flac-encoder',
+          'pcm-s24-encoder',
           'drawtext-filter',
-          'subtitles-filter'
+          'subtitles-filter',
+          'eq-filter',
+          'colorbalance-filter',
+          'boxblur-filter',
+          'unsharp-filter',
+          'vignette-filter',
+          'mp4-muxer',
+          'mov-muxer',
+          'matroska-muxer'
         ]
       }
     })
@@ -304,6 +319,143 @@ process.stdout.write(${JSON.stringify(JSON.stringify(payload))})`
     const pending = service.probe(test.principal, test.handle.id, { signal: controller.signal })
     setTimeout(() => controller.abort(), 25)
     await expect(pending).rejects.toMatchObject({ code: 'process_cancelled' })
+  })
+
+  it('negotiates verified silence plus Host-owned PCM sync and beat-analysis primitives', async () => {
+    const test = await fixture(`
+      const args = process.argv.slice(2)
+      if (args.includes('-version')) process.stdout.write('ffmpeg version 8.0-audio-analysis\\n')
+      else if (args.includes('-encoders')) process.stdout.write(' A..... pcm_s16le PCM\\n')
+      else if (args.includes('-filters')) process.stdout.write(' ... silencedetect A->A\\n')
+      else if (args.includes('-muxers')) process.stdout.write('  E s16le raw PCM\\n')
+    `)
+    const service = new ExtensionMediaProcessService({
+      handleService: test.handles,
+      ffprobePath: test.bin,
+      ffmpegPath: test.bin,
+      pathEnv: process.env.PATH
+    })
+    await expect(service.audioAnalysisCapabilities(test.principal)).resolves.toMatchObject({
+      silence: true,
+      syncFeatures: true,
+      beatGrid: true
+    })
+  })
+
+  it('runs fixed path-opaque silence, beat-grid, and bounded sync-feature analysis profiles', async () => {
+    const probePayload = {
+      format: { format_name: 'wav', duration: '16.000' },
+      streams: [{
+        index: 0,
+        codec_type: 'audio',
+        codec_name: 'pcm_s16le',
+        duration: '16.000',
+        sample_rate: '48000',
+        channels: 1,
+        disposition: { default: 1, forced: 0 }
+      }]
+    }
+    const script = `
+const args = process.argv.slice(2)
+if (args.includes('-version')) process.stdout.write('ffmpeg version 8.0-analysis-fixture\\n')
+else if (args.includes('-encoders') || args.includes('-filters') || args.includes('-muxers')) process.stdout.write('')
+else if (args.includes('-show_format')) process.stdout.write(${JSON.stringify(JSON.stringify(probePayload))})
+else if (args.some((value) => value.startsWith('silencedetect='))) {
+  process.stderr.write('[silencedetect @ fixture] silence_start: 0.100000\\n')
+  process.stderr.write('[silencedetect @ fixture] silence_end: 0.600000 | silence_duration: 0.500000\\n')
+  process.stderr.write('[silencedetect @ fixture] silence_start: 1.500000\\n')
+} else if (args.includes('pcm_s16le')) {
+  const rateIndex = args.indexOf('-ar')
+  const rate = Number(args[rateIndex + 1])
+  if (rate === 200) {
+    const samples = Buffer.alloc(3200 * 2)
+    for (let beat = 0; beat < 32; beat += 1) {
+      const amplitude = beat % 4 === 0 ? 30000 : 18000
+      const start = beat * 100
+      for (let index = start; index < start + 10; index += 1) {
+        samples.writeInt16LE(index % 2 === 0 ? amplitude : -amplitude, index * 2)
+      }
+    }
+    process.stdout.write(samples)
+  } else {
+    const samples = Buffer.alloc(2000 * 2)
+    for (let index = 0; index < 2000; index += 1) {
+      const window = Math.floor(index / 100)
+      const amplitude = 500 + ((window * 7919) % 12000)
+      samples.writeInt16LE(index % 2 === 0 ? amplitude : -amplitude, index * 2)
+    }
+    process.stdout.write(samples)
+  }
+} else process.exit(23)
+`
+    const test = await fixture(script)
+    const service = new ExtensionMediaProcessService({
+      handleService: test.handles,
+      ffprobePath: test.bin,
+      ffmpegPath: test.bin,
+      pathEnv: process.env.PATH
+    })
+    const silence = await service.analyzeSilenceForCore(test.principal, test.handle.id, {
+      noiseThresholdDb: -35,
+      minimumSilenceMicros: 300_000,
+      maxIntervals: 10
+    })
+    expect(silence).toMatchObject({
+      intervals: [
+        {
+          startMicros: 100_000,
+          endMicros: 600_000,
+          confidence: 1,
+          confidenceSemantics: 'threshold-classification'
+        },
+        { startMicros: 1_500_000, endMicros: 16_000_000 }
+      ],
+      analyzedDurationMicros: 16_000_000,
+      truncated: false
+    })
+    const sync = await service.extractSyncFeaturesForCore(test.principal, test.handle.id, {
+      samplePeriodMicros: 100_000,
+      maximumDurationMicros: 2_000_000,
+      maxFeaturePoints: 20
+    })
+    expect(sync.features).toHaveLength(20)
+    expect(sync.features.some((value) => value < 0)).toBe(true)
+    expect(sync.features.some((value) => value > 0)).toBe(true)
+    expect(sync).toMatchObject({
+      source: {
+        handleId: test.handle.id,
+        fingerprintAlgorithm: 'sha256-file-identity-v1'
+      },
+      analyzedDurationMicros: 2_000_000,
+      truncated: true
+    })
+    expect(sync.source.fingerprint).toMatch(/^[a-f0-9]{64}$/u)
+    const beats = await service.analyzeBeatGridForCore(test.principal, test.handle.id, {
+      maxMarkers: 20
+    })
+    expect(beats).toMatchObject({
+      tempoBpm: 120,
+      analyzedDurationMicros: 16_000_000,
+      truncated: true,
+      source: {
+        handleId: test.handle.id,
+        fingerprintAlgorithm: 'sha256-file-identity-v1'
+      }
+    })
+    expect(beats.markers).toHaveLength(20)
+    expect(beats.markers.some(({ kind }) => kind === 'downbeat')).toBe(true)
+    expect(beats.markers.every(({ confidence }) => confidence >= 0.65)).toBe(true)
+    expect(JSON.stringify({ silence, sync, beats })).not.toContain(test.workspace)
+  })
+
+  it('returns no beat markers for ambiguous constant PCM instead of fabricating a grid', () => {
+    const pcm = Buffer.alloc(10_000 * 2)
+    for (let index = 0; index < 10_000; index += 1) pcm.writeInt16LE(2_000, index * 2)
+    expect(detectBeatGridFromPcm(pcm, 100)).toMatchObject({
+      markers: [],
+      analyzedDurationMicros: 50_000_000,
+      truncated: false
+    })
   })
 
   it('terminates the supervised descendant process tree on cancellation', async () => {

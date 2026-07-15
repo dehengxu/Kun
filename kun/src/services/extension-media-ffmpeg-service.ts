@@ -63,6 +63,8 @@ const SAFE_VALUE_OPTION_BASES = new Set([
   '-c',
   '-channel_layout',
   '-codec',
+  '-coder',
+  '-context',
   '-crf',
   '-disposition',
   '-filter_complex_threads',
@@ -138,6 +140,7 @@ const SAFE_FILTERS = new Set([
   'concat',
   'crop',
   'drawtext',
+  'eq',
   'fade',
   'format',
   'fps',
@@ -152,9 +155,14 @@ const SAFE_FILTERS = new Set([
   'setsar',
   'settb',
   'showwavespic',
+  'tile',
   'transpose',
   'trim',
-  'volume'
+  'volume',
+  'boxblur',
+  'colorbalance',
+  'unsharp',
+  'vignette'
 ])
 const SAFE_DRAWTEXT_OPTIONS = new Set([
   'alpha',
@@ -182,9 +190,11 @@ const SAFE_DRAWTEXT_OPTIONS = new Set([
 ])
 const SAFE_TEXT_OUTPUT_MIME_TYPES = new Set([
   'application/x-subrip',
+  'application/x-otio+json',
   'text/vtt'
 ])
-const MAX_TEXT_OUTPUT_BYTES = 192 * 1024
+const MAX_SUBTITLE_TEXT_OUTPUT_BYTES = 192 * 1024
+const MAX_TEXT_OUTPUT_BYTES = 2 * 1024 * 1024
 
 export type ExtensionFfmpegRequest = {
   arguments: string[]
@@ -192,7 +202,7 @@ export type ExtensionFfmpegRequest = {
   outputs: Record<string, string>
   textOutputs?: Record<string, {
     handleId: string
-    mimeType: 'application/x-subrip' | 'text/vtt'
+    mimeType: 'application/x-subrip' | 'application/x-otio+json' | 'text/vtt'
     content: string
   }>
 }
@@ -926,7 +936,7 @@ function validateTextOutputs(
 ): Array<{
     name: string
     handleId: string
-    mimeType: 'application/x-subrip' | 'text/vtt'
+    mimeType: 'application/x-subrip' | 'application/x-otio+json' | 'text/vtt'
     content: string
   }> {
   if (bindings === undefined) return []
@@ -951,6 +961,12 @@ function validateTextOutputs(
     if (bytes < 1 || bytes > MAX_TEXT_OUTPUT_BYTES || totalBytes > MAX_TEXT_OUTPUT_BYTES) {
       throw invalidArgument('FFmpeg text outputs exceed their UTF-8 byte limit')
     }
+    if (binding.mimeType !== 'application/x-otio+json' && bytes > MAX_SUBTITLE_TEXT_OUTPUT_BYTES) {
+      throw invalidArgument('FFmpeg subtitle text output exceeds its UTF-8 byte limit')
+    }
+    if (binding.mimeType === 'application/x-otio+json') {
+      validateOpenTimelineIoJson(binding.content)
+    }
     return {
       name,
       handleId: binding.handleId,
@@ -958,6 +974,45 @@ function validateTextOutputs(
       content: binding.content
     }
   })
+}
+
+function validateOpenTimelineIoJson(content: string): void {
+  let root: unknown
+  try {
+    root = JSON.parse(content)
+  } catch {
+    throw invalidArgument('OpenTimelineIO text output is not valid JSON')
+  }
+  if (!root || typeof root !== 'object' || Array.isArray(root)) {
+    throw invalidArgument('OpenTimelineIO text output root must be an object')
+  }
+  const schema = (root as Record<string, unknown>).OTIO_SCHEMA
+  if (schema !== 'SerializableCollection.1' && schema !== 'Timeline.1') {
+    throw invalidArgument('OpenTimelineIO text output root schema is unsupported')
+  }
+  const pending: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }]
+  let nodes = 0
+  while (pending.length > 0) {
+    const current = pending.pop()!
+    nodes += 1
+    if (nodes > 100_000 || current.depth > 64) {
+      throw invalidArgument('OpenTimelineIO text output structure exceeds its bound')
+    }
+    if (Array.isArray(current.value)) {
+      for (const child of current.value) pending.push({ value: child, depth: current.depth + 1 })
+      continue
+    }
+    if (!current.value || typeof current.value !== 'object') continue
+    for (const [key, child] of Object.entries(current.value as Record<string, unknown>)) {
+      if (key === 'target_url' && (
+        typeof child !== 'string' ||
+        !/^kun-media:\/\/[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/u.test(child)
+      )) {
+        throw invalidArgument('OpenTimelineIO media references must use opaque kun-media URLs')
+      }
+      pending.push({ value: child, depth: current.depth + 1 })
+    }
+  }
 }
 
 function recoveryOutputHandleIds(

@@ -43,6 +43,11 @@ import type {
   CoreReviewTargetJson,
   CoreUsageSnapshotJson
 } from './kun-contract'
+import {
+  ComposerContextAttachmentSchema,
+  MAX_COMPOSER_CONTEXT_ATTACHMENTS,
+  type ComposerContextAttachment
+} from '@kun/extension-api'
 
 export function buildQuery(options: Record<string, string | number | boolean | undefined>): string {
   const params = new URLSearchParams()
@@ -375,6 +380,16 @@ function normalizeInjectedMemorySummaries(
   return summaries.length > 0 ? summaries : undefined
 }
 
+function normalizeComposerContexts(value: unknown): ComposerContextAttachment[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const contexts = value
+    .slice(0, MAX_COMPOSER_CONTEXT_ATTACHMENTS)
+    .map((entry) => ComposerContextAttachmentSchema.safeParse(entry))
+    .filter((entry) => entry.success)
+    .map((entry) => entry.data)
+  return contexts.length > 0 ? contexts : undefined
+}
+
 function applyRuntimeDisclosureMeta(
   meta: Record<string, unknown>,
   item: CoreTurnItemJson,
@@ -390,6 +405,7 @@ function applyRuntimeDisclosureMeta(
   const injectedMemorySummaries = normalizeInjectedMemorySummaries(item.injectedMemorySummaries)
   const injectedInstructionSources = normalizeInjectedInstructionSources(item.injectedInstructionSources)
   const fileReferences = normalizeUserFileReferences(item.fileReferences)
+  const composerContexts = normalizeComposerContexts(item.composerContexts)
   const normalizedChild = normalizeChildMetadata(child)
   const displayText = typeof item.displayText === 'string' ? item.displayText.trim() : ''
   if (displayText && displayText !== item.text?.trim()) {
@@ -403,6 +419,7 @@ function applyRuntimeDisclosureMeta(
   applyClientUserMessageSourceMeta(meta, item.text ?? '')
   if (attachmentIds) meta.attachmentIds = attachmentIds
   if (fileReferences) meta.fileReferences = fileReferences
+  if (composerContexts) meta.composerContexts = composerContexts
   if (activeSkillIds) meta.activeSkillIds = activeSkillIds
   if (injectedMemoryIds) meta.injectedMemoryIds = injectedMemoryIds
   if (injectedMemorySummaries) meta.injectedMemorySummaries = injectedMemorySummaries

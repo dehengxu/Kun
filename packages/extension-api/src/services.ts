@@ -42,8 +42,16 @@ import type {
   JobSubscribeRequest
 } from './jobs.js'
 import type {
+  MediaAudioAnalysisCapabilities,
+  MediaAnalyzeVisualFramesRequest,
+  MediaAnalyzeVisualFramesResult,
+  MediaEmbedVisualQueryRequest,
+  MediaEmbedVisualQueryResult,
+  MediaInstallVisualModelRequest,
   MediaMetadata,
   MediaCapabilities,
+  MediaCreateCacheTargetRequest,
+  MediaCreateCacheTargetResult,
   MediaOpenViewResourceRequest,
   MediaPickFilesRequest,
   MediaPickFilesResult,
@@ -58,7 +66,12 @@ import type {
   MediaResourceLease,
   MediaStartFfmpegJobRequest,
   MediaStartFfmpegJobResult,
-  MediaStatRequest
+  MediaStartAudioAnalysisJobRequest,
+  MediaStartAudioAnalysisJobResult,
+  MediaStartArchiveJobRequest,
+  MediaStartArchiveJobResult,
+  MediaStatRequest,
+  MediaVisualModelStatus
 } from './media.js'
 import type {
   ModelProviderAdapter,
@@ -66,6 +79,10 @@ import type {
   ProviderStatus
 } from './providers.js'
 import type { ExtensionToolDeclarationInput, ExtensionToolHandler } from './tools.js'
+import type {
+  ComposerContextAttachment,
+  ComposerContextAttachmentRequest
+} from './composer-context.js'
 
 export interface HostRequestOptions {
   readonly signal?: AbortSignal
@@ -236,6 +253,12 @@ export interface UiApi {
   setViewState(value: JsonValue): Promise<void>
   postMessage(message: HostMessage): Promise<void>
   showNotification(options: NotificationOptions): Promise<string | undefined>
+  /**
+   * From an authenticated Extension View, attach bounded, path-free extension
+   * data to the main Kun composer. The Host supplies extension/View/workspace
+   * provenance and consumes it once on the next main-conversation turn.
+   */
+  attachComposerContext(request: ComposerContextAttachmentRequest): Promise<ComposerContextAttachment>
 }
 
 export interface AgentRunSubscription extends Disposable {
@@ -283,14 +306,30 @@ export interface AuthenticationApi {
 export interface MediaApi {
   pickFiles(request?: MediaPickFilesRequest): Promise<MediaPickFilesResult>
   pickSaveTarget(request?: MediaPickSaveTargetRequest): Promise<MediaPickSaveTargetResult>
+  createCacheTarget(request: MediaCreateCacheTargetRequest): Promise<MediaCreateCacheTargetResult>
   stat(request: MediaStatRequest): Promise<MediaMetadata>
   readText(request: MediaReadTextRequest): Promise<MediaReadTextResult>
   release(request: MediaReleaseRequest): Promise<MediaReleaseResult>
   openViewResource(request: MediaOpenViewResourceRequest): Promise<MediaResourceLease>
   performArtifactAction(request: ArtifactHostActionRequest): Promise<ArtifactHostActionResult>
   getCapabilities(): Promise<MediaCapabilities>
+  getAudioAnalysisCapabilities(): Promise<MediaAudioAnalysisCapabilities>
+  getVisualModelStatus(): Promise<MediaVisualModelStatus>
+  installVisualModel(request?: MediaInstallVisualModelRequest): Promise<MediaVisualModelStatus>
+  analyzeVisualFrames(
+    request: MediaAnalyzeVisualFramesRequest,
+    options?: HostRequestOptions
+  ): Promise<MediaAnalyzeVisualFramesResult>
+  embedVisualQuery(
+    request: MediaEmbedVisualQueryRequest,
+    options?: HostRequestOptions
+  ): Promise<MediaEmbedVisualQueryResult>
   probe(request: MediaProbeRequest): Promise<MediaProbeResult>
   startFfmpegJob(request: MediaStartFfmpegJobRequest): Promise<MediaStartFfmpegJobResult>
+  startAudioAnalysisJob(
+    request: MediaStartAudioAnalysisJobRequest
+  ): Promise<MediaStartAudioAnalysisJobResult>
+  startArchiveJob(request: MediaStartArchiveJobRequest): Promise<MediaStartArchiveJobResult>
 }
 
 export interface JobSubscription extends Disposable {

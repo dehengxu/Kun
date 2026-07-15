@@ -120,16 +120,27 @@ function generateBody(project: VideoProject): string {
   )
   if (items.length === 0) lines.push('_No media items._', '')
   for (const item of items) {
-    const asset = project.assets.find(({ id }) => id === item.assetId)!
+    const asset = item.nestedSequenceId === undefined
+      ? project.assets.find(({ id }) => id === item.assetId)
+      : undefined
+    const sourceReference = item.nestedSequenceId === undefined
+      ? `Asset \`${asset!.id}\``
+      : `Sequence \`${item.nestedSequenceId}\``
     const timelineEnd = item.timelineStartFrame + item.durationFrames
     lines.push(
-      `### Item \`${item.id}\` · Asset \`${asset.id}\``,
+      `### Item \`${item.id}\` · ${sourceReference}`,
       '',
       `- Track: \`${item.trackId}\``,
       `- Timeline: \`${formatFrameTime(item.timelineStartFrame, project.fps)} → ${formatFrameTime(timelineEnd, project.fps)}\``,
-      `- Source: \`${formatMicroseconds(item.sourceStartUs)} → ${formatMicroseconds(item.sourceEndUs)}\``,
+      ...(item.nestedSequenceId === undefined
+        ? [`- Source: \`${formatMicroseconds(item.sourceStartUs)} → ${formatMicroseconds(item.sourceEndUs)}\``]
+        : [`- Nested sequence: \`${item.nestedSequenceId}\``]),
       ''
     )
+    if (asset === undefined) {
+      lines.push('_Nested sequence content is projected from its child timeline._', '')
+      continue
+    }
     const transcript = project.transcripts.find(({ assetId }) => assetId === asset.id)
     const segments = transcript?.segments.filter((segment) =>
       segment.startUs < item.sourceEndUs && segment.endUs > item.sourceStartUs

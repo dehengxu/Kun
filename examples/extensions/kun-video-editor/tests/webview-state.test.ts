@@ -9,13 +9,104 @@ import {
   editorReducer,
   projectFrameFromSourceTime,
   proofIsStale,
+  toPersistedState,
   timelineSourceAtFrame,
   transcriptFrame,
+  type OtioExportTicket,
+  type ProjectPackageTicket,
   type RenderTicket
 } from '../src/webview/model.js'
 import { makeArtifact, makeJob, makeViewProject } from './webview-fixtures.js'
 
 describe('video editor bounded View state', () => {
+  it('persists active workspace and bounded project-package recovery tickets', () => {
+    const ticket: ProjectPackageTicket = {
+      schemaVersion: 1,
+      jobId: 'job_project_package_state_1',
+      projectId: 'demo-project',
+      sequenceId: 'sequence-main',
+      pinnedRevision: 3,
+      packageId: `pkg-${'a'.repeat(32)}`,
+      manifestDigest: 'b'.repeat(64),
+      complete: false,
+      selectedAssetCount: 2,
+      embeddedAssetCount: 1,
+      uniqueMediaCount: 1,
+      deduplicatedAssetCount: 0,
+      missingAssetIds: ['asset-offline'],
+      missingMediaPolicy: 'omit',
+      mediaScope: 'selected',
+      receiptsRequested: true,
+      agentProvenanceRequested: false,
+      createdAt: '2026-07-14T00:00:00.000Z'
+    }
+    let state = editorReducer(INITIAL_EDITOR_STATE, { type: 'active-workspace', value: 'output' })
+    state = editorReducer(state, { type: 'project-package-ticket', value: ticket })
+    const persisted = toPersistedState(state)
+    expect(persisted).toMatchObject({
+      activeWorkspace: 'output',
+      projectPackageTickets: [ticket]
+    })
+    expect(JSON.stringify(persisted)).not.toMatch(/(?:handle|file:\/\/|\/Users\/|prompt|chatText)/u)
+
+    const restored = editorReducer(INITIAL_EDITOR_STATE, { type: 'initialized', persisted })
+    expect(restored.activeWorkspace).toBe('output')
+    expect(restored.projectPackageTickets).toEqual([ticket])
+  })
+
+  it('persists durable OTIO export ownership but never persists an import grant', () => {
+    const ticket: OtioExportTicket = {
+      schemaVersion: 1,
+      jobId: 'job_otio_export_state_001',
+      projectId: 'demo-project',
+      sequenceId: 'sequence-main',
+      pinnedRevision: 0,
+      adapterId: 'kun.otio-json',
+      adapterVersion: '1.0.0',
+      documentDigest: 'a'.repeat(64),
+      projectDigest: 'b'.repeat(64),
+      documentBytes: 4096,
+      lossManifest: {
+        adapterId: 'kun.otio-json', adapterVersion: '1.0.0',
+        portableLossless: false, kunRoundTripLossless: true,
+        entries: [{
+          code: 'effects-custom-metadata', severity: 'warning', feature: 'effects',
+          nodeId: 'item-1', preservation: 'kun-metadata', message: 'Parameters use Kun metadata.'
+        }],
+        truncated: 0
+      },
+      createdAt: '2026-07-14T00:00:00.000Z'
+    }
+    let state = editorReducer(INITIAL_EDITOR_STATE, { type: 'otio-export-ticket', value: ticket })
+    state = editorReducer(state, {
+      type: 'otio-import-preview',
+      value: {
+        inputHandleId: 'opaque_otio_input_000001',
+        displayName: 'timeline.otio',
+        sourceDocumentDigest: 'c'.repeat(64),
+        sourceProjectId: 'source-project',
+        sourceProjectRevision: 4,
+        suggestedProjectId: 'source-project-import',
+        fidelity: 'kun-metadata',
+        project: {
+          id: 'source-project', name: 'Source', revision: 4, activeSequenceId: 'sequence-main',
+          counts: { assets: 1, sequences: 1, tracks: 3, items: 2, captions: 0, transcripts: 0 }
+        },
+        mediaRelinkRequired: ['asset-1'],
+        timecodeMappings: [],
+        timecodeMappingsTruncated: 0,
+        lossManifest: ticket.lossManifest
+      }
+    })
+    const persisted = toPersistedState(state)
+    expect(persisted.otioExportTickets).toEqual([ticket])
+    expect(JSON.stringify(persisted)).not.toContain('opaque_otio_input_000001')
+
+    const restored = editorReducer(INITIAL_EDITOR_STATE, { type: 'initialized', persisted })
+    expect(restored.otioExportTickets).toEqual([ticket])
+    expect(restored.otioImportPreview).toBeUndefined()
+  })
+
   it('bounds projections and retains revision-aware manual selection', () => {
     const project = makeViewProject()
     project.items = Array.from({ length: 620 }, (_, index) => ({
@@ -53,6 +144,67 @@ describe('video editor bounded View state', () => {
     state = editorReducer(state, { type: 'project', value: { ...makeViewProject(), currentRevision: 1 } })
     expect(state.conflict).toBeUndefined()
     expect(state.project?.currentRevision).toBe(1)
+  })
+
+  it('fences stale selection responses by project, revision, selection generation, and event generation', () => {
+    const project = makeViewProject()
+    project.eventGeneration = 5
+    project.selection = {
+      ...project.selection,
+      generation: 5,
+      selectedAssetIds: [project.assets[0]!.id],
+      selectedItemIds: [project.items[0]!.id]
+    }
+    let state = editorReducer(INITIAL_EDITOR_STATE, { type: 'project', value: project })
+    const currentSelection = structuredClone(state.project!.selection)
+
+    state = editorReducer(state, {
+      type: 'selection-synced',
+      projectId: project.id,
+      revision: project.currentRevision,
+      generation: 4,
+      eventGeneration: 6,
+      selection: { ...currentSelection, generation: 4, selectedItemIds: [] }
+    })
+    expect(state.project?.selection).toEqual(currentSelection)
+
+    state = editorReducer(state, {
+      type: 'selection-synced',
+      projectId: project.id,
+      revision: project.currentRevision,
+      generation: 6,
+      eventGeneration: 4,
+      selection: { ...currentSelection, generation: 6, selectedItemIds: [] }
+    })
+    expect(state.project?.selection).toEqual(currentSelection)
+
+    state = editorReducer(state, {
+      type: 'selection-synced',
+      projectId: 'other-project',
+      revision: project.currentRevision,
+      generation: 6,
+      eventGeneration: 6,
+      selection: { ...currentSelection, generation: 6, selectedItemIds: [] }
+    })
+    expect(state.project?.selection).toEqual(currentSelection)
+
+    state = editorReducer(state, {
+      type: 'selection-synced',
+      projectId: project.id,
+      revision: project.currentRevision,
+      generation: 6,
+      eventGeneration: 6,
+      selection: {
+        ...currentSelection,
+        generation: 6,
+        playheadFrame: 30,
+        selectedItemIds: []
+      }
+    })
+    expect(state.project).toMatchObject({
+      eventGeneration: 6,
+      selection: { generation: 6, playheadFrame: 30, selectedItemIds: [] }
+    })
   })
 
   it('revokes stale media leases without retaining reusable URLs', () => {
@@ -99,6 +251,131 @@ describe('video editor bounded View state', () => {
     }
     expect(proofIsStale(ticket, { ...makeViewProject(), currentRevision: 1 })).toBe(true)
     expect(proofIsStale(ticket, makeViewProject())).toBe(false)
+  })
+
+  it('orders derived updates by monotonic generation and removes records only from an authoritative list', () => {
+    const project = makeViewProject()
+    let state = editorReducer(INITIAL_EDITOR_STATE, { type: 'project', value: project })
+    const running = {
+      schemaVersion: 1 as const,
+      id: 'derived-waveform',
+      generation: 5,
+      statusGeneration: 5,
+      kind: 'waveform' as const,
+      projectId: project.id,
+      assetId: project.assets[0]!.id,
+      status: 'running' as const,
+      priority: 'interactive' as const,
+      bytes: 0,
+      pinned: false,
+      attempt: 1,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:01.000Z'
+    }
+    state = editorReducer(state, {
+      type: 'derived',
+      projectId: project.id,
+      revision: project.currentRevision,
+      records: [running],
+      usage: {
+        quotaBytes: 1000,
+        usedBytes: 0,
+        readyBytes: 0,
+        recordCount: 1,
+        pinnedCount: 0,
+        evictableCount: 0
+      }
+    })
+    state = editorReducer(state, {
+      type: 'derived-record',
+      value: { ...running, generation: 4, statusGeneration: 4, status: 'failed' }
+    })
+    expect(state.derivedRecords[0]).toMatchObject({ generation: 5, status: 'running' })
+
+    const ready = {
+      ...running,
+      generation: 6,
+      statusGeneration: 6,
+      status: 'ready' as const,
+      bytes: 300,
+      updatedAt: '2026-01-01T00:00:02.000Z'
+    }
+    state = editorReducer(state, { type: 'derived-record', value: ready })
+    state = editorReducer(state, {
+      type: 'derived',
+      projectId: project.id,
+      revision: project.currentRevision,
+      records: [running]
+    })
+    expect(state.derivedRecords[0]).toMatchObject({ generation: 6, status: 'ready', bytes: 300 })
+
+    state = editorReducer(state, {
+      type: 'derived',
+      projectId: project.id,
+      revision: project.currentRevision,
+      records: []
+    })
+    expect(state.derivedRecords).toEqual([])
+  })
+
+  it('rejects stale derived and media-intelligence projections after a project revision advances', () => {
+    const project = { ...makeViewProject(), currentRevision: 4 }
+    let state = editorReducer(INITIAL_EDITOR_STATE, {
+      type: 'project',
+      value: { ...project, currentRevision: 3 }
+    })
+    state = editorReducer(state, {
+      type: 'audio-analysis-state',
+      projectId: project.id,
+      revision: 3,
+      syncPreview: {
+        analysisId: 'analysis:sync:stale',
+        referenceItemId: 'item-1',
+        targetItemId: 'item-2',
+        targetFrameBefore: 60,
+        targetFrameAfter: 54,
+        deltaFrames: -6,
+        confidence: 0.95,
+        outcome: 'ready'
+      }
+    })
+    state = editorReducer(state, { type: 'project', value: project })
+    expect(state.audioSyncPreview).toBeUndefined()
+    state = editorReducer(state, {
+      type: 'audio-analysis-state',
+      projectId: project.id,
+      revision: 3,
+      records: [{
+        schemaVersion: 1,
+        id: 'analysis:vad:stale',
+        kind: 'vad',
+        assetId: project.assets[0]!.id,
+        immutable: true
+      }]
+    })
+    state = editorReducer(state, {
+      type: 'media-intelligence-progress',
+      value: {
+        schemaVersion: 1,
+        operationId: 'media-analysis-stale',
+        projectId: project.id,
+        projectRevision: 3,
+        kind: 'vad',
+        generation: 1,
+        status: 'running',
+        completed: 1,
+        total: 10
+      }
+    })
+    state = editorReducer(state, {
+      type: 'derived',
+      projectId: project.id,
+      revision: 3,
+      records: []
+    })
+    expect(state.audioAnalysisRecords).toEqual([])
+    expect(state.mediaIntelligenceOperations).toEqual([])
+    expect(state.derivedRecords).toEqual([])
   })
 
   it('classifies protected interaction and keeps transcript seek frame-native', () => {

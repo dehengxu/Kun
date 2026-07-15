@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
+  assertStandaloneVideoEditorHostBundle,
   assertVideoEditorMatchesBundledArchive,
   assertDeterministicArchives,
   findReleaseArchive,
@@ -68,7 +69,7 @@ test('derives a bounded bundled catalog from the canonical manifest and archive 
     publisher: 'kun-examples',
     name: 'kun-video-editor',
     version: '0.1.0',
-    apiVersion: '1.1.0',
+    apiVersion: '1.2.0',
     engines: { kun: '>=0.1.0' },
     permissions: ['ui.views', 'media.read', 'ui.views']
   }, 'kun-video-editor-0.1.0.kunx', digest), {
@@ -79,7 +80,7 @@ test('derives a bounded bundled catalog from the canonical manifest and archive 
       archive: 'kun-video-editor-0.1.0.kunx',
       sha256: digest,
       enginesKun: '>=0.1.0',
-      apiVersion: '1.1.0',
+      apiVersion: '1.2.0',
       permissions: ['media.read', 'ui.views']
     }]
   })
@@ -87,7 +88,7 @@ test('derives a bounded bundled catalog from the canonical manifest and archive 
     publisher: 'other',
     name: 'kun-video-editor',
     version: '0.1.0',
-    apiVersion: '1.1.0',
+    apiVersion: '1.2.0',
     engines: { kun: '*' },
     permissions: []
   }, 'kun-video-editor-0.1.0.kunx', digest), /Unexpected/)
@@ -105,6 +106,27 @@ test('accepts only byte-identical deterministic archives', async (t) => {
 
   await writeFile(second, 'different archive bytes')
   await assert.rejects(assertDeterministicArchives(first, second), /not deterministic/)
+})
+
+test('rejects Host bundles that retain repository-only runtime imports', async (t) => {
+  const root = await temporaryRoot(t)
+  const host = join(root, 'dist', 'host')
+  await mkdir(host, { recursive: true })
+  await writeFile(join(host, 'chunk.js'), 'export const value = 1\n')
+  await writeFile(
+    join(host, 'extension.js'),
+    'import { createHash } from "node:crypto"\nexport { value } from "./chunk.js"\n'
+  )
+  await assert.doesNotReject(assertStandaloneVideoEditorHostBundle(host))
+
+  await writeFile(
+    join(host, 'extension.js'),
+    'import { MediaAudioAnalysisResultSchema } from "@kun/extension-api"\n'
+  )
+  await assert.rejects(
+    assertStandaloneVideoEditorHostBundle(host),
+    /not standalone[\s\S]*@kun\/extension-api/u
+  )
 })
 
 test('finds exactly one regular release archive and rejects duplicate or linked trees', async (t) => {

@@ -2684,6 +2684,7 @@
   "toolInjectedMemories": "Memories",
   "toolInjectedInstructions": "Instructions",
   "toolAttachments": "Attachments",
+  "toolExtensionContexts": "Extension context",
   "generatedFilesTitle": "Generated files",
   "generatedFilePreviewUnavailable": "Preview unavailable",
   "generatedFileDownload": "Download",

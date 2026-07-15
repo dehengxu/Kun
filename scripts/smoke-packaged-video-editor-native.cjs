@@ -30,7 +30,7 @@ const {
 } = require('./lib/extension-native-media-smoke.cjs')
 
 const EXTENSION_ID = 'kun-examples.kun-video-editor'
-const EXTENSION_VERSION = '0.3.0'
+const EXTENSION_VERSION = '0.4.1'
 const SUCCESS_MARKER = 'Packaged Kun Video Editor native smoke OK ('
 const REEXEC_MARKER = 'KUN_PACKAGED_VIDEO_EDITOR_NATIVE_SMOKE_REEXEC'
 const DEFAULT_COMMAND_TIMEOUT_MS = 180_000
@@ -41,6 +41,33 @@ const TERMINAL_JOB_STATES = new Set(['completed', 'failed', 'cancelled', 'interr
 const PACKAGED_CAPTION_TEXT = 'A deterministic packaged caption'
 const EXPECTED_PACKAGED_SRT =
   `1\n00:00:00,000 --> 00:00:01,500\n${PACKAGED_CAPTION_TEXT}\n`
+const EXPECTED_TOOL_IDS = [
+  'video-project',
+  'video-inspect',
+  'video-probe',
+  'video-transcribe',
+  'video-read-script',
+  'video-apply-script',
+  'video-update-timeline',
+  'video-analyze-visual',
+  'video-analyze-audio',
+  'video-analysis-status',
+  'video-analysis-cancel',
+  'video-interchange',
+  'video-interchange-status',
+  'video-interchange-cancel',
+  'video-generation-catalog',
+  'video-generation-request',
+  'video-generation-status',
+  'video-generation-cancel',
+  'video-project-package',
+  'video-project-package-status',
+  'video-project-package-cancel',
+  'video-render',
+  'video-render-status',
+  'video-render-cancel',
+  'video-undo'
+]
 
 async function main() {
   const resourcesDir = resolveResources(argumentValue('--resources'))
@@ -583,9 +610,7 @@ async function prepareRuntime(runtime, workspace) {
   })
   if (!host) throw new Error('Packaged Kun Video Editor Host did not activate')
   const registrations = platform.tools.list(EXTENSION_ID)
-  if (registrations.length !== 9) {
-    throw new Error(`Packaged Kun Video Editor registered ${registrations.length} tools instead of 9`)
-  }
+  assertRegisteredToolIds(registrations)
   const aliases = new Map(registrations.map((registration) => [
     registration.declaration.name,
     registration.modelAlias
@@ -667,6 +692,25 @@ async function prepareRuntime(runtime, workspace) {
       )
     }
   }
+}
+
+function assertRegisteredToolIds(registrations) {
+  const actual = registrations
+    .map((registration) => registration?.declaration?.name)
+    .filter((name) => typeof name === 'string')
+    .sort()
+  const expected = [...EXPECTED_TOOL_IDS].sort()
+  if (actual.length === registrations.length && isDeepStrictEqual(actual, expected)) return
+  const actualSet = new Set(actual)
+  const expectedSet = new Set(expected)
+  const missing = expected.filter((name) => !actualSet.has(name))
+  const unexpected = actual.filter((name) => !expectedSet.has(name))
+  throw new Error(
+    `Packaged Kun Video Editor registered an unexpected tool surface ` +
+    `(expected ${expected.length}, received ${registrations.length}; ` +
+    `missing: ${missing.join(', ') || 'none'}; ` +
+    `unexpected: ${unexpected.join(', ') || 'none'})`
+  )
 }
 
 async function loadPackagedRuntimeModules(unpackedRoot) {
@@ -890,9 +934,10 @@ function contentOf(result, label) {
 }
 
 function jobId(result, label) {
-  const value = contentOf(result, label).jobId
+  const content = contentOf(result, label)
+  const value = content.jobId
   if (typeof value !== 'string' || value.length < 8) {
-    throw new Error(`${label} returned no durable job ID`)
+    throw new Error(`${label} returned no durable job ID: ${JSON.stringify(content)}`)
   }
   return value
 }
@@ -1002,12 +1047,14 @@ function delay(milliseconds) {
 
 module.exports = {
   EXTENSION_ID,
+  EXPECTED_TOOL_IDS,
   SUCCESS_MARKER,
   assertContent,
   assertCompletedArtifact,
   assertCompletedArtifacts,
   assertH264Probe,
   assertPackagedReexecResult,
+  assertRegisteredToolIds,
   assertReleaseArchive,
   assertSrtSidecar,
   captionModeArgument,

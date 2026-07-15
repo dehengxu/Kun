@@ -29,7 +29,11 @@ import {
   saveThreadWorktreeRegistry
 } from '../lib/thread-worktree-registry'
 import { workspaceLabelFromPath } from '../lib/workspace-label'
-import { isInternalTemporaryWorkspace, normalizeWorkspaceRoot } from '../lib/workspace-path'
+import {
+  isInternalTemporaryWorkspace,
+  normalizeWorkspaceRoot,
+  workspaceRootScopeKey
+} from '../lib/workspace-path'
 import {
   buildClawRuntimePrompt,
   buildCodeRuntimePrompt,
@@ -116,6 +120,7 @@ import {
   subscribeThreadEventsWithRecovery
 } from './chat-store-thread-action-helpers'
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
+import type { ComposerContextAttachment } from '@kun/extension-api'
 
 type SseAbortRef = { current: AbortController | null }
 
@@ -127,6 +132,38 @@ type StoreActionContext = {
 
 let drainingQueuedMessages = false
 const checkpointGitAvailability = new GitCheckpointAvailabilityCache()
+
+function activeChatWorkspaceRoot(state: ChatState): string {
+  const activeThread = state.activeThreadId
+    ? state.threads.find((thread) => thread.id === state.activeThreadId)
+    : undefined
+  return activeThread?.workspace?.trim() || state.workspaceRoot?.trim() || ''
+}
+
+function pendingComposerContexts(state: ChatState): ComposerContextAttachment[] {
+  if (state.route !== 'chat') return []
+  const workspaceRoot = activeChatWorkspaceRoot(state)
+  return state.extensionComposerContexts
+    .filter((event) => workspaceRootScopeKey(event.workspaceRoot) === workspaceRootScopeKey(workspaceRoot))
+    .map((event) => event.attachment)
+}
+
+function withoutConsumedComposerContexts(
+  state: ChatState,
+  consumed: readonly ComposerContextAttachment[]
+): ChatState['extensionComposerContexts'] {
+  if (consumed.length === 0) return state.extensionComposerContexts
+  const consumedRevisions = new Set(consumed.map((attachment) => [
+    attachment.attachmentId,
+    attachment.revision,
+    attachment.generation
+  ].join(':')))
+  return state.extensionComposerContexts.filter((event) => !consumedRevisions.has([
+    event.attachment.attachmentId,
+    event.attachment.revision,
+    event.attachment.generation
+  ].join(':')))
+}
 
 function activeWriteMessageContextMatches(context: WriteAssistantMessageContext): boolean {
   const state = useWriteWorkspaceStore.getState()
@@ -725,6 +762,9 @@ export function createThreadActions(
         reference.relativePath.trim().length > 0 &&
         reference.name.trim().length > 0
       )
+      const composerContexts = get().route === 'chat'
+        ? overrides?.composerContexts ?? pendingComposerContexts(get())
+        : []
       set((s) => ({
         queuedMessages: [
           ...s.queuedMessages,
@@ -745,9 +785,11 @@ export function createThreadActions(
             ...(writeContext ? { writeContext } : {}),
             ...(attachmentIds?.length ? { attachmentIds } : {}),
             ...(attachments?.length ? { attachments } : {}),
-            ...(fileReferences?.length ? { fileReferences } : {})
+            ...(fileReferences?.length ? { fileReferences } : {}),
+            ...(composerContexts.length ? { composerContexts } : {})
           }
         ],
+        extensionComposerContexts: withoutConsumedComposerContexts(s, composerContexts),
         error: null
       }))
       // UI/runtime can briefly drift (busy=false while runtime still has an active turn).
@@ -775,6 +817,9 @@ export function createThreadActions(
         reference.name.trim().length > 0
       ) ??
       []
+    const composerContexts = queued?.composerContexts ?? (get().route === 'chat'
+      ? overrides?.composerContexts ?? pendingComposerContexts(get())
+      : [])
     let activeThreadId = get().activeThreadId
     const displayText = queued?.displayText ?? overrides?.displayText?.trim() ?? trimmedText
     const userDisplayText = displayText !== trimmedText ? displayText : undefined
@@ -825,7 +870,7 @@ export function createThreadActions(
           createdAt: new Date(now).toISOString(),
           text: displayText,
           ...(userModelChip ? { modelLabel: userModelChip } : {}),
-          ...(userDisplayText || guiDesignCanvas || guiDesignMode || attachmentIds.length || attachments.length || fileReferences.length
+          ...(userDisplayText || guiDesignCanvas || guiDesignMode || attachmentIds.length || attachments.length || fileReferences.length || composerContexts.length
             ? {
                 meta: {
                   ...(userDisplayText ? { displayText: userDisplayText } : {}),
@@ -833,7 +878,8 @@ export function createThreadActions(
                   ...(guiDesignMode ? { guiDesignMode: true } : {}),
                   ...(attachmentIds.length ? { attachmentIds } : {}),
                   ...(attachments.length ? { attachments } : {}),
-                  ...(fileReferences.length ? { fileReferences } : {})
+                  ...(fileReferences.length ? { fileReferences } : {}),
+                  ...(composerContexts.length ? { composerContexts } : {})
                 }
               }
             : {})
@@ -1011,8 +1057,14 @@ export function createThreadActions(
           : {}),
         ...(attachmentIds.length ? { attachmentIds } : {}),
         ...(workspaceCheckpointId ? { workspaceCheckpointId } : {}),
-        ...(fileReferences.length ? { fileReferences } : {})
+        ...(fileReferences.length ? { fileReferences } : {}),
+        ...(composerContexts.length ? { composerContexts } : {})
       })
+      if (!queued && composerContexts.length > 0) {
+        set((state) => ({
+          extensionComposerContexts: withoutConsumedComposerContexts(state, composerContexts)
+        }))
+      }
       // Mirror the composer model selection against the runtime's stable
       // user_message item id so the badge survives page refresh / thread
       // re-selection. The runtime itself doesn't persist per-turn metadata.

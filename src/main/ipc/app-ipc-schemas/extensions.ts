@@ -186,7 +186,8 @@ function isAbsolutePath(value: string): boolean {
 export const extensionViewSessionCreateRequestSchema = z
   .object({
     contributionId: qualifiedExtensionContributionIdSchema,
-    workspaceRoot: absoluteWorkspaceRootSchema.optional()
+    workspaceRoot: absoluteWorkspaceRootSchema.optional(),
+    retryHost: z.boolean().optional()
   })
   .strict()
 

@@ -54,7 +54,7 @@ describe('ProjectService', () => {
     const listed = await service.listProjectsWithDiagnostics()
     expect(listed.projects).toEqual([expect.objectContaining({ id: 'healthy' })])
     expect(listed.diagnostics).toEqual([{ id: 'damaged', code: 'invalid_project' }])
-    await expect(service.loadProject('damaged')).rejects.toBeInstanceOf(SyntaxError)
+    await expect(service.loadProject('damaged')).rejects.toMatchObject({ code: 'invalid_project' })
   })
 
   it('enforces optimistic revision checks without partial writes', async () => {
@@ -165,6 +165,57 @@ describe('ProjectService', () => {
       sourceOperation: 'history.redo',
       restoredFromRevision: 1
     })
+  })
+
+  it('atomically imports a revision-fenced interchange snapshot without overwriting', async () => {
+    const root = await workspace()
+    const service = new ProjectService(root, { now: tickingClock() })
+    const source = makeProject()
+    source.assets[0] = {
+      ...source.assets[0]!,
+      mediaHandleId: 'otio_offline_asset-1',
+      availability: 'offline',
+      recovery: { reason: 'missing' }
+    }
+    const imported = await service.importProject({
+      project: source,
+      targetProjectId: 'imported-cut',
+      expectedSourceProjectId: source.id,
+      expectedSourceRevision: source.currentRevision,
+      sourceDocumentDigest: 'a'.repeat(64)
+    })
+
+    expect(imported).toMatchObject({
+      id: 'imported-cut',
+      currentRevision: source.currentRevision + 1,
+      activeSequenceId: 'sequence-main',
+      undoStack: [],
+      redoStack: [],
+      agentUndoStack: []
+    })
+    expect(imported.items.map(({ id }) => id)).toEqual(source.items.map(({ id }) => id))
+    expect(imported.sequences.map(({ id }) => id)).toEqual(source.sequences.map(({ id }) => id))
+    expect(imported.revisions.at(-1)).toMatchObject({
+      parentRevision: source.currentRevision,
+      sourceOperation: 'interchange.otio.import'
+    })
+
+    await expect(service.importProject({
+      project: source,
+      targetProjectId: 'imported-cut',
+      expectedSourceProjectId: source.id,
+      expectedSourceRevision: source.currentRevision,
+      sourceDocumentDigest: 'a'.repeat(64)
+    })).rejects.toMatchObject({ code: 'project_exists' })
+    expect((await service.loadProject('imported-cut')).items.map(({ id }) => id))
+      .toEqual(source.items.map(({ id }) => id))
+    await expect(service.importProject({
+      project: source,
+      targetProjectId: 'stale-import',
+      expectedSourceProjectId: source.id,
+      expectedSourceRevision: source.currentRevision + 1,
+      sourceDocumentDigest: 'a'.repeat(64)
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
   })
 
   it('rejects traversal and symbolic-link project roots', async () => {

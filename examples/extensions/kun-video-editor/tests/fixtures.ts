@@ -24,8 +24,26 @@ export function makeItem(
 }
 
 export function makeProject(): VideoProject {
+  const tracks: VideoProject['tracks'] = [
+    { id: 'video-1', name: 'Video 1', kind: 'video', order: 0, overlap: 'reject' },
+    { id: 'video-2', name: 'Video 2', kind: 'video', order: 1, overlap: 'reject' },
+    { id: 'audio-1', name: 'Audio 1', kind: 'audio', order: 2, overlap: 'mix' },
+    { id: 'captions-1', name: 'Captions', kind: 'caption', order: 3, overlap: 'reject' }
+  ]
+  const items = [
+    makeItem('item-1', 0, 0, 3_000_000),
+    makeItem('item-2', 90, 3_000_000, 6_000_000)
+  ]
+  const captions: VideoProject['captions'] = [{
+    id: 'caption-1',
+    trackId: 'captions-1',
+    startFrame: 0,
+    endFrame: 45,
+    text: 'Hello <Kun>',
+    placement: 'bottom'
+  }]
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: 'demo-project',
     name: 'Demo Project',
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -54,24 +72,29 @@ export function makeProject(): VideoProject {
       audio: { codec: 'aac', sampleRate: 48_000, channels: 2 },
       transcriptIds: ['transcript-1']
     }],
-    tracks: [
-      { id: 'video-1', name: 'Video 1', kind: 'video', order: 0, overlap: 'reject' },
-      { id: 'video-2', name: 'Video 2', kind: 'video', order: 1, overlap: 'reject' },
-      { id: 'audio-1', name: 'Audio 1', kind: 'audio', order: 2, overlap: 'mix' },
-      { id: 'captions-1', name: 'Captions', kind: 'caption', order: 3, overlap: 'reject' }
-    ],
-    items: [
-      makeItem('item-1', 0, 0, 3_000_000),
-      makeItem('item-2', 90, 3_000_000, 6_000_000)
-    ],
-    captions: [{
-      id: 'caption-1',
-      trackId: 'captions-1',
-      startFrame: 0,
-      endFrame: 45,
-      text: 'Hello <Kun>',
-      placement: 'bottom'
+    tracks,
+    items,
+    captions,
+    sequences: [{
+      id: 'sequence-main',
+      name: 'Demo Project',
+      tracks: structuredClone(tracks),
+      items: structuredClone(items),
+      captions: structuredClone(captions),
+      viewState: { zoom: 1, scrollFrame: 0, open: true }
     }],
+    activeSequenceId: 'sequence-main',
+    linkGroups: [],
+    selection: {
+      generation: 0,
+      revision: 0,
+      sequenceId: 'sequence-main',
+      playheadFrame: 0,
+      selectedAssetIds: [],
+      selectedItemIds: [],
+      selectedCaptionIds: [],
+      selectedWordIds: []
+    },
     transcripts: [{
       id: 'transcript-1',
       assetId: 'asset-1',
@@ -96,7 +119,9 @@ export function makeProject(): VideoProject {
         { id: 'segment-4', startUs: 3_000_000, endUs: 4_000_000, text: 'Again' }
       ]
     }],
+    derivedReferences: [],
     currentRevision: 0,
+    eventGeneration: 0,
     revisions: [{
       revision: 0,
       parentRevision: null,
@@ -108,6 +133,13 @@ export function makeProject(): VideoProject {
       inverseOperations: []
     }],
     undoStack: [],
-    redoStack: []
+    redoStack: [],
+    agentUndoStack: [],
+    recovery: {
+      mode: 'healthy',
+      unreadableManifestKinds: [],
+      interruptedJobIds: [],
+      notes: []
+    }
   }
 }

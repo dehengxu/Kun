@@ -158,6 +158,10 @@ import { ExtensionMediaProcessService } from '../services/extension-media-proces
 import { ExtensionMediaFfmpegService } from '../services/extension-media-ffmpeg-service.js'
 import { ExtensionArtifactService } from '../services/extension-artifact-service.js'
 import { ExtensionMediaJobService } from '../services/extension-media-job-service.js'
+import { ExtensionAudioAnalysisJobService } from '../services/extension-audio-analysis-job-service.js'
+import { ExtensionMediaArchiveService } from '../services/extension-media-archive-service.js'
+import { ExtensionMediaArchiveJobService } from '../services/extension-media-archive-job-service.js'
+import { ExtensionVisualAnalysisService } from '../services/extension-visual-analysis-service.js'
 
 export type KunServeRuntimeOptions = {
   host: string
@@ -906,6 +910,21 @@ export async function createKunServeRuntime(
 	    media: extensionMediaProcesses,
 	    artifacts: extensionArtifacts
 	  })
+	  const extensionAudioAnalysisJobs = new ExtensionAudioAnalysisJobService({
+	    jobs: extensionJobs,
+	    media: extensionMediaProcesses
+	  })
+	  const extensionVisualAnalysis = new ExtensionVisualAnalysisService({
+	    dataDir: activeOptions.dataDir,
+	    media: extensionMediaProcesses
+	  })
+	  const extensionMediaArchive = new ExtensionMediaArchiveService({
+	    handles: extensionMediaHandles
+	  })
+	  const extensionMediaArchiveJobs = new ExtensionMediaArchiveJobService({
+	    jobs: extensionJobs,
+	    archive: extensionMediaArchive
+	  })
 	  const extensionViewSessions = new ExtensionViewSessionService()
 	  const extensionViewHostGenerations = new ExtensionViewHostGenerationTracker()
 	  const extensionSecretReveals = new ExtensionSecretRevealConsentService()
@@ -984,6 +1003,9 @@ export async function createKunServeRuntime(
 	    mediaHandles: extensionMediaHandles,
 	    mediaProcesses: extensionMediaProcesses,
 	    mediaJobs: extensionMediaJobs,
+	    audioAnalysisJobs: extensionAudioAnalysisJobs,
+	    visualAnalysis: extensionVisualAnalysis,
+	    archiveJobs: extensionMediaArchiveJobs,
 	    jobs: extensionJobs,
 	    invokeExtension: (extensionId, activationEvent, method, params, invokeOptions) =>
 	      extensionManager.invoke(extensionId, activationEvent, method, params, invokeOptions),
@@ -1655,6 +1677,8 @@ export async function createKunServeRuntime(
 	        await backgroundShellRuntime.shutdown()
 	        await extensionJobs.handleRuntimeShutdown()
 	        extensionMediaJobs.dispose()
+	        extensionAudioAnalysisJobs.dispose()
+	        extensionMediaArchiveJobs.dispose()
         await turnService.interruptActiveTurns()
         await waitForActiveRuns(activeRuntimeRuns)
 	        stopExtensionModelListener()

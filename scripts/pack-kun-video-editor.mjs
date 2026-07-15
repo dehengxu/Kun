@@ -14,6 +14,7 @@ import {
   writeFile
 } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
+import { isBuiltin } from 'node:module'
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -90,6 +91,65 @@ export async function assertDeterministicArchives(first, second) {
     )
   }
   return { bytes: firstDetails.size, sha256: firstHash }
+}
+
+/**
+ * A packed Host runs outside the repository and cannot resolve workspace
+ * dependencies. Fail the fast packaging path when Vite leaves a bare import in
+ * any emitted Host module instead of waiting for a native activation smoke.
+ */
+export async function assertStandaloneVideoEditorHostBundle(hostDirectory) {
+  const root = resolve(hostDirectory)
+  const entry = join(root, 'extension.js')
+  const entryDetails = await lstat(entry)
+  if (!entryDetails.isFile() || entryDetails.isSymbolicLink()) {
+    throw new Error(`Kun Video Editor Host entry must be a regular file: ${entry}`)
+  }
+  const modules = []
+  const visit = async (directory) => {
+    for (const item of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, item.name)
+      if (item.isDirectory()) await visit(path)
+      else if (item.isFile() && /\.(?:c|m)?js$/u.test(item.name)) modules.push(path)
+    }
+  }
+  await visit(root)
+  if (modules.length === 0) throw new Error('Kun Video Editor Host bundle contains no JavaScript modules')
+
+  const bareImports = []
+  for (const modulePath of modules.sort()) {
+    const source = await readFile(modulePath, 'utf8')
+    for (const specifier of moduleSpecifiers(source)) {
+      if (specifier.startsWith('.')) {
+        const target = resolve(dirname(modulePath), specifier)
+        if (target !== root && !target.startsWith(`${root}${sep}`)) {
+          bareImports.push(`${relative(root, modulePath)} -> ${specifier} (escapes Host bundle)`)
+        }
+        continue
+      }
+      if (specifier.startsWith('node:') || isBuiltin(specifier)) continue
+      bareImports.push(`${relative(root, modulePath)} -> ${specifier}`)
+    }
+  }
+  if (bareImports.length > 0) {
+    throw new Error(
+      `Kun Video Editor Host bundle is not standalone; unresolved imports: ${bareImports.join(', ')}`
+    )
+  }
+  return { modules: modules.length }
+}
+
+function moduleSpecifiers(source) {
+  const specifiers = new Set()
+  const patterns = [
+    /\b(?:import|export)\s+(?:[^'";]*?\s+from\s+)?["']([^"']+)["']/gu,
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu,
+    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/gu
+  ]
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) specifiers.add(match[1])
+  }
+  return [...specifiers]
 }
 
 export async function findReleaseArchive(input, expectedName) {
@@ -227,6 +287,7 @@ export async function packVideoEditor({ output, catalog = false } = {}) {
   try {
     const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
     runRequired(npm, ['--prefix', extensionRoot, 'run', 'build'])
+    await assertStandaloneVideoEditorHostBundle(join(extensionRoot, 'dist', 'host'))
     runRequired(process.execPath, [
       cliPath,
       'extension',

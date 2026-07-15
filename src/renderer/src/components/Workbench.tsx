@@ -35,7 +35,7 @@ import {
 } from '../sdd/sdd-thread-registry'
 import { CODE_PANEL_PREFERRED, useWorkbenchLayout } from './workbench-layout'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
-import { normalizeWorkspaceRoot } from '../lib/workspace-path'
+import { normalizeWorkspaceRoot, workspaceRootScopeKey } from '../lib/workspace-path'
 import {
   relativeWorkspacePath,
 } from '../lib/composer-file-references'
@@ -117,6 +117,7 @@ export function Workbench(): ReactElement {
     openPlugins, openClaw, openSchedule, openWorkflow, chooseWorkspace, clawChannels,
     activeClawChannelId, selectClawChannel, resetClawChannelSession, setClawChannelModel,
     appendLocalClawTurn, setError, sendMessage, reviewActiveThread, queuedMessages,
+    extensionComposerContexts, attachExtensionComposerContext, removeExtensionComposerContext,
     removeQueuedMessage, interrupt, probeRuntime, composerModel, composerProviderId,
     composerPickList, composerModelGroups, disabledSkillIds, composerMode, setComposerMode,
     setComposerModel, setThreadSearch, renameThread, pinThread, archiveThread, deleteThread,
@@ -127,6 +128,23 @@ export function Workbench(): ReactElement {
     () => resolveActiveExtensionWorkspaceRoot(activeThreadId, threads, workspaceRoot),
     [activeThreadId, threads, workspaceRoot]
   )
+  useEffect(() => {
+    if (typeof window.kunGui?.onExtensionComposerContext !== 'function') return
+    return window.kunGui.onExtensionComposerContext(attachExtensionComposerContext)
+  }, [attachExtensionComposerContext])
+  const extensionComposerContextChips = useMemo(() => {
+    if (route !== 'chat') return []
+    const workspace = workspaceRootScopeKey(extensionWorkspaceRoot)
+    return extensionComposerContexts
+      .filter((event) => workspaceRootScopeKey(event.workspaceRoot) === workspace)
+      .map((event) => ({
+        id: event.attachment.attachmentId,
+        kind: 'extension-context' as const,
+        label: event.attachment.title,
+        detail: event.attachment.summary,
+        removable: true
+      }))
+  }, [extensionComposerContexts, extensionWorkspaceRoot, route])
   const extensionContributionLoadContext = useMemo<ExtensionContributionLoadContext>(() => ({
     workspaceRoot: extensionWorkspaceRoot,
     locale: i18n.language
@@ -756,7 +774,10 @@ export function Workbench(): ReactElement {
     activeClawChannelModel: activeClawChannel?.model, composerModel, composerProviderId, composerPickList,
     composerModelGroups, composerReasoningEffort, setComposerReasoningEffort, lockVisionToTextModelSwitch,
     setClawChannelModel, setComposerModel, openProvidersSettings: () => openSettings('providers'), handleSend,
-    composerAttachments, attachmentUploadEnabled, attachmentUploadBusy, attachmentUploadError,
+    composerAttachments,
+    contextChips: extensionComposerContextChips,
+    removeContextChip: removeExtensionComposerContext,
+    attachmentUploadEnabled, attachmentUploadBusy, attachmentUploadError,
     activeSddDraft: Boolean(activeSddDraft), composerFileReferences,
     extraFileMentionCandidates: designDocumentFileMentionCandidates, webAccessAvailable,
     composerExecutionSettings, composerExecutionApplying, composerChangeSummary, runtimeSkills, disabledSkillIds,

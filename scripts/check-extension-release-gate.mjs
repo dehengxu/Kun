@@ -386,12 +386,13 @@ if (api) {
         const [versionMajor, versionMinor] = version.split('.').map(Number)
         return versionMajor * 1_000 + versionMinor
       }),
-      [1_001, 1_000]
+      [1_002, 1_001, 1_000]
     ),
-    'API v1.1/v1.0 negotiation fixture must retain current and legacy minor support in order'
+    'API v1.2/v1.1/v1.0 negotiation fixture must retain current and legacy minor support in order'
   )
   for (const name of [
-    'current v1.1 manifest',
+    'current v1.2 manifest',
+    'previous v1.1 manifest',
     'legacy v1.0 manifest',
     'future v1 minor',
     'unsupported major'
@@ -410,7 +411,7 @@ if (api) {
     })
     check(
       result.compatible === testCase.compatible,
-      `API v1.1/v1.0 compatibility fixture failed: ${testCase.name}`
+      `API v1.2/v1.1/v1.0 compatibility fixture failed: ${testCase.name}`
     )
     if (result.compatible) {
       check(
@@ -452,7 +453,7 @@ if (api) {
   }
 }
 
-// The v1.1 media reference extension is part of the release surface. Keep its
+// The current media reference extension is part of the release surface. Keep its
 // deterministic, local-only fixture and every example lifecycle command in the
 // fail-closed gate; native packaged evidence is still recorded per host.
 const videoExampleRoot = 'examples/extensions/kun-video-editor'
@@ -489,7 +490,7 @@ for (const command of [
   )
 }
 const videoExampleManifest = await json(`${videoExampleRoot}/kun-extension.json`)
-check(videoExampleManifest.apiVersion === '1.1.0', 'Kun video editor must exercise Extension API v1.1')
+check(videoExampleManifest.apiVersion === '1.2.0', 'Kun video editor must exercise Extension API v1.2')
 check(
   !videoExampleManifest.permissions.some((permission) => permission.startsWith('network:')),
   'Kun video editor deterministic release fixture must not require remote ASR or generative services'
@@ -508,7 +509,7 @@ for (const marker of [
 const videoExampleReadme = await text(`${videoExampleRoot}/README.md`)
 for (const marker of [
   '## Install the release package',
-  'kun-video-editor-0.3.0.kunx',
+  'kun-video-editor-0.4.1.kunx',
   'kun extension validate',
   'kun extension install',
   'npm run pack:kun-video-editor',
@@ -765,7 +766,7 @@ for (const marker of [
   'validateBundledDefaultExtension',
   "'--bundled-extensions-dir'",
   'was resurrected after explicit uninstall',
-  "apiVersion: '1.1.0'",
+  "apiVersion: '1.2.0'",
   'assertConfinedPackagedPath',
   'readAsarHeader'
 ]) {
@@ -1002,7 +1003,7 @@ const appImageDesktopCommand = 'npm run smoke:packaged-extension-appimage'
 const nativeMediaSmokeCommand = 'npm run smoke:extension-native-media'
 const packagedVideoNativeCommand = 'npm run smoke:packaged-video-editor-native'
 const packagedVideoReleaseCommand =
-  'npm run smoke:packaged-video-editor-native -- --archive dist/kun-video-editor-0.3.0.kunx'
+  'npm run smoke:packaged-video-editor-native -- --archive dist/kun-video-editor-0.4.1.kunx'
 const nativeEvidenceCommand = 'npm run evidence:extension-native'
 const nativeEvidenceVerifierCommand = 'npm run verify:extension-native-evidence'
 const videoEditorPackCommand = 'npm run pack:kun-video-editor'
@@ -1523,13 +1524,13 @@ requireOrderedSourceMarkers(releaseMacScript, 'scripts/release-mac.sh packaged s
   'npm run smoke:packaged-extensions -- --resources "${x64_resources}"',
   'npm run smoke:packaged-extensions -- --resources "${arm64_resources}"',
   'npm run smoke:packaged-extension-desktop -- --resources "${host_resources}"',
-  '--archive "${ROOT}/dist/kun-video-editor-0.3.0.kunx"'
+  '--archive "${ROOT}/dist/kun-video-editor-0.4.1.kunx"'
 ])
 for (const marker of [
   '|| die "macOS x64 packaged Extension Node runtime smoke failed"',
   '|| die "macOS arm64 packaged Extension Node runtime smoke failed"',
   '|| die "macOS packaged Extension desktop Chromium smoke failed"',
-  '--archive "${ROOT}/dist/kun-video-editor-0.3.0.kunx"',
+  '--archive "${ROOT}/dist/kun-video-editor-0.4.1.kunx"',
   'verify:manual-extension-release',
   'collect "Kun Video Editor extension" "dist/kun-video-editor-*.kunx"',
   '--r2) R2_UPLOAD=true; R2_PROMOTE=false',
@@ -1860,5 +1861,5 @@ runRequiredCommand({
 })
 
 process.stdout.write(
-  'Extension public release gate OK: platform exposed, API v1.1/v1.0 compatibility, media protocol isolation, native process cleanup, external tarball acceptance, legacy behaviors, packaged resources, and video editor lifecycle wiring passed. Host-native packaged playback evidence remains a separate per-platform release sign-off.\n'
+  'Extension public release gate OK: platform exposed, API v1.2/v1.1/v1.0 compatibility, media protocol isolation, native process cleanup, external tarball acceptance, legacy behaviors, packaged resources, bundled defaults, and video editor lifecycle wiring passed. Host-native packaged playback evidence remains a separate per-platform release sign-off.\n'
 )

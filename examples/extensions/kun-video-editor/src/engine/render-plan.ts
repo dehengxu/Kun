@@ -1,14 +1,41 @@
 import { engineError } from './errors.js'
-import type { MediaAsset, TimelineItem, VideoProject } from './schema.js'
+import type { VideoProject } from './schema.js'
 import { generateSubtitles, type SubtitleFormat } from './subtitles.js'
+import {
+  assertRenderIrSupported,
+  compileRenderIr,
+  defaultFfmpegCapabilities,
+  negotiateRenderIr,
+  renderIrDigest,
+  resolveInteractivePlayback,
+  type CanonicalRenderIr,
+  type InteractivePlaybackDecision,
+  type RenderBackendCapabilities,
+  type RenderCapabilityReport,
+  type RenderIrMediaLayer,
+  type RenderIrSource
+} from './render-ir.js'
 import {
   frameToSecondsArgument,
   framesToMicroseconds,
   microsecondsToSecondsArgument
 } from './time.js'
 import { assertValidTimeline, projectDurationFrames } from './timeline.js'
+import { flattenNestedRenderIr } from './nested-render.js'
+import type {
+  AdvancedEffectExecutionPlan,
+  AdvancedExportPlan
+} from './advanced-render.js'
 
-export type RenderKind = 'proof-frame' | 'preview' | 'h264-mp4' | 'audio-aac' | 'subtitles'
+export type RenderKind =
+  | 'proof-frame'
+  | 'preview'
+  | 'h264-mp4'
+  | 'h265-mp4'
+  | 'prores-mov'
+  | 'ffv1-mkv'
+  | 'audio-aac'
+  | 'subtitles'
 export type CaptionMode = 'none' | 'burned' | 'sidecar' | 'both'
 
 export type RenderRequest = {
@@ -16,9 +43,14 @@ export type RenderRequest = {
   expectedRevision: number
   outputHandleId: string
   proofFrame?: number
+  startFrame?: number
+  endFrame?: number
   captionMode?: CaptionMode
   subtitleFormat?: SubtitleFormat
   subtitleOutputHandleId?: string
+  backendCapabilities?: RenderBackendCapabilities
+  advancedEffects?: AdvancedEffectExecutionPlan
+  advancedExport?: AdvancedExportPlan
 }
 
 export type RenderInputReference = {
@@ -54,11 +86,21 @@ export type PlannedArtifact = {
 export type RenderPlan = {
   schemaVersion: 1
   projectId: string
+  sequenceId: string
   revision: number
   renderKind: RenderKind
   canvas: VideoProject['canvas']
   fps: VideoProject['fps']
   durationFrames: number
+  renderIr: CanonicalRenderIr
+  renderIrDigest: string
+  backendCapabilitiesDigest: string
+  capabilityReport: RenderCapabilityReport
+  playback: InteractivePlaybackDecision
+  verification: {
+    technicalValidation: 'pending'
+    visualInspection: 'not-performed'
+  }
   steps: RenderStep[]
   artifacts: PlannedArtifact[]
 }
@@ -73,34 +115,91 @@ export function generateRenderPlan(project: VideoProject, request: RenderRequest
   }
   validateOpaqueReference(request.outputHandleId, 'outputHandleId')
   const durationFrames = projectDurationFrames(project)
+  if (durationFrames <= 0) {
+    throw engineError(
+      'render_unsupported',
+      request.kind === 'subtitles'
+        ? 'Subtitle export requires at least one timed caption'
+        : 'A media render requires at least one timeline item'
+    )
+  }
+  const captionMode = request.captionMode ?? 'none'
+  const proofFrame = request.kind === 'proof-frame' ? request.proofFrame ?? 0 : undefined
+  if (
+    proofFrame !== undefined &&
+    (!Number.isSafeInteger(proofFrame) || proofFrame < 0 || proofFrame >= durationFrames)
+  ) {
+    throw engineError('render_unsupported', 'Proof frame must be inside the composed timeline')
+  }
+  const hasStartFrame = request.startFrame !== undefined
+  const hasEndFrame = request.endFrame !== undefined
+  if (hasStartFrame !== hasEndFrame) {
+    throw engineError('render_unsupported', 'A render range requires both startFrame and endFrame')
+  }
+  if (proofFrame !== undefined && hasStartFrame) {
+    throw engineError('render_unsupported', 'A proof-frame render cannot also request a render range')
+  }
+  const requestedRange = hasStartFrame
+    ? { startFrame: request.startFrame!, endFrame: request.endFrame! }
+    : undefined
+  if (
+    requestedRange &&
+    (!Number.isSafeInteger(requestedRange.startFrame) ||
+      !Number.isSafeInteger(requestedRange.endFrame) ||
+      requestedRange.startFrame < 0 ||
+      requestedRange.endFrame <= requestedRange.startFrame ||
+      requestedRange.endFrame > durationFrames)
+  ) {
+    throw engineError('render_unsupported', 'Render range must be inside the composed timeline')
+  }
+  const renderIr = flattenNestedRenderIr(project, compileRenderIr(project, {
+    textPolicy: request.kind === 'subtitles' ? 'sidecar' : captionMode,
+    ...(proofFrame === undefined
+      ? requestedRange ? { range: requestedRange } : {}
+      : { range: { startFrame: proofFrame, endFrame: proofFrame + 1 } })
+  }))
+  const backendCapabilities = constrainToFfmpegCompiler(
+    request.backendCapabilities ?? defaultFfmpegCapabilities(),
+    request.advancedEffects !== undefined
+  )
+  const capabilityReport = negotiateRenderIr(renderIr, backendCapabilities, request.kind)
+  assertRenderIrSupported(capabilityReport)
+  validateAdvancedPlans(renderIr, request)
+  const playback = resolveInteractivePlayback(renderIr)
   const plan: RenderPlan = {
     schemaVersion: 1,
     projectId: project.id,
+    sequenceId: renderIr.sequenceId,
     revision: project.currentRevision,
     renderKind: request.kind,
     canvas: structuredClone(project.canvas),
     fps: structuredClone(project.fps),
-    durationFrames,
+    durationFrames: renderIr.range.endFrame - renderIr.range.startFrame,
+    renderIr,
+    renderIrDigest: renderIrDigest(renderIr),
+    backendCapabilitiesDigest: capabilityReport.capabilitiesDigest,
+    capabilityReport,
+    playback,
+    verification: {
+      technicalValidation: 'pending',
+      visualInspection: 'not-performed'
+    },
     steps: [],
     artifacts: []
   }
 
   if (request.kind === 'subtitles') {
     const format = request.subtitleFormat ?? 'srt'
-    plan.steps.push(subtitleStep(project, request.outputHandleId, format, 'subtitles'))
+    plan.steps.push(subtitleStep(renderIr, request.outputHandleId, format, 'subtitles'))
     plan.artifacts.push(subtitleArtifact(request.outputHandleId, format))
     return plan
   }
 
-  if (durationFrames <= 0) {
-    throw engineError('render_unsupported', 'A media render requires at least one timeline item')
-  }
-  const captionMode = request.captionMode ?? 'none'
   const sidecarRequested = captionMode === 'sidecar' || captionMode === 'both'
   const burnedRequested = captionMode === 'burned' || captionMode === 'both'
   const subtitleFormat = request.subtitleFormat ?? 'srt'
-  if (sidecarRequested && request.kind !== 'h264-mp4') {
-    throw engineError('render_unsupported', 'Sidecar captions are supported only for the final H.264 export')
+  if (sidecarRequested && !isFinalVideoKind(request.kind)) {
+    throw engineError('render_unsupported', 'Sidecar captions are supported only for a final video export')
   }
   if (burnedRequested && request.kind === 'audio-aac') {
     throw engineError('render_unsupported', 'Burned captions require a video render')
@@ -118,12 +217,12 @@ export function generateRenderPlan(project: VideoProject, request: RenderRequest
       throw engineError('render_unsupported', 'Sidecar captions require an output handle')
     }
     validateOpaqueReference(request.subtitleOutputHandleId, 'subtitleOutputHandleId')
-    plan.steps.push(subtitleStep(project, request.subtitleOutputHandleId, subtitleFormat, 'sidecar-captions'))
+    plan.steps.push(subtitleStep(renderIr, request.subtitleOutputHandleId, subtitleFormat, 'sidecar-captions'))
     plan.artifacts.push(subtitleArtifact(request.subtitleOutputHandleId, subtitleFormat))
   }
 
   if (request.kind === 'proof-frame') {
-    plan.steps.push(proofFrameStep(project, request, burnedRequested))
+    plan.steps.push(proofFrameStep(renderIr, request, burnedRequested))
     plan.artifacts.push({
       output: request.outputHandleId,
       name: `${project.id}-revision-${project.currentRevision}-proof.png`,
@@ -134,7 +233,7 @@ export function generateRenderPlan(project: VideoProject, request: RenderRequest
   }
 
   if (request.kind === 'audio-aac') {
-    plan.steps.push(audioStep(project, request.outputHandleId))
+    plan.steps.push(audioStep(renderIr, request.outputHandleId))
     plan.artifacts.push({
       output: request.outputHandleId,
       name: `${project.id}-revision-${project.currentRevision}.m4a`,
@@ -144,33 +243,58 @@ export function generateRenderPlan(project: VideoProject, request: RenderRequest
     return plan
   }
 
-  plan.steps.push(videoStep(project, request.outputHandleId, request.kind, burnedRequested))
+  plan.steps.push(videoStep(renderIr, request, burnedRequested))
   plan.artifacts.push({
     output: request.outputHandleId,
-    name: request.kind === 'preview'
-      ? `${project.id}-revision-${project.currentRevision}-preview.mp4`
-      : `${project.id}-revision-${project.currentRevision}.mp4`,
-    mime: 'video/mp4',
+    name: videoArtifactName(project.id, project.currentRevision, request.kind),
+    mime: videoArtifactMime(request.kind),
     kind: 'video'
   })
   return plan
 }
 
+function constrainToFfmpegCompiler(
+  observed: RenderBackendCapabilities,
+  advancedEffectsPlanned: boolean
+): RenderBackendCapabilities {
+  const implemented: RenderBackendCapabilities = {
+    ...defaultFfmpegCapabilities(),
+    effects: advancedEffectsPlanned
+      ? ['blur', 'color.basic', 'color.temperature', 'sharpen', 'vignette']
+      : []
+  }
+  const intersection = (available: readonly string[], supported: readonly string[]): string[] =>
+    supported.filter((entry) => available.includes(entry))
+  const fonts = observed.fonts.includes('*')
+    ? [...implemented.fonts]
+    : intersection(observed.fonts, implemented.fonts)
+  return {
+    ...observed,
+    codecs: intersection(observed.codecs, implemented.codecs),
+    filters: intersection(observed.filters, implemented.filters),
+    effects: intersection(observed.effects, implemented.effects),
+    colorSpaces: intersection(observed.colorSpaces, implemented.colorSpaces),
+    fonts,
+    maxSources: Math.min(observed.maxSources, implemented.maxSources),
+    maxLayers: Math.min(observed.maxLayers, implemented.maxLayers),
+    maxTextLayers: Math.min(observed.maxTextLayers, implemented.maxTextLayers)
+  }
+}
+
 function proofFrameStep(
-  project: VideoProject,
+  ir: CanonicalRenderIr,
   request: RenderRequest,
   burnedCaptions: boolean
 ): FfmpegRenderStep {
   const frame = request.proofFrame ?? 0
-  const duration = projectDurationFrames(project)
-  if (!Number.isSafeInteger(frame) || frame < 0 || frame >= duration) {
+  if (!Number.isSafeInteger(frame) || frame < ir.range.startFrame || frame >= ir.range.endFrame) {
     throw engineError('render_unsupported', 'Proof frame must be inside the composed timeline')
   }
-  const prepared = prepareCompositionInputs(project, false)
+  const prepared = prepareCompositionInputs(ir, false)
   if (prepared.items.length === 0) {
     throw engineError('render_unsupported', 'Proof output requires a probed video stream')
   }
-  const composition = compositionGraph(project, prepared.items, burnedCaptions, false)
+  const composition = compositionGraph(ir, prepared.items, burnedCaptions, false, request.advancedEffects)
   const proofOutput = 'proof-frame-output'
   const graph = `${composition.graph};${composition.videoOutput}` +
     `trim=start_frame=${frame}:end_frame=${frame + 1},setpts=PTS-STARTPTS[${proofOutput}]`
@@ -192,89 +316,200 @@ function proofFrameStep(
 }
 
 function videoStep(
-  project: VideoProject,
-  outputHandleId: string,
-  kind: 'preview' | 'h264-mp4',
+  ir: CanonicalRenderIr,
+  request: RenderRequest,
   burnedCaptions: boolean
 ): FfmpegRenderStep {
-  const prepared = prepareCompositionInputs(project, true)
-  if (!prepared.items.some(({ asset }) => asset.video !== undefined)) {
+  const prepared = prepareCompositionInputs(ir, true)
+  if (!prepared.items.some(({ source }) => hasVisualSource(source))) {
     throw engineError('render_unsupported', 'Video output requires a probed video stream')
   }
   const { graph, videoOutput, audioOutput } = compositionGraph(
-    project,
+    ir,
     prepared.items,
     burnedCaptions,
-    true
+    true,
+    request.advancedEffects
   )
-  prepared.args.push('-filter_complex', graph, '-map', videoOutput)
+  const selected = request.advancedExport?.selected
+  const outputFilters = selected?.videoFilterSuffix ?? []
+  const processedVideoOutput = outputFilters.length > 0 ? '[advanced-export-video]' : videoOutput
+  const outputGraph = outputFilters.length > 0
+    ? `${graph};${videoOutput}${outputFilters.join(',')}[advanced-export-video]`
+    : graph
+  assertBoundedFilterGraph(outputGraph)
+  prepared.args.push('-filter_complex', outputGraph, '-map', processedVideoOutput)
   if (audioOutput) prepared.args.push('-map', audioOutput)
   else prepared.args.push('-an')
-  prepared.args.push(
-    '-c:v', 'libx264',
-    '-preset', kind === 'preview' ? 'veryfast' : 'medium',
-    '-crf', kind === 'preview' ? '28' : '20',
-    '-pix_fmt', 'yuv420p'
-  )
-  if (audioOutput) prepared.args.push('-c:a', 'aac', '-b:a', kind === 'preview' ? '128k' : '192k')
-  prepared.args.push('-movflags', '+faststart', '-f', 'mp4', placeholder('output', 'video'))
+  if (selected) {
+    prepared.args.push(...selected.videoArgs)
+    if (audioOutput) prepared.args.push(...selected.audioArgs)
+    prepared.args.push(...selected.muxerArgs, placeholder('output', 'video'))
+  } else {
+    if (request.kind !== 'preview' && request.kind !== 'h264-mp4') {
+      throw engineError('render_unsupported', `${request.kind} requires an advanced export negotiation plan`)
+    }
+    prepared.args.push(
+      '-c:v', 'libx264',
+      '-preset', request.kind === 'preview' ? 'veryfast' : 'medium',
+      '-crf', request.kind === 'preview' ? '28' : '20',
+      '-pix_fmt', 'yuv420p'
+    )
+    if (audioOutput) prepared.args.push('-c:a', 'aac', '-b:a', request.kind === 'preview' ? '128k' : '192k')
+    prepared.args.push('-movflags', '+faststart', '-f', 'mp4', placeholder('output', 'video'))
+  }
   return {
     kind: 'ffmpeg',
-    id: kind,
+    id: request.kind,
     inputs: prepared.inputs,
-    outputs: { video: outputHandleId },
+    outputs: { video: request.outputHandleId },
     args: prepared.args
   }
 }
 
+function validateAdvancedPlans(ir: CanonicalRenderIr, request: RenderRequest): void {
+  const rendersVisual = request.kind === 'proof-frame' || request.kind === 'preview' || isFinalVideoKind(request.kind)
+  const enabledEffects = rendersVisual ? ir.layers
+    .flatMap((layer) => layer.effects.filter(({ enabled }) => enabled)) : []
+  const enabledEffectIds = enabledEffects.map(({ id }) => id).sort()
+  const plannedEffectIds = request.advancedEffects?.layers
+    .flatMap((layer) => layer.filters.map(({ effectId }) => effectId))
+    .sort() ?? []
+  if (enabledEffectIds.length > 0 && !request.advancedEffects) {
+    throw engineError(
+      'render_unsupported',
+      'Enabled effects require an explicit negotiated execution plan',
+      {
+        unsupported: enabledEffects.map((effect) => ({
+          nodeId: effect.id,
+          nodeType: 'effect',
+          capability: `effect:${effect.type}`,
+          message: `Effect ${effect.type} has no pinned execution plan.`,
+          guidance: 'Negotiate the effect against the current backend before starting this render.'
+        }))
+      }
+    )
+  }
+  if (request.advancedEffects) {
+    const expectedTarget = request.kind === 'proof-frame' || request.kind === 'preview'
+      ? 'preview'
+      : 'export'
+    if (
+      !request.advancedEffects.supported ||
+      request.advancedEffects.projectId !== ir.projectId ||
+      request.advancedEffects.sequenceId !== ir.sequenceId ||
+      request.advancedEffects.revision !== ir.revision ||
+      request.advancedEffects.renderIrDigest !== renderIrDigest(ir) ||
+      request.advancedEffects.target !== expectedTarget ||
+      request.advancedEffects.acceleration.selected !== 'cpu' ||
+      JSON.stringify(plannedEffectIds) !== JSON.stringify(enabledEffectIds)
+    ) {
+      throw engineError(
+        'render_unsupported',
+        'Advanced effect plan does not exactly match the pinned Render IR or the bounded CPU executor'
+      )
+    }
+  }
+  if (request.advancedExport) {
+    if (
+      !isFinalVideoKind(request.kind) ||
+      !request.advancedExport.supported ||
+      !request.advancedExport.selected ||
+      request.advancedExport.projectId !== ir.projectId ||
+      request.advancedExport.sequenceId !== ir.sequenceId ||
+      request.advancedExport.revision !== ir.revision ||
+      request.advancedExport.renderIrDigest !== renderIrDigest(ir) ||
+      request.advancedExport.selected.format !== request.kind
+    ) {
+      throw engineError('render_unsupported', 'Advanced export plan does not match the pinned Render IR and selected format')
+    }
+  } else if (request.kind === 'h265-mp4' || request.kind === 'prores-mov' || request.kind === 'ffv1-mkv') {
+    throw engineError('render_unsupported', `${request.kind} requires an explicit negotiated export plan`)
+  }
+}
+
+function isFinalVideoKind(kind: RenderKind): kind is 'h264-mp4' | 'h265-mp4' | 'prores-mov' | 'ffv1-mkv' {
+  return kind === 'h264-mp4' || kind === 'h265-mp4' || kind === 'prores-mov' || kind === 'ffv1-mkv'
+}
+
+function videoArtifactName(projectId: string, revision: number, kind: RenderKind): string {
+  if (kind === 'preview') return `${projectId}-revision-${revision}-preview.mp4`
+  const extension = kind === 'prores-mov' ? 'mov' : kind === 'ffv1-mkv' ? 'mkv' : 'mp4'
+  return `${projectId}-revision-${revision}.${extension}`
+}
+
+function videoArtifactMime(kind: RenderKind): string {
+  return kind === 'prores-mov'
+    ? 'video/quicktime'
+    : kind === 'ffv1-mkv'
+      ? 'video/x-matroska'
+      : 'video/mp4'
+}
+
 function prepareCompositionInputs(
-  project: VideoProject,
+  ir: CanonicalRenderIr,
   includeAudioOnlyItems: boolean
 ): {
     inputs: Record<string, RenderInputReference>
     args: string[]
-    items: Array<{ item: TimelineItem; asset: MediaAsset; inputIndex: number }>
+    items: Array<{ layer: RenderIrMediaLayer; source: RenderIrSource; inputIndex: number }>
   } {
   const inputs: Record<string, RenderInputReference> = {}
   const args = ['-nostdin']
-  const items: Array<{ item: TimelineItem; asset: MediaAsset; inputIndex: number }> = []
-  for (const item of [...project.items].sort(compositionItemComparator(project))) {
-    const asset = assetForItem(project, item)
-    if (!includeAudioOnlyItems && !asset.video) continue
+  const items: Array<{ layer: RenderIrMediaLayer; source: RenderIrSource; inputIndex: number }> = []
+  for (const layer of ir.layers) {
+    if (layer.source.kind !== 'asset') {
+      throw engineError('render_unsupported', `Nested sequence layer ${layer.id} requires a composed proxy backend`)
+    }
+    const sourceId = layer.source.sourceId
+    const source = ir.sources.find(({ id }) => id === sourceId)
+    if (!source) throw engineError('invalid_project', `Missing Render IR source ${sourceId}`)
+    if (!includeAudioOnlyItems && !hasVisualSource(source)) continue
     // Media placeholders are part of the public broker request and therefore
     // have their own bounded identifier budget. Timeline ids grow after
     // repeated transcript cuts (`-part-N`), so never derive a binding key from
     // the user/project-controlled id.
     const inputName = `clip-${items.length}`
-    inputs[inputName] = assetReference(asset)
+    inputs[inputName] = structuredClone(source.reference)
+    if (source.still?.animated === false) {
+      args.push('-loop', '1', '-framerate', `${ir.fps.numerator}/${ir.fps.denominator}`)
+    } else if (source.still?.animated === true && source.still.loop) {
+      args.push('-stream_loop', '-1')
+    }
     args.push(
-      '-ss', microsecondsToSecondsArgument(item.sourceStartUs),
-      '-t', microsecondsToSecondsArgument(item.sourceEndUs - item.sourceStartUs),
+      '-ss', microsecondsToSecondsArgument(layer.sourceMap.startUs),
+      '-t', microsecondsToSecondsArgument(layer.sourceMap.endUs - layer.sourceMap.startUs),
       '-i', placeholder('input', inputName)
     )
-    items.push({ item, asset, inputIndex: items.length })
+    items.push({ layer, source, inputIndex: items.length })
   }
   return { inputs, args, items }
 }
 
-function audioStep(project: VideoProject, outputHandleId: string): FfmpegRenderStep {
+function audioStep(ir: CanonicalRenderIr, outputHandleId: string): FfmpegRenderStep {
   const inputs: Record<string, RenderInputReference> = {}
   const args = ['-nostdin']
   const audioFilters: string[] = []
   let inputIndex = 0
-  for (const item of [...project.items].sort(compositionItemComparator(project))) {
-    const asset = assetForItem(project, item)
-    if (!asset.audio) continue
+  for (const layer of ir.layers) {
+    if (layer.source.kind !== 'asset') {
+      throw engineError('render_unsupported', `Nested sequence layer ${layer.id} requires a composed proxy backend`)
+    }
+    const sourceId = layer.source.sourceId
+    const source = ir.sources.find(({ id }) => id === sourceId)
+    if (!source) throw engineError('invalid_project', `Missing Render IR source ${sourceId}`)
+    if (!source.audio || !layer.audio.enabled) continue
     const name = `clip-${inputIndex}`
-    inputs[name] = assetReference(asset)
+    inputs[name] = structuredClone(source.reference)
     args.push(
-      '-ss', microsecondsToSecondsArgument(item.sourceStartUs),
-      '-t', microsecondsToSecondsArgument(item.sourceEndUs - item.sourceStartUs),
+      '-ss', microsecondsToSecondsArgument(layer.sourceMap.startUs),
+      '-t', microsecondsToSecondsArgument(layer.sourceMap.endUs - layer.sourceMap.startUs),
       '-i', placeholder('input', name)
     )
-    const delay = Math.floor(framesToMicroseconds(item.timelineStartFrame, project.fps) / 1000)
+    const delay = Math.floor(framesToMicroseconds(layer.timeline.startFrame, ir.fps) / 1000)
     audioFilters.push(
-      `[${inputIndex}:a]asetpts=PTS-STARTPTS,adelay=${delay}:all=1,volume=${item.opacity.toFixed(4)}[a${inputIndex}]`
+      `[${inputIndex}:a]asetpts=(PTS-STARTPTS)/${layer.sourceMap.speed.numerator}*${layer.sourceMap.speed.denominator},` +
+      `${audioFadeFilters(layer, ir.fps)}adelay=${delay}:all=1,volume=${layer.audio.volume.toFixed(4)}[a${inputIndex}]`
     )
     inputIndex += 1
   }
@@ -302,69 +537,71 @@ function audioStep(project: VideoProject, outputHandleId: string): FfmpegRenderS
 }
 
 function compositionGraph(
-  project: VideoProject,
-  items: Array<{ item: TimelineItem; asset: MediaAsset; inputIndex: number }>,
+  ir: CanonicalRenderIr,
+  items: Array<{ layer: RenderIrMediaLayer; source: RenderIrSource; inputIndex: number }>,
   burnedCaptions: boolean,
-  includeAudio: boolean
+  includeAudio: boolean,
+  advancedEffects?: AdvancedEffectExecutionPlan
 ): { graph: string; videoOutput: string; audioOutput?: string } {
   if (canUseSequentialConcat(items, burnedCaptions, includeAudio)) {
-    return sequentialCompositionGraph(project, items, includeAudio)
+    return sequentialCompositionGraph(ir, items, includeAudio)
   }
 
   // The color source duration option accepts a decimal duration, but FFmpeg 8
   // no longer accepts the rational frame expression used by timeline filters.
   const duration = microsecondsToSecondsArgument(
-    framesToMicroseconds(projectDurationFrames(project), project.fps)
+    framesToMicroseconds(ir.range.endFrame, ir.fps)
   )
   const filters = [
-    `color=c=${project.canvas.background}:s=${project.canvas.width}x${project.canvas.height}:r=${project.fps.numerator}/${project.fps.denominator}:d=${duration}[base]`
+    `color=c=${ir.canvas.background}:s=${ir.canvas.width}x${ir.canvas.height}:r=${ir.fps.numerator}/${ir.fps.denominator}:d=${duration}[base]`
   ]
   let videoLabel = 'base'
   const audioLabels: string[] = []
-  for (const { item, asset, inputIndex } of items) {
-    const start = frameToSecondsArgument(item.timelineStartFrame, project.fps)
-    const end = frameToSecondsArgument(item.timelineStartFrame + item.durationFrames, project.fps)
-    if (asset.video) {
+  for (const { layer, source, inputIndex } of items) {
+    const start = frameToSecondsArgument(layer.timeline.startFrame, ir.fps)
+    const end = frameToSecondsArgument(layer.timeline.endFrame, ir.fps)
+    if (hasVisualSource(source)) {
       const prepared = `vprep${inputIndex}`
       const next = `vcomp${inputIndex}`
+      const advancedFilter = advancedEffects?.layers.find(({ layerId }) => layerId === layer.id)?.filterChain
       filters.push(
-        `[${inputIndex}:v]setpts=(PTS-STARTPTS)/${item.speed.numerator}*${item.speed.denominator},${geometryFilter(project, item)},format=rgba,colorchannelmixer=aa=${item.opacity.toFixed(4)},setpts=PTS+${start}/TB[${prepared}]`
+        `[${inputIndex}:v]setpts=(PTS-STARTPTS)/${layer.sourceMap.speed.numerator}*${layer.sourceMap.speed.denominator},` +
+        `${geometryFilter(ir, layer)},${advancedFilter ? `${advancedFilter},` : ''}${visualFadeFilters(layer)}format=rgba,` +
+        `colorchannelmixer=aa=${layer.visual.opacity.toFixed(4)},setpts=PTS+${start}/TB[${prepared}]`
       )
-      const x = `(W-w)/2+${item.transform.x.toFixed(3)}`
-      const y = `(H-h)/2+${item.transform.y.toFixed(3)}`
+      const x = `(W-w)/2+${layer.visual.transform.x.toFixed(3)}`
+      const y = `(H-h)/2+${layer.visual.transform.y.toFixed(3)}`
       filters.push(
         `[${videoLabel}][${prepared}]overlay=x='${x}':y='${y}':eof_action=pass:enable='between(t,${start},${end})'[${next}]`
       )
       videoLabel = next
     }
-    if (includeAudio && asset.audio) {
-      const delay = Math.floor(framesToMicroseconds(item.timelineStartFrame, project.fps) / 1000)
+    if (includeAudio && source.audio && layer.audio.enabled) {
+      const delay = Math.floor(framesToMicroseconds(layer.timeline.startFrame, ir.fps) / 1000)
       const audioLabel = `a${inputIndex}`
       filters.push(
-        `[${inputIndex}:a]asetpts=(PTS-STARTPTS)/${item.speed.numerator}*${item.speed.denominator},adelay=${delay}:all=1,volume=${item.opacity.toFixed(4)}[${audioLabel}]`
+        `[${inputIndex}:a]asetpts=(PTS-STARTPTS)/${layer.sourceMap.speed.numerator}*${layer.sourceMap.speed.denominator},` +
+        `${audioFadeFilters(layer, ir.fps)}adelay=${delay}:all=1,volume=${layer.audio.volume.toFixed(4)}[${audioLabel}]`
       )
       audioLabels.push(audioLabel)
     }
   }
   if (burnedCaptions) {
-    for (const [index, caption] of [...project.captions]
-      .sort((left, right) => left.startFrame - right.startFrame || left.id.localeCompare(right.id))
-      .entries()) {
+    for (const [index, caption] of ir.textLayers.entries()) {
       const next = `captioned${index}`
-      const fontSize = caption.style?.fontSize === undefined
-        ? Math.max(18, Math.min(96, Math.round(project.canvas.height / 24)))
-        : Math.round(caption.style.fontSize)
-      const fontColor = safeCaptionColor(caption.style?.color, 'FFFFFF')
-      const boxColor = safeCaptionColor(caption.style?.background, '000000')
+      const fontSize = Math.round(caption.style.fontSize)
+      const fontColor = safeCaptionColor(caption.style.color, 'FFFFFF')
+      const boxColor = safeCaptionColor(caption.style.background, '000000')
       const y = caption.placement === 'top'
         ? 'h/12'
         : caption.placement === 'center'
           ? '(h-text_h)/2'
           : 'h-text_h-h/12'
-      const start = frameToSecondsArgument(caption.startFrame, project.fps)
-      const end = frameToSecondsArgument(caption.endFrame, project.fps)
+      const start = frameToSecondsArgument(caption.timeline.startFrame, ir.fps)
+      const end = frameToSecondsArgument(caption.timeline.endFrame, ir.fps)
       filters.push(
         `[${videoLabel}]drawtext=text=${escapeDrawtextText(caption.text)}` +
+        `:font=${escapeDrawtextText(caption.style.fontFamily)}` +
         `:expansion=none:fontcolor=0x${fontColor}:fontsize=${fontSize}` +
         `:box=1:boxcolor=0x${boxColor}@0.65:boxborderw=12` +
         `:x=(w-text_w)/2:y=${y}:enable='between(t,${start},${end})'[${next}]`
@@ -389,25 +626,26 @@ function compositionGraph(
  * A concat graph is both semantically simpler and substantially smaller.
  */
 function sequentialCompositionGraph(
-  project: VideoProject,
-  items: Array<{ item: TimelineItem; asset: MediaAsset; inputIndex: number }>,
+  ir: CanonicalRenderIr,
+  items: Array<{ layer: RenderIrMediaLayer; source: RenderIrSource; inputIndex: number }>,
   includeAudio: boolean
 ): { graph: string; videoOutput: string; audioOutput?: string } {
-  const hasAudio = includeAudio && items.every(({ asset }) => asset.audio !== undefined)
+  const hasAudio = includeAudio && items.every(({ source, layer }) =>
+    source.audio !== undefined && layer.audio.enabled)
   const filters: string[] = []
   const concatInputs: string[] = []
 
-  for (const { item, inputIndex } of items) {
+  for (const { layer, inputIndex } of items) {
     const videoLabel = `v${inputIndex}`
     filters.push(
-      `[${inputIndex}:v]setpts=(PTS-STARTPTS)/${item.speed.numerator}*${item.speed.denominator},` +
-      `${sequentialGeometryFilter(project)},settb=AVTB[${videoLabel}]`
+      `[${inputIndex}:v]setpts=(PTS-STARTPTS)/${layer.sourceMap.speed.numerator}*${layer.sourceMap.speed.denominator},` +
+      `${sequentialGeometryFilter(ir, layer.visual.fit)},settb=AVTB[${videoLabel}]`
     )
     concatInputs.push(`[${videoLabel}]`)
     if (hasAudio) {
       const audioLabel = `a${inputIndex}`
       filters.push(
-        `[${inputIndex}:a]asetpts=(PTS-STARTPTS)/${item.speed.numerator}*${item.speed.denominator},` +
+        `[${inputIndex}:a]asetpts=(PTS-STARTPTS)/${layer.sourceMap.speed.numerator}*${layer.sourceMap.speed.denominator},` +
         `aresample=async=1:first_pts=0[${audioLabel}]`
       )
       concatInputs.push(`[${audioLabel}]`)
@@ -428,34 +666,41 @@ function sequentialCompositionGraph(
 }
 
 function canUseSequentialConcat(
-  items: Array<{ item: TimelineItem; asset: MediaAsset; inputIndex: number }>,
+  items: Array<{ layer: RenderIrMediaLayer; source: RenderIrSource; inputIndex: number }>,
   burnedCaptions: boolean,
   includeAudio: boolean
 ): boolean {
   if (burnedCaptions || items.length === 0) return false
-  const firstTrackId = items[0]!.item.trackId
-  const audioPresence = items[0]!.asset.audio !== undefined
+  const firstTrackId = items[0]!.layer.trackId
+  const audioPresence = items[0]!.source.audio !== undefined && items[0]!.layer.audio.enabled
   let cursor = 0
-  for (const { item, asset } of items) {
+  for (const { layer, source } of items) {
     if (
-      !asset.video ||
-      item.trackId !== firstTrackId ||
-      item.timelineStartFrame !== cursor ||
-      item.transform.x !== 0 ||
-      item.transform.y !== 0 ||
-      item.transform.scaleX !== 1 ||
-      item.transform.scaleY !== 1 ||
-      item.transform.rotation !== 0 ||
-      item.opacity !== 1 ||
-      item.fadeInFrames !== 0 ||
-      item.fadeOutFrames !== 0 ||
-      (includeAudio && (asset.audio !== undefined) !== audioPresence)
+      !hasVisualSource(source) ||
+      layer.trackId !== firstTrackId ||
+      layer.timeline.startFrame !== cursor ||
+      layer.visual.transform.x !== 0 ||
+      layer.visual.transform.y !== 0 ||
+      layer.visual.transform.scaleX !== 1 ||
+      layer.visual.transform.scaleY !== 1 ||
+      layer.visual.transform.rotation !== 0 ||
+      Object.values(layer.visual.crop).some((value) => value !== 0) ||
+      layer.visual.opacity !== 1 ||
+      layer.visual.fadeInFrames !== 0 ||
+      layer.visual.fadeOutFrames !== 0 ||
+      layer.effects.some(({ enabled }) => enabled) ||
+      layer.keyframes.length > 0 ||
+      (includeAudio && (source.audio !== undefined && layer.audio.enabled) !== audioPresence)
     ) {
       return false
     }
-    cursor += item.durationFrames
+    cursor += layer.timeline.endFrame - layer.timeline.startFrame
   }
   return true
+}
+
+function hasVisualSource(source: RenderIrSource): boolean {
+  return source.video !== undefined || source.still !== undefined
 }
 
 function assertBoundedFilterGraph(graph: string): void {
@@ -494,38 +739,77 @@ function safeCaptionColor(value: string | undefined, fallback: string): string {
   return match[1]!.toUpperCase()
 }
 
-function geometryFilter(project: VideoProject, item: TimelineItem): string {
-  const baseGeometry = project.canvas.fit === 'crop'
-    ? `scale=${project.canvas.width}:${project.canvas.height}:force_original_aspect_ratio=increase,` +
-      `crop=${project.canvas.width}:${project.canvas.height},setsar=1`
-    : project.canvas.fit === 'pad'
-      ? sequentialGeometryFilter(project)
-      : `scale=${project.canvas.width}:${project.canvas.height}:force_original_aspect_ratio=decrease,setsar=1`
+function geometryFilter(ir: CanonicalRenderIr, layer: RenderIrMediaLayer): string {
+  const crop = layer.visual.crop
+  const sourceCrop = Object.values(crop).some((value) => value !== 0)
+    ? `crop=iw*${(1 - crop.left - crop.right).toFixed(6)}:` +
+      `ih*${(1 - crop.top - crop.bottom).toFixed(6)}:` +
+      `iw*${crop.left.toFixed(6)}:ih*${crop.top.toFixed(6)},`
+    : ''
+  const baseGeometry = layer.visual.fit === 'crop'
+    ? `scale=${ir.canvas.width}:${ir.canvas.height}:force_original_aspect_ratio=increase,` +
+      `crop=${ir.canvas.width}:${ir.canvas.height},setsar=1`
+    : layer.visual.fit === 'pad'
+      ? sequentialGeometryFilter(ir, layer.visual.fit)
+      : `scale=${ir.canvas.width}:${ir.canvas.height}:force_original_aspect_ratio=decrease,setsar=1`
   // Apply item transforms only after the source has been fitted to the canvas.
   // Scaling the target first made crop mode request (for example) a 640x360
   // crop from a 320x180 image whenever the item scale was 0.5.
-  const transformed = item.transform.scaleX === 1 && item.transform.scaleY === 1
+  const transformed = layer.visual.transform.scaleX === 1 && layer.visual.transform.scaleY === 1
     ? baseGeometry
-    : `${baseGeometry},scale=iw*${item.transform.scaleX.toFixed(6)}:` +
-      `ih*${item.transform.scaleY.toFixed(6)}`
-  const rotation = item.transform.rotation === 0
+    : `${baseGeometry},scale=iw*${layer.visual.transform.scaleX.toFixed(6)}:` +
+      `ih*${layer.visual.transform.scaleY.toFixed(6)}`
+  const rotation = layer.visual.transform.rotation === 0
     ? ''
-    : `,rotate=${(item.transform.rotation * Math.PI / 180).toFixed(8)}:c=none`
-  return `${transformed}${rotation}`
+    : `,rotate=${(layer.visual.transform.rotation * Math.PI / 180).toFixed(8)}:c=none`
+  return `${sourceCrop}${transformed}${rotation}`
 }
 
-function sequentialGeometryFilter(project: VideoProject): string {
-  if (project.canvas.fit === 'crop') {
-    return `scale=${project.canvas.width}:${project.canvas.height}:force_original_aspect_ratio=increase,` +
-      `crop=${project.canvas.width}:${project.canvas.height},setsar=1`
+function sequentialGeometryFilter(
+  ir: CanonicalRenderIr,
+  fit: RenderIrMediaLayer['visual']['fit']
+): string {
+  if (fit === 'crop') {
+    return `scale=${ir.canvas.width}:${ir.canvas.height}:force_original_aspect_ratio=increase,` +
+      `crop=${ir.canvas.width}:${ir.canvas.height},setsar=1`
   }
-  return `scale=${project.canvas.width}:${project.canvas.height}:force_original_aspect_ratio=decrease,` +
-    `pad=${project.canvas.width}:${project.canvas.height}:(ow-iw)/2:(oh-ih)/2:${project.canvas.background},` +
+  return `scale=${ir.canvas.width}:${ir.canvas.height}:force_original_aspect_ratio=decrease,` +
+    `pad=${ir.canvas.width}:${ir.canvas.height}:(ow-iw)/2:(oh-ih)/2:${ir.canvas.background},` +
     'setsar=1'
 }
 
+function visualFadeFilters(layer: RenderIrMediaLayer): string {
+  const duration = layer.timeline.endFrame - layer.timeline.startFrame
+  const filters: string[] = []
+  if (layer.visual.fadeInFrames > 0) {
+    filters.push(`fade=t=in:start_frame=0:nb_frames=${layer.visual.fadeInFrames}:alpha=1`)
+  }
+  if (layer.visual.fadeOutFrames > 0) {
+    filters.push(
+      `fade=t=out:start_frame=${Math.max(0, duration - layer.visual.fadeOutFrames)}` +
+      `:nb_frames=${layer.visual.fadeOutFrames}:alpha=1`
+    )
+  }
+  return filters.length > 0 ? `${filters.join(',')},` : ''
+}
+
+function audioFadeFilters(layer: RenderIrMediaLayer, fps: CanonicalRenderIr['fps']): string {
+  const filters: string[] = []
+  if (layer.audio.fadeInFrames > 0) {
+    filters.push(`afade=t=in:st=0:d=${frameToSecondsArgument(layer.audio.fadeInFrames, fps)}`)
+  }
+  if (layer.audio.fadeOutFrames > 0) {
+    const durationFrames = layer.timeline.endFrame - layer.timeline.startFrame
+    filters.push(
+      `afade=t=out:st=${frameToSecondsArgument(Math.max(0, durationFrames - layer.audio.fadeOutFrames), fps)}` +
+      `:d=${frameToSecondsArgument(layer.audio.fadeOutFrames, fps)}`
+    )
+  }
+  return filters.length > 0 ? `${filters.join(',')},` : ''
+}
+
 function subtitleStep(
-  project: VideoProject,
+  ir: CanonicalRenderIr,
   output: string,
   format: SubtitleFormat,
   id: string
@@ -535,7 +819,17 @@ function subtitleStep(
     id,
     output,
     mime: format === 'srt' ? 'application/x-subrip' : 'text/vtt',
-    content: generateSubtitles(project.captions, project.fps, format)
+    content: generateSubtitles(ir.textLayers.map((text) => ({
+      id: text.id,
+      trackId: text.trackId,
+      startFrame: text.timeline.startFrame,
+      endFrame: text.timeline.endFrame,
+      text: text.text,
+      placement: text.placement,
+      style: structuredClone(text.style),
+      words: structuredClone(text.words),
+      animation: structuredClone(text.animation)
+    })), ir.fps, format)
   }
 }
 
@@ -548,32 +842,8 @@ function subtitleArtifact(output: string, format: SubtitleFormat): PlannedArtifa
   }
 }
 
-function assetForItem(project: VideoProject, item: TimelineItem): MediaAsset {
-  const asset = project.assets.find(({ id }) => id === item.assetId)
-  if (!asset) throw engineError('invalid_project', `Missing asset ${item.assetId}`)
-  return asset
-}
-
-function assetReference(asset: MediaAsset): RenderInputReference {
-  if (asset.mediaHandleId) return { kind: 'media-handle', reference: asset.mediaHandleId }
-  if (asset.workspaceRelativePath) return { kind: 'workspace-file', reference: asset.workspaceRelativePath }
-  throw engineError('render_unsupported', `Asset ${asset.id} has no durable media reference`)
-}
-
 function placeholder(kind: 'input' | 'output', name: string): string {
   return `{{${kind}:${name}}}`
-}
-
-function compositionItemComparator(project: VideoProject): (left: TimelineItem, right: TimelineItem) => number {
-  const tracks = new Map(project.tracks.map((track) => [track.id, track]))
-  return (left, right) => {
-    const leftTrack = tracks.get(left.trackId)
-    const rightTrack = tracks.get(right.trackId)
-    return (leftTrack?.order ?? 0) - (rightTrack?.order ?? 0) ||
-      left.trackId.localeCompare(right.trackId) ||
-      left.timelineStartFrame - right.timelineStartFrame ||
-      left.id.localeCompare(right.id)
-  }
 }
 
 function validateOpaqueReference(value: string, label: string): void {

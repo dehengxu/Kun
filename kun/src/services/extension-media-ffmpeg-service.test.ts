@@ -140,6 +140,71 @@ describe('validateAndSubstituteFfmpegArguments', () => {
     )).not.toThrow()
   })
 
+  it('accepts the bounded progressive filmstrip filter chain', () => {
+    expect(() => validateAndSubstituteFfmpegArguments(
+      [
+        '-nostdin', '-i', '{{input:source}}', '-vf',
+        'fps=1/5.000000,scale=320:-2,tile=3x1',
+        '-frames:v', '1', '-f', 'image2', '{{output:filmstrip}}'
+      ],
+      { source: '/host/source.mp4' },
+      { filmstrip: '/host/.staging.png' }
+    )).not.toThrow()
+  })
+
+  it('accepts the reviewed deterministic CPU effect filters', () => {
+    const graph = [
+      '[0:v]eq=brightness=0.1:contrast=1.2:saturation=0.9:gamma=1.1,' +
+        'colorbalance=rs=0.1:bs=-0.1:gm=0.05,' +
+        'boxblur=luma_radius=4:luma_power=1:chroma_radius=4:chroma_power=1,' +
+        'unsharp=5:5:1.25:5:5:0,vignette=angle=1.204277[effected]',
+      '[effected]scale=1280:720:flags=lanczos,fps=24/1[output]'
+    ].join(';')
+    expect(() => validateAndSubstituteFfmpegArguments(
+      ['-i', '{{input:source}}', '-filter_complex', graph, '-map', '[output]', '{{output:video}}'],
+      { source: '/host/source.mp4' },
+      { video: '/host/.staging.mp4' }
+    )).not.toThrow()
+  })
+
+  it.each([
+    [
+      'H.265 MP4',
+      [
+        '-c:v', 'libx265', '-preset', 'slow', '-crf', '14', '-pix_fmt', 'yuv420p',
+        '-tag:v', 'hvc1', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-b:a', '192k',
+        '-movflags', '+faststart', '-f', 'mp4'
+      ]
+    ],
+    [
+      'ProRes MOV',
+      [
+        '-c:v', 'prores_ks', '-profile:v', '3', '-pix_fmt', 'yuv422p10le',
+        '-c:a', 'pcm_s24le', '-ar', '48000', '-ac', '2', '-f', 'mov'
+      ]
+    ],
+    [
+      'FFV1 Matroska portable fallback',
+      [
+        '-c:v', 'ffv1', '-level', '3', '-coder', '1', '-context', '1',
+        '-pix_fmt', 'yuv422p10le', '-c:a', 'pcm_s24le', '-ar', '48000', '-ac', '2',
+        '-f', 'matroska'
+      ]
+    ]
+  ])('accepts the reviewed %s advanced export profile', (_label, codecArgs) => {
+    expect(() => validateAndSubstituteFfmpegArguments(
+      [
+        '-nostdin', '-i', '{{input:source}}', '-vf',
+        'scale=1280:720:flags=lanczos,fps=24/1',
+        '-map', '0:v:0', '-map', '0:a:0',
+        ...codecArgs,
+        '{{output:video}}'
+      ],
+      { source: '/host/source.mp4' },
+      { video: '/host/.staging-output' }
+    )).not.toThrow()
+  })
+
   it.each([
     ['-i', 'https://example.com/video.mp4', '{{output:video}}'],
     ['-i', '../secret.mp4', '{{output:video}}'],
@@ -242,6 +307,74 @@ describe('ExtensionMediaFfmpegService', () => {
     await test.handles.releaseOutputReservation(test.principal, output.id, 'next-text-job')
     expect((await readdir(join(test.workspace, 'exports')))
       .filter((name) => name.includes('.kun-'))).toEqual([])
+  })
+
+  it('atomically promotes bounded path-opaque OpenTimelineIO JSON without starting FFmpeg', async () => {
+    const test = await fixture()
+    const targetPath = join(test.workspace, 'exports', 'timeline.otio')
+    const output = await test.handles.register(test.principal, {
+      workspaceRoot: test.workspace,
+      path: 'exports/timeline.otio',
+      mode: 'write',
+      source: 'workspace'
+    })
+    const document = JSON.stringify({
+      OTIO_SCHEMA: 'SerializableCollection.1',
+      name: 'Cut',
+      children: [{
+        OTIO_SCHEMA: 'Timeline.1',
+        metadata: { kun: { id: 'sequence-main' } },
+        tracks: { OTIO_SCHEMA: 'Stack.1', children: [] }
+      }]
+    })
+    const runFfmpegForCore = vi.fn(async () => {
+      throw new Error('FFmpeg must not start for an OTIO text job')
+    })
+    const service = new ExtensionMediaFfmpegService({
+      handleService: test.handles,
+      processService: { runFfmpegForCore } as never
+    })
+    const transaction = await service.executeTransaction(test.principal, {
+      arguments: [],
+      inputs: {},
+      outputs: {},
+      textOutputs: {
+        interchange: {
+          handleId: output.id,
+          mimeType: 'application/x-otio+json',
+          content: document
+        }
+      }
+    }, { operationId: 'otio-text-output' })
+
+    expect(runFfmpegForCore).not.toHaveBeenCalled()
+    expect(JSON.parse(await readFile(targetPath, 'utf8'))).toMatchObject({
+      OTIO_SCHEMA: 'SerializableCollection.1', name: 'Cut'
+    })
+    expect(transaction.generatedMedia[0]).toMatchObject({
+      mimeType: 'application/x-otio+json', source: 'generated'
+    })
+    await transaction.commit()
+
+    const unsafe = await test.handles.register(test.principal, {
+      workspaceRoot: test.workspace,
+      path: 'exports/unsafe.otio',
+      mode: 'write',
+      source: 'workspace'
+    })
+    await expect(service.executeTransaction(test.principal, {
+      arguments: [], inputs: {}, outputs: {},
+      textOutputs: {
+        interchange: {
+          handleId: unsafe.id,
+          mimeType: 'application/x-otio+json',
+          content: JSON.stringify({
+            OTIO_SCHEMA: 'SerializableCollection.1',
+            children: [{ target_url: 'file:///private/source.mov' }]
+          })
+        }
+      }
+    }, { operationId: 'unsafe-otio-text-output' })).rejects.toMatchObject({ code: 'invalid_argument' })
   })
 
   it('recovers an interrupted text-only output without starting FFmpeg', async () => {

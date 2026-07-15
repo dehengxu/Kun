@@ -368,7 +368,12 @@ describe('controlled workbench contribution rendering', () => {
         })
         await opening
       })
-      expect(renderer.root.findAllByType('webview')).toHaveLength(1)
+      const [webview] = renderer.root.findAllByType('webview')
+      expect(webview).toBeDefined()
+      const webviewClasses = String(webview!.props.className).split(/\s+/)
+      expect(webviewClasses).toContain('flex')
+      expect(webviewClasses).toContain('w-full')
+      expect(webviewClasses).not.toContain('block')
       expect(disposeSession).not.toHaveBeenCalled()
 
       const changedEntry = {
@@ -400,6 +405,55 @@ describe('controlled workbench contribution rendering', () => {
       await act(async () => renderer.unmount())
       expect(disposeSession).toHaveBeenCalledTimes(2)
       expect(disposeSession).toHaveBeenLastCalledWith('session-9876543210')
+    } finally {
+      if (renderer) act(() => renderer.unmount())
+      vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('requests an explicit Host recovery when the user retries an unavailable View', async () => {
+    const contribution = registryWithContributions().list('views.rightSidebar')
+      .find((item) => item.id === 'extension:acme.ui/dashboard')!
+    const createSession = vi.spyOn(extensionWorkbenchClient, 'createViewSession')
+      .mockRejectedValueOnce(new Error('Extension host circuit is open'))
+      .mockResolvedValueOnce({
+        sessionId: 'session-9876543210',
+        nonce: 'nonce-9876543210',
+        contributionId: contribution.id,
+        extensionId: 'acme.ui',
+        extensionVersion: '1.0.0',
+        src: 'kun-extension://acme.ui/dist/index.html',
+        partition: 'kun-extension-acme-ui-session-next'
+      })
+    vi.spyOn(extensionWorkbenchClient, 'disposeViewSession').mockResolvedValue(undefined)
+    vi.stubGlobal('HTMLElement', class {})
+    vi.stubGlobal('document', { activeElement: null })
+    vi.stubGlobal('window', { requestAnimationFrame: vi.fn() })
+    let renderer!: ReturnType<typeof createRenderer>
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(ExtensionViewOutlet, {
+          contribution,
+          workspaceRoot: '/workspace'
+        }))
+      })
+      expect(createSession).toHaveBeenNthCalledWith(1, contribution.id, '/workspace')
+      expect(renderer.root.findByProps({ role: 'alert' })).toBeDefined()
+
+      await act(async () => {
+        renderer.root.findByType('button').props.onClick()
+      })
+
+      expect(createSession).toHaveBeenNthCalledWith(
+        2,
+        contribution.id,
+        '/workspace',
+        { retryHost: true }
+      )
+      expect(renderer.root.findAllByProps({
+        'data-extension-view-session': 'session-9876543210'
+      })).toHaveLength(1)
     } finally {
       if (renderer) act(() => renderer.unmount())
       vi.restoreAllMocks()

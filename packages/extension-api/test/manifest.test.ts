@@ -269,10 +269,10 @@ describe('API major negotiation fixtures', () => {
   })
 })
 
-describe('API v1.1 minor compatibility fixtures', () => {
-  it('keeps v1.0 manifests compatible while negotiating the current v1.1 Host', async () => {
-    expect(CURRENT_EXTENSION_API_VERSION).toBe('1.1.0')
-    expect(SUPPORTED_EXTENSION_API_VERSIONS).toEqual(['1.1.0', '1.0.0'])
+describe('API v1.2 minor compatibility fixtures', () => {
+  it('keeps v1.1 and v1.0 manifests compatible while negotiating the current v1.2 Host', async () => {
+    expect(CURRENT_EXTENSION_API_VERSION).toBe('1.2.0')
+    expect(SUPPORTED_EXTENSION_API_VERSIONS).toEqual(['1.2.0', '1.1.0', '1.0.0'])
     expect(parseExtensionManifest(manifest).apiVersion).toBe('1.0.0')
 
     const fixture = JSON.parse(

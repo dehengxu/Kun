@@ -10,6 +10,7 @@ import type {
   CoreRuntimeToolDiagnosticsJson
 } from './kun-contract'
 import type { ApprovalPolicy, SandboxMode } from '@shared/app-settings'
+import type { ComposerContextAttachment } from '@kun/extension-api'
 
 export type ToolItemKind = 'tool_call' | 'command_execution' | 'file_change'
 export type RuntimeErrorSeverity = 'info' | 'warning' | 'error'
@@ -106,6 +107,7 @@ export type RuntimeDisclosureMetadata = {
   attachmentIds?: string[]
   attachments?: AttachmentReference[]
   fileReferences?: UserFileReference[]
+  composerContexts?: ComposerContextAttachment[]
   generatedFiles?: GeneratedFileReference[]
   activeSkillIds?: string[]
   injectedMemoryIds?: string[]
@@ -550,6 +552,7 @@ export interface AgentProvider {
       attachmentIds?: string[]
       workspaceCheckpointId?: string
       fileReferences?: UserFileReference[]
+      composerContexts?: ComposerContextAttachment[]
     }
   ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string }>
   rewindThread?(threadId: string, turnId: string): Promise<void>

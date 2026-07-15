@@ -2684,6 +2684,7 @@
   "toolInjectedMemories": "记忆",
   "toolInjectedInstructions": "指令",
   "toolAttachments": "附件",
+  "toolExtensionContexts": "扩展上下文",
   "generatedFilesTitle": "生成文件",
   "generatedFilePreviewUnavailable": "无法预览",
   "generatedFileDownload": "下载",

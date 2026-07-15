@@ -130,7 +130,7 @@ describe('runtime factory usage carryover', () => {
       expect(runtime.extensionPlatform).toBeDefined()
       expect(runtime.info().extensions).toMatchObject({
         enabled: true,
-        apiVersions: ['1.1.0', '1.0.0'],
+        apiVersions: ['1.2.0', '1.1.0', '1.0.0'],
         manifestVersions: [1]
       })
       expect(runtime.info().capabilities.instructions.enabled).toBe(true)

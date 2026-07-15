@@ -1107,6 +1107,23 @@ function metaSources(meta: Record<string, unknown> | undefined): Array<{ title?:
     .filter((entry): entry is { title?: string; url?: string } => entry !== null)
 }
 
+function metaComposerContextLabels(meta: Record<string, unknown> | undefined): string[] {
+  const value = meta?.composerContexts
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return []
+    const record = entry as Record<string, unknown>
+    const title = typeof record.title === 'string' ? record.title.trim() : ''
+    const provenance = record.provenance && typeof record.provenance === 'object'
+      ? record.provenance as Record<string, unknown>
+      : undefined
+    const extensionId = typeof provenance?.extensionId === 'string'
+      ? provenance.extensionId.trim()
+      : ''
+    return title ? [`${title}${extensionId ? ` (${extensionId})` : ''}`] : []
+  })
+}
+
 function RuntimeMetaChips({
   meta,
   align = 'left',
@@ -1123,6 +1140,7 @@ function RuntimeMetaChips({
   const activeSkillIds = hideTurnDisclosure ? [] : metaStringArray(meta, 'activeSkillIds')
   const injectedMemoryIds = hideTurnDisclosure ? [] : metaStringArray(meta, 'injectedMemoryIds')
   const injectedInstructionSources = hideTurnDisclosure ? [] : metaInstructionSources(meta)
+  const composerContextLabels = hideTurnDisclosure ? [] : metaComposerContextLabels(meta)
   const sources = metaSources(meta)
   const child = meta?.child && typeof meta.child === 'object' ? meta.child as Record<string, unknown> : null
   const childLabel =
@@ -1138,6 +1156,7 @@ function RuntimeMetaChips({
     activeSkillIds.length === 0 &&
     injectedMemoryIds.length === 0 &&
     injectedInstructionSources.length === 0 &&
+    composerContextLabels.length === 0 &&
     sources.length === 0 &&
     !childLabel
   ) {
@@ -1162,6 +1181,11 @@ function RuntimeMetaChips({
       {injectedInstructionSources.length > 0 ? (
         <span className={chipClass} title={injectedInstructionSources.map((source) => `${source.scope}: ${source.path}`).join('\n')}>
           {t('toolInjectedInstructions')} {injectedInstructionSources.length}
+        </span>
+      ) : null}
+      {composerContextLabels.length > 0 ? (
+        <span className={chipClass} title={composerContextLabels.join('\n')}>
+          {t('toolExtensionContexts')} {composerContextLabels.length}
         </span>
       ) : null}
       {childLabel ? (

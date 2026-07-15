@@ -1,6 +1,6 @@
 {
   "name": "@kun-examples/kun-video-editor",
-  "version": "0.3.0",
+  "version": "0.4.1",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -16,7 +16,7 @@
     "pack": "npm run build && node ../run-repository-kun-cli.mjs extension pack . --overwrite"
   },
   "dependencies": {
-    "@kun/extension-api": "^1.1.0",
+    "@kun/extension-api": "^1.2.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
@@ -24,7 +24,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
-    "@kun/extension-test": "^1.1.0",
+    "@kun/extension-test": "^1.2.0",
     "typescript": "^5.8.2",
     "vite": "^6.2.0",
     "vitest": "^4.1.7"

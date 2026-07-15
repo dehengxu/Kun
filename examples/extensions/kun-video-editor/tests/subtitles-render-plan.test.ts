@@ -61,13 +61,12 @@ describe('subtitles and render plans', () => {
     })
     const step = plan.steps[0] as FfmpegRenderStep
     expect(step.inputs).toEqual({
-      'clip-0': { kind: 'media-handle', reference: 'media_asset_1' },
-      'clip-1': { kind: 'media-handle', reference: 'media_asset_1' }
+      'clip-0': { kind: 'media-handle', reference: 'media_asset_1' }
     })
     expect(step.args).toContain('{{input:clip-0}}')
     expect(step.args).toContain('{{output:proof}}')
     const graph = step.args[step.args.indexOf('-filter_complex') + 1]!
-    expect(graph).toContain('color=c=#000000:s=1920x1080:r=30/1:d=6.000000[base]')
+    expect(graph).toContain('color=c=#000000:s=1920x1080:r=30/1:d=1.033333[base]')
     expect(graph).toContain('colorchannelmixer=aa=1.0000')
     expect(graph).toContain("overlay=x='(W-w)/2+0.000':y='(H-h)/2+0.000'")
     expect(graph).toContain('drawtext=text=Hello')
@@ -204,6 +203,43 @@ describe('subtitles and render plans', () => {
 
     expect(crop).toBeGreaterThan(-1)
     expect(transformedScale).toBeGreaterThan(crop)
+  })
+
+  it('compiles crop, opacity, visual/audio fades, and volume from the canonical IR', () => {
+    const project = makeProject()
+    project.captions = []
+    project.items = [{
+      ...project.items[0]!,
+      crop: { left: 0.1, top: 0.05, right: 0.1, bottom: 0.15 },
+      opacity: 0.6,
+      volume: 0.75,
+      fadeInFrames: 6,
+      fadeOutFrames: 9
+    }]
+
+    const plan = generateRenderPlan(project, {
+      kind: 'preview',
+      expectedRevision: 0,
+      outputHandleId: 'preview-output'
+    })
+    expect(plan.renderIr.layers[0]).toMatchObject({
+      visual: {
+        crop: { left: 0.1, top: 0.05, right: 0.1, bottom: 0.15 },
+        opacity: 0.6,
+        fadeInFrames: 6,
+        fadeOutFrames: 9
+      },
+      audio: { volume: 0.75, fadeInFrames: 6, fadeOutFrames: 9 }
+    })
+    const step = plan.steps[0] as FfmpegRenderStep
+    const graph = step.args[step.args.indexOf('-filter_complex') + 1]!
+    expect(graph).toContain('crop=iw*0.800000:ih*0.800000:iw*0.100000:ih*0.050000')
+    expect(graph).toContain('fade=t=in:start_frame=0:nb_frames=6:alpha=1')
+    expect(graph).toContain('fade=t=out:start_frame=81:nb_frames=9:alpha=1')
+    expect(graph).toContain('colorchannelmixer=aa=0.6000')
+    expect(graph).toContain('afade=t=in:st=0:d=6/30')
+    expect(graph).toContain('afade=t=out:st=81/30:d=9/30')
+    expect(graph).toContain('volume=0.7500')
   })
 
   it('rejects stale plans and proof frames outside the composition', () => {

@@ -41,7 +41,7 @@ const {
 } = require('./lib/extension-native-media-smoke.cjs')
 
 const EXTENSION_ID = 'kun-examples.kun-video-editor'
-const EXTENSION_VERSION = '0.3.0'
+const EXTENSION_VERSION = '0.4.1'
 const CONTRIBUTION_ID = `extension:${EXTENSION_ID}/editor`
 const VIDEO_EDITOR_PERMISSIONS = Object.freeze([
   'agent.run',
@@ -202,11 +202,7 @@ async function main() {
     }
     await installNativeDialogStubs(electronApplication, {
       openSelections: [[videoFixture], [transcript]],
-      saveSelections: [subtitleOutput],
-      permissionPrompt: {
-        extensionId: EXTENSION_ID,
-        response: 0
-      }
+      saveSelections: [subtitleOutput]
     })
     let workbench = await findWorkbenchWindow(electronApplication, timeoutMs)
     await openUntrustedVideoEditor(
@@ -330,14 +326,6 @@ async function main() {
     )
     assertNoGuestErrors(snapshot, 'following English/dark Kun settings')
 
-    const firstRunDialogs = await readNativeDialogState(electronApplication)
-    assertLocalizedFirstLaunchPermissionPrompt(firstRunDialogs.messageBoxes, { workspaceRoot })
-    if (firstRunDialogs.messageBoxes.length !== 1) {
-      throw new Error(
-        `Expected only the first-launch permission prompt, got ${JSON.stringify(firstRunDialogs.messageBoxes)}`
-      )
-    }
-
     // Give the debounced View state writer time to commit before exercising a
     // full desktop shutdown/relaunch with the same isolated profile.
     await delay(350)
@@ -386,18 +374,10 @@ async function main() {
       timeoutMs
     )
     assertNoGuestErrors(snapshot, 'restoring the editor after relaunch')
-    const relaunchedDialogs = await readNativeDialogState(electronApplication)
-    if (relaunchedDialogs.messageBoxes.length !== 0) {
-      throw new Error(
-        'Persisted workspace trust unexpectedly prompted again after relaunch: ' +
-        JSON.stringify(relaunchedDialogs.messageBoxes)
-      )
-    }
-
     process.stdout.write(
       `${SUCCESS_MARKER}${process.platform}/${process.arch}): real packaged Electron, ` +
       `desktop PID ${firstDesktopPid} -> ${relaunchedDesktopPid}, ` +
-      'locked first-launch right rail View with localized native permission/risk review, ' +
+      'locked first-launch right rail View with localized protected permission/risk review, ' +
       'main-process native picker stubs, zh/light -> en/dark, ' +
       'real MP4/SRT import, manual transcript edit, durable SRT export, Main Agent extension-tool sync, ' +
       'and close/reopen recovery.\n'
@@ -552,8 +532,7 @@ async function launchPackagedDesktop({
 
 async function installNativeDialogStubs(electronApplication, {
   openSelections = [],
-  saveSelections = [],
-  permissionPrompt
+  saveSelections = []
 }) {
   await electronApplication.evaluate(({ dialog }, queues) => {
     const state = {
@@ -585,16 +564,9 @@ async function installNativeDialogStubs(electronApplication, {
         ? options.buttons.map((button) => String(button))
         : []
       const detail = typeof options.detail === 'string' ? options.detail : ''
-      const matchesPermissionPrompt = Boolean(
-        queues.permissionPrompt &&
-        detail.includes(queues.permissionPrompt.extensionId) &&
-        detail.includes('extension.permissions')
-      )
-      const response = matchesPermissionPrompt
-        ? queues.permissionPrompt.response
-        : Number.isInteger(options.cancelId)
-          ? options.cancelId
-          : Math.max(buttons.length - 1, 0)
+      const response = Number.isInteger(options.cancelId)
+        ? options.cancelId
+        : Math.max(buttons.length - 1, 0)
       const record = {
         kind: 'message',
         type: typeof options.type === 'string' ? options.type : '',
@@ -606,25 +578,13 @@ async function installNativeDialogStubs(electronApplication, {
         cancelId: Number.isInteger(options.cancelId) ? options.cancelId : null,
         noLink: options.noLink === true,
         normalizeAccessKeys: options.normalizeAccessKeys === true,
-        matchesPermissionPrompt,
         response
       }
       state.messageBoxes.push(record)
       state.calls.push(record)
       return { response, checkboxChecked: false }
     }
-  }, { openSelections, saveSelections, permissionPrompt })
-}
-
-async function readNativeDialogState(electronApplication) {
-  return electronApplication.evaluate(() => JSON.parse(JSON.stringify(
-    globalThis.__kunVideoEditorDesktopE2eDialogs ?? {
-      openSelections: [],
-      saveSelections: [],
-      messageBoxes: [],
-      calls: []
-    }
-  )))
+  }, { openSelections, saveSelections })
 }
 
 async function findWorkbenchWindow(electronApplication, timeoutMs) {
@@ -638,6 +598,77 @@ async function findWorkbenchWindow(electronApplication, timeoutMs) {
     }
     return undefined
   }, { timeoutMs, description: 'packaged Kun workbench window' })
+}
+
+async function findProtectedConsentWindow(electronApplication, workbench, timeoutMs) {
+  return pollUntil(async () => {
+    for (const window of electronApplication.windows()) {
+      if (window === workbench || window.isClosed()) continue
+      try {
+        if (
+          await window.locator('#consent-approve').count() === 1 &&
+          await window.locator('#consent-cancel').count() === 1
+        ) return window
+      } catch {
+        // The protected BrowserWindow may still be loading or closing.
+      }
+    }
+    return undefined
+  }, {
+    timeoutMs,
+    description: `localized protected workspace permission review for ${EXTENSION_ID}`
+  })
+}
+
+async function readProtectedConsentPrompt(window) {
+  return window.evaluate(() => {
+    const text = (selector) => document.querySelector(selector)?.textContent?.trim() ?? ''
+    const meta = Object.fromEntries(
+      [...document.querySelectorAll('.meta-row')].map((row) => [
+        row.querySelector('dt')?.textContent?.trim() ?? '',
+        row.querySelector('dd')?.textContent?.trim() ?? ''
+      ])
+    )
+    const scrollRegion = document.querySelector('.scroll-region')
+    const footer = document.querySelector('.footer')
+    const approve = document.querySelector('#consent-approve')
+    const cancel = document.querySelector('#consent-cancel')
+    const visibleWithinViewport = (element) => {
+      if (!(element instanceof HTMLElement)) return false
+      const style = getComputedStyle(element)
+      const bounds = element.getBoundingClientRect()
+      return style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        Number(style.opacity) > 0 &&
+        bounds.width > 0 &&
+        bounds.height > 0 &&
+        bounds.top >= -1 &&
+        bounds.left >= -1 &&
+        bounds.bottom <= innerHeight + 1 &&
+        bounds.right <= innerWidth + 1
+    }
+    const scrollBounds = scrollRegion?.getBoundingClientRect()
+    const footerBounds = footer?.getBoundingClientRect()
+    return {
+      title: document.title,
+      heading: text('.header h1'),
+      message: text('.header p'),
+      detail: text('.review-text'),
+      meta,
+      approveLabel: text('#consent-approve'),
+      cancelLabel: text('#consent-cancel'),
+      approveVisible: visibleWithinViewport(approve),
+      cancelVisible: visibleWithinViewport(cancel),
+      scrollOverflowY: scrollRegion ? getComputedStyle(scrollRegion).overflowY : '',
+      scrollClientHeight: scrollRegion?.clientHeight ?? 0,
+      scrollHeight: scrollRegion?.scrollHeight ?? 0,
+      scrollTop: scrollBounds?.top ?? -1,
+      scrollBottom: scrollBounds?.bottom ?? -1,
+      footerTop: footerBounds?.top ?? -1,
+      footerBottom: footerBounds?.bottom ?? -1,
+      viewportHeight: innerHeight
+    }
+  })
 }
 
 async function openUntrustedVideoEditor(
@@ -661,14 +692,14 @@ async function openUntrustedVideoEditor(
   }
 
   await button.click()
-  const permissionPrompt = await pollUntil(async () => {
-    const state = await readNativeDialogState(electronApplication)
-    return state.messageBoxes.find((dialog) => dialog.matchesPermissionPrompt)
-  }, {
-    timeoutMs,
-    description: `localized workspace permission review for ${EXTENSION_ID}`
-  })
-  assertLocalizedFirstLaunchPermissionPrompt([permissionPrompt], { workspaceRoot })
+  const permissionPromptWindow = await findProtectedConsentWindow(
+    electronApplication,
+    workbench,
+    timeoutMs
+  )
+  const permissionPrompt = await readProtectedConsentPrompt(permissionPromptWindow)
+  assertLocalizedFirstLaunchPermissionPrompt(permissionPrompt, { workspaceRoot })
+  await permissionPromptWindow.locator('#consent-approve').click()
   await waitForVideoEditorGuest(
     workbench,
     electronApplication,
@@ -763,29 +794,18 @@ async function readVideoEditorOpenDiagnostic(workbench, electronApplication) {
   return { renderer, contents }
 }
 
-function assertLocalizedFirstLaunchPermissionPrompt(messageBoxes, { workspaceRoot }) {
-  const matches = messageBoxes.filter((dialog) =>
-    dialog &&
-    typeof dialog.detail === 'string' &&
-    dialog.detail.includes(`操作: extension.permissions`) &&
-    dialog.detail.includes(EXTENSION_ID)
-  )
-  if (matches.length !== 1) {
-    throw new Error(
-      `Expected one localized ${EXTENSION_ID} permission prompt, got ${JSON.stringify(messageBoxes)}`
-    )
+function assertLocalizedFirstLaunchPermissionPrompt(prompt, { workspaceRoot }) {
+  if (!prompt || typeof prompt !== 'object' || Array.isArray(prompt)) {
+    throw new Error(`Expected one localized protected ${EXTENSION_ID} permission prompt`)
   }
-  const prompt = matches[0]
   const expectedFields = {
-    type: 'warning',
     title: '更改扩展权限',
-    buttons: ['继续', '取消'],
-    defaultId: 1,
-    cancelId: 1,
-    noLink: true,
-    normalizeAccessKeys: true,
-    matchesPermissionPrompt: true,
-    response: 0
+    heading: '更改扩展权限',
+    approveLabel: '同意更改',
+    cancelLabel: '取消',
+    approveVisible: true,
+    cancelVisible: true,
+    scrollOverflowY: 'auto'
   }
   for (const [field, expected] of Object.entries(expectedFields)) {
     if (JSON.stringify(prompt[field]) !== JSON.stringify(expected)) {
@@ -799,10 +819,19 @@ function assertLocalizedFirstLaunchPermissionPrompt(messageBoxes, { workspaceRoo
     throw new Error(`Localized permission prompt omitted extension identity: ${prompt.message}`)
   }
 
+  const expectedMeta = {
+    扩展: `${EXTENSION_ID} ${EXTENSION_VERSION}`,
+    操作: 'extension.permissions',
+    工作区: workspaceRoot
+  }
+  if (JSON.stringify(prompt.meta) !== JSON.stringify(expectedMeta)) {
+    throw new Error(
+      `Localized permission prompt metadata mismatch: expected ${JSON.stringify(expectedMeta)}, ` +
+      `got ${JSON.stringify(prompt.meta)}`
+    )
+  }
+
   const detailEvidence = [
-    `扩展: ${EXTENSION_ID} ${EXTENSION_VERSION}`,
-    '操作: extension.permissions',
-    `工作区: ${workspaceRoot}`,
     '此次权限变更仅适用于所选工作区。',
     '变更后的 Broker 权限：',
     'Kun 生成的风险摘要：',
@@ -822,6 +851,25 @@ function assertLocalizedFirstLaunchPermissionPrompt(messageBoxes, { workspaceRoo
         `Localized permission prompt omitted ${JSON.stringify(evidence)}: ${prompt.detail}`
       )
     }
+  }
+  if (
+    !Number.isFinite(prompt.scrollClientHeight) || prompt.scrollClientHeight <= 0 ||
+    !Number.isFinite(prompt.scrollHeight) || prompt.scrollHeight < prompt.scrollClientHeight
+  ) {
+    throw new Error(
+      `Localized permission prompt review region cannot scroll safely: ${JSON.stringify(prompt)}`
+    )
+  }
+  if (
+    !Number.isFinite(prompt.viewportHeight) || prompt.viewportHeight <= 0 ||
+    !Number.isFinite(prompt.scrollTop) || prompt.scrollTop < -1 ||
+    !Number.isFinite(prompt.scrollBottom) ||
+    !Number.isFinite(prompt.footerTop) || prompt.scrollBottom > prompt.footerTop + 1 ||
+    !Number.isFinite(prompt.footerBottom) || prompt.footerBottom > prompt.viewportHeight + 1
+  ) {
+    throw new Error(
+      `Localized permission prompt footer is outside the visible protected window: ${JSON.stringify(prompt)}`
+    )
   }
   return prompt
 }
@@ -1252,12 +1300,18 @@ module.exports = {
   VIDEO_EDITOR_PERMISSIONS,
   assertLocalizedFirstLaunchPermissionPrompt,
   desktopVideoEditorSettings,
+  evaluateVideoEditorGuest,
+  findWorkbenchWindow,
   guestDiagnostic,
+  launchPackagedDesktop,
+  openVideoEditor,
   openAiTextFrames,
   openAiToolCallFrames,
+  readGuestSnapshot,
   resolveVideoEditorArchive,
   shouldClickRightRailContribution,
-  sseFrame
+  sseFrame,
+  waitForGuestSnapshot
 }
 
 if (require.main === module) {

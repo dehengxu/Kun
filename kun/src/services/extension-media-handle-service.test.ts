@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -25,7 +25,7 @@ async function fixture() {
   const principal: ExtensionPrincipal = {
     extensionId: 'acme.video',
     extensionVersion: '1.0.0',
-    permissions: ['media.read', 'media.export', 'workspace.read', 'workspace.write'],
+    permissions: ['media.read', 'media.process', 'media.export', 'workspace.read', 'workspace.write'],
     workspaceRoots: [workspace],
     workspaceTrusted: true
   }
@@ -52,6 +52,32 @@ describe('ExtensionMediaHandleService', () => {
     expect(handle).not.toHaveProperty('absolutePath')
     const resolved = await service.resolve(principal, handle.id, 'read')
     expect(resolved.absolutePath).toBe(await realpath(join(workspace, 'clip.mp4')))
+  })
+
+  it('persists successful View access time across runtime restart without paths', async () => {
+    const { workspace, dataDir, principal } = await fixture()
+    let now = Date.parse('2026-01-01T00:00:00.000Z')
+    const service = new ExtensionMediaHandleService({ dataDir, now: () => new Date(now) })
+    const handle = await service.register(principal, {
+      workspaceRoot: workspace,
+      path: 'clip.mp4',
+      mode: 'read',
+      source: 'workspace'
+    })
+    expect(handle.lastAccessedAt).toBe('2026-01-01T00:00:00.000Z')
+
+    now += 60_000
+    const touched = await service.touch(principal, handle.id)
+    expect(touched).toMatchObject({
+      id: handle.id,
+      lastAccessedAt: '2026-01-01T00:01:00.000Z'
+    })
+    expect(touched).not.toHaveProperty('absolutePath')
+
+    const restarted = new ExtensionMediaHandleService({ dataDir, now: () => new Date(now) })
+    await expect(restarted.stat(principal, handle.id)).resolves.toMatchObject({
+      lastAccessedAt: '2026-01-01T00:01:00.000Z'
+    })
   })
 
   it('revokes handles only for the owning extension workspace', async () => {
@@ -168,6 +194,63 @@ describe('ExtensionMediaHandleService', () => {
     })).rejects.toMatchObject({ code: 'path_escape' })
   })
 
+  it('allocates Host cache targets with processing authority without requiring export authority', async () => {
+    const { workspace, dataDir, principal } = await fixture()
+    const cacheDirectory = join(workspace, '.kun', 'extension-cache', principal.extensionId, 'waveform')
+    const cachePrincipal = {
+      ...principal,
+      permissions: ['media.process', 'workspace.write']
+    }
+    const service = new ExtensionMediaHandleService({ dataDir })
+    const target = await service.registerCacheTarget(cachePrincipal, {
+      workspaceRoot: workspace,
+      path: '.kun/extension-cache/acme.video/waveform/partial.png',
+      displayName: 'partial.png',
+      mimeType: 'image/png'
+    })
+    expect(target).toMatchObject({
+      mode: 'write',
+      source: 'workspace',
+      lifecycle: 'cache',
+      available: true
+    })
+    await expect(access(cacheDirectory)).resolves.toBeUndefined()
+    await expect(service.stat(cachePrincipal, target.id)).resolves.toMatchObject({
+      id: target.id,
+      lifecycle: 'cache',
+      mode: 'write'
+    })
+    await expect(service.reserveOutput(cachePrincipal, target.id, 'cache-job-1'))
+      .resolves.toMatchObject({ id: target.id, lifecycle: 'cache', mode: 'write' })
+    await writeFile(join(cacheDirectory, 'partial.png'), Buffer.from('cache-without-export'))
+    await expect(service.completeOutput(cachePrincipal, target.id, 'cache-job-1'))
+      .resolves.toMatchObject({ lifecycle: 'cache', mode: 'read', source: 'generated' })
+    await expect(service.register(cachePrincipal, {
+      workspaceRoot: workspace,
+      path: 'ordinary-export.png',
+      mode: 'write',
+      source: 'workspace'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+    await expect(service.registerCacheTarget(cachePrincipal, {
+      workspaceRoot: workspace,
+      path: '.kun/extension-cache/another.video/escape.png'
+    })).rejects.toMatchObject({ code: 'path_escape' })
+  })
+
+  it('refuses symlinked Host cache directories without creating data outside the workspace', async () => {
+    const { root, workspace, dataDir, principal } = await fixture()
+    const external = join(root, 'external-cache')
+    await mkdir(external)
+    await symlink(external, join(workspace, '.kun'))
+    const service = new ExtensionMediaHandleService({ dataDir })
+    await expect(service.registerCacheTarget(principal, {
+      workspaceRoot: workspace,
+      path: '.kun/extension-cache/acme.video/waveform/partial.png',
+      mimeType: 'image/png'
+    })).rejects.toMatchObject({ code: 'path_escape' })
+    await expect(access(join(external, 'extension-cache'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('reserves each export target once and publishes a separate generated read handle', async () => {
     const { workspace, dataDir, principal } = await fixture()
     await mkdir(join(workspace, 'exports'))
@@ -194,6 +277,61 @@ describe('ExtensionMediaHandleService', () => {
     await expect(service.stat(principal, target.id)).rejects.toMatchObject({ code: 'not_found' })
     const resolved = await service.resolve(principal, generated.id, 'read')
     expect(resolved.absolutePath).toBe(await realpath(join(workspace, 'exports', 'final.mp4')))
+  })
+
+  it('deletes Host-owned cache output bytes when the readable handle is released', async () => {
+    const { workspace, dataDir, principal } = await fixture()
+    const directory = join(workspace, '.kun', 'extension-cache', 'acme.video', 'waveform')
+    await mkdir(directory, { recursive: true })
+    const output = join(directory, 'partial.png')
+    const service = new ExtensionMediaHandleService({ dataDir })
+    const target = await service.register(principal, {
+      workspaceRoot: workspace,
+      path: '.kun/extension-cache/acme.video/waveform/partial.png',
+      mode: 'write',
+      source: 'workspace',
+      lifecycle: 'cache',
+      mimeType: 'image/png'
+    })
+    await service.reserveOutput(principal, target.id, 'job-cache-1')
+    await writeFile(output, Buffer.from('cache-image'))
+    const generated = await service.completeOutput(principal, target.id, 'job-cache-1')
+    const alias = await service.registerCacheTarget(principal, {
+      workspaceRoot: workspace,
+      path: '.kun/extension-cache/acme.video/waveform/partial.png',
+      displayName: 'partial-alias.png',
+      mimeType: 'image/png'
+    })
+
+    await expect(access(output)).resolves.toBeUndefined()
+    expect((await service.list(principal)).find(({ id }) => id === generated.id))
+      .toMatchObject({ lifecycle: 'cache', mode: 'read', source: 'generated', available: true })
+    await expect(service.release(principal, generated.id)).resolves.toBe(true)
+    await expect(access(output)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(service.stat(principal, generated.id)).rejects.toMatchObject({ code: 'not_found' })
+    await expect(service.stat(principal, alias.id)).rejects.toMatchObject({ code: 'not_found' })
+    expect((await service.list(principal)).filter(({ id }) =>
+      id === generated.id || id === alias.id).every(({ available }) => !available)).toBe(true)
+  })
+
+  it('deletes cache outputs during extension lifecycle revocation', async () => {
+    const { workspace, dataDir, principal } = await fixture()
+    const directory = join(workspace, '.kun', 'extension-cache', 'acme.video', 'filmstrip')
+    await mkdir(directory, { recursive: true })
+    const output = join(directory, 'partial.png')
+    await writeFile(output, Buffer.from('cache-image'))
+    const service = new ExtensionMediaHandleService({ dataDir })
+    await service.register(principal, {
+      workspaceRoot: workspace,
+      path: '.kun/extension-cache/acme.video/filmstrip/partial.png',
+      mode: 'read',
+      source: 'workspace',
+      lifecycle: 'cache',
+      mimeType: 'image/png'
+    })
+
+    await expect(service.revokeExtension('acme.video')).resolves.toBe(1)
+    await expect(access(output)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('validates a completion batch atomically before consuming any export grant', async () => {

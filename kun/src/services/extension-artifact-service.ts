@@ -346,7 +346,8 @@ function mediaKindForMime(mimeType: string): GeneratedArtifact['mediaKind'] {
   if (mimeType.startsWith('audio/')) return 'audio'
   if (mimeType.startsWith('image/')) return 'image'
   if (mimeType === 'text/vtt' || mimeType === 'application/x-subrip') return 'subtitle'
-  if (mimeType.startsWith('text/') || mimeType === 'application/pdf') return 'document'
+  if (mimeType.startsWith('text/') || mimeType === 'application/pdf' ||
+    mimeType === 'application/x-otio+json') return 'document'
   if (mimeType === 'application/json' || mimeType === 'application/octet-stream') return 'data'
   return 'other'
 }

@@ -39,6 +39,7 @@ import { rewriteItemHistoryWithRetry } from './history-commit-coordinator.js'
 import { withThreadStoreMutation } from './thread-mutation-coordinator.js'
 import type { ThreadLifecycleFence } from './thread-lifecycle-fence.js'
 import { ThreadItemProjectionService } from './thread-item-projection.js'
+import { ComposerContextAttachmentSchema } from '../contracts/composer-context.js'
 
 export type TurnServiceDeps = {
   threadStore: ThreadStore
@@ -157,6 +158,9 @@ export class TurnService {
         }
         attemptedTurnId = turnId
         try {
+          const composerContexts = ComposerContextAttachmentSchema.array().parse(
+            input.request.composerContexts ?? []
+          )
           const turn = createTurnRecord({
             id: turnId,
             threadId: input.threadId,
@@ -166,6 +170,7 @@ export class TurnService {
             accountId: input.request.accountId,
             reasoningEffort: input.request.reasoningEffort,
             attachmentIds: input.request.attachmentIds ?? [],
+            composerContexts,
             guiPlan: input.request.guiPlan,
             guiDesignCanvas: input.request.guiDesignCanvas,
             guiDesignMode: input.request.guiDesignMode,
@@ -186,6 +191,7 @@ export class TurnService {
             displayText: input.request.displayText,
             messageSource: input.request.messageSource,
             attachmentIds: input.request.attachmentIds ?? [],
+            composerContexts,
             fileReferences: input.request.fileReferences ?? [],
             workspaceCheckpointId: input.request.workspaceCheckpointId
           })

@@ -1726,4 +1726,38 @@ describe('tool presentation inference', () => {
       meta: { command: 'npm test' }
     })
   })
+
+  it('keeps validated extension composer metadata on persisted user blocks', () => {
+    const composerContext = {
+      schemaVersion: 1 as const,
+      id: 'video-selection',
+      title: 'Interview selection',
+      summary: 'Revision 4 with one selected clip',
+      reference: { projectId: 'project-1', selectedItemIds: ['clip-1'] },
+      revision: 4,
+      generation: 7,
+      attachmentId: `extension-context:${'a'.repeat(64)}`,
+      provenance: {
+        extensionId: 'acme.video-editor',
+        extensionVersion: '1.1.0',
+        viewContributionId: 'extension:acme.video-editor/editor',
+        workspaceId: 'b'.repeat(64)
+      }
+    }
+    const block = chatBlockFromItem({
+      id: 'item-user-context',
+      turnId: 'turn-1',
+      threadId: 'thread-1',
+      role: 'user',
+      status: 'completed',
+      createdAt: '2026-07-14T00:00:00.000Z',
+      kind: 'user_message',
+      text: 'Use the selection',
+      composerContexts: [composerContext]
+    })
+    expect(block).toMatchObject({
+      kind: 'user',
+      meta: { composerContexts: [composerContext] }
+    })
+  })
 })

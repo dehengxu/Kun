@@ -4,9 +4,9 @@ import { useExtensionClient } from '@kun/extension-react'
 import { createExtensionTestHarness } from '@kun/extension-test'
 import { activate, deactivate } from './dist/extension.js'
 
-// The installed SDK is current v1.1 while this fixture's manifest intentionally
+// The installed SDK is current v1.2 while this fixture's manifest intentionally
 // remains v1.0, proving executable same-major backward negotiation.
-assert.equal(CURRENT_EXTENSION_API_VERSION, '1.1.0')
+assert.equal(CURRENT_EXTENSION_API_VERSION, '1.2.0')
 assert.equal(typeof useExtensionClient, 'function')
 
 const harness = createExtensionTestHarness({

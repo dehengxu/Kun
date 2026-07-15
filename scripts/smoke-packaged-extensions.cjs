@@ -410,7 +410,7 @@ async function createSmokeExtension(root, { webviewConnectUrls = [] } = {}) {
   await mkdir(join(root, 'dist', 'webview'), { recursive: true })
   await writeFile(join(root, 'kun-extension.json'), `${JSON.stringify({
     manifestVersion: 1,
-    apiVersion: '1.1.0',
+    apiVersion: '1.2.0',
     publisher: 'kun-smoke',
     name: 'packaged',
     version: '1.0.0',
