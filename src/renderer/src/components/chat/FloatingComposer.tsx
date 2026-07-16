@@ -119,6 +119,7 @@ export { shouldCaptureFileMentionCommitKey } from './use-composer-file-mentions'
 import { FloatingComposerFileMentionMenu } from './FloatingComposerFileMentionMenu'
 import { useComposerSlashCommandMenu } from './use-composer-slash-command-menu'
 import { FloatingComposerSlashCommandMenu } from './FloatingComposerSlashCommandMenu'
+import { FloatingComposerTodoProgress } from './FloatingComposerTodoProgress'
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 export type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
@@ -340,6 +341,7 @@ export function FloatingComposer({
   const forkActiveThread = useChatStore((s) => s.forkActiveThread)
   const archiveThread = useChatStore((s) => s.archiveThread)
   const activeThreadGoal = useChatStore((s) => s.activeThreadGoal)
+  const activeThreadTodos = useChatStore((s) => s.activeThreadTodos)
   const setActiveThreadGoal = useChatStore((s) => s.setActiveThreadGoal)
   const setActiveThreadGoalStatus = useChatStore((s) => s.setActiveThreadGoalStatus)
   const clearActiveThreadGoal = useChatStore((s) => s.clearActiveThreadGoal)
@@ -543,6 +545,15 @@ export function FloatingComposer({
           : useWorktreePool
             ? t('composerWorktreeModeHint')
             : null
+  const showTodoProgress = !compact
+    && route === 'chat'
+    && Boolean(activeThreadId)
+    && activeThreadTodos?.threadId === activeThreadId
+    && activeThreadTodos.items.length > 0
+    && slashQuery == null
+    && !composerMenuOpen
+    && !goalPanelOpen
+    && !pendingUserInputBlock
 
   useEffect(() => {
     if (!useWorktreePool || !effectiveWorkspaceRoot || typeof window.kunGui?.getGitBranches !== 'function') {
@@ -1151,6 +1162,9 @@ export function FloatingComposer({
                 </button>
               </div>
             </div>
+          ) : null}
+          {showTodoProgress && activeThreadTodos ? (
+            <FloatingComposerTodoProgress todos={activeThreadTodos} />
           ) : null}
         </div>
 

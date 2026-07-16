@@ -2123,6 +2123,9 @@
   "todoStatusCompleted": "已完成",
   "todoMarkPending": "标为待处理",
   "todoMarkCompleted": "标为完成",
+  "todoProgressStep": "第 {{current}} / {{total}} 步",
+  "todoProgressAria": "Todo 进度：第 {{current}} 步，共 {{total}} 步",
+  "todoProgressDetails": "Todo 详情",
   "todoStatus": {
     "pending": "待处理",
     "in_progress": "进行中",

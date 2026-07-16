@@ -2123,6 +2123,9 @@
   "todoStatusCompleted": "Done",
   "todoMarkPending": "Mark pending",
   "todoMarkCompleted": "Mark complete",
+  "todoProgressStep": "Step {{current}} / {{total}}",
+  "todoProgressAria": "Todo progress: step {{current}} of {{total}}",
+  "todoProgressDetails": "Todo details",
   "todoStatus": {
     "pending": "Pending",
     "in_progress": "Active",
