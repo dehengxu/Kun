@@ -97,7 +97,7 @@ describe('validateAndSubstituteFfmpegArguments', () => {
     expect(() => validateAndSubstituteFfmpegArguments(
       [
         '-i', '{{input:source}}',
-        '-vf', "drawtext=text=Hello\\\\: % $ ` {{ fontfile=/etc/passwd:expansion=none:fontsize=32:x=10:y=20",
+        '-vf', "drawtext=text=Hello\\\\: % $ ` {{ fontfile=/etc/passwd:font=Kun Sans:expansion=none:fontsize=32:x=10:y=20",
         '{{output:video}}'
       ],
       { source: '/host/source.mp4' },
@@ -107,6 +107,15 @@ describe('validateAndSubstituteFfmpegArguments', () => {
       [
         '-i', '{{input:source}}',
         '-vf', 'drawtext=text=Hello:expansion=none:fontfile=/etc/passwd',
+        '{{output:video}}'
+      ],
+      { source: '/host/source.mp4' },
+      { video: '/host/.staging.mp4' }
+    )).toThrow()
+    expect(() => validateAndSubstituteFfmpegArguments(
+      [
+        '-i', '{{input:source}}',
+        '-vf', 'drawtext=text=Hello:font=../Kun Sans:expansion=none',
         '{{output:video}}'
       ],
       { source: '/host/source.mp4' },
@@ -131,7 +140,7 @@ describe('validateAndSubstituteFfmpegArguments', () => {
       "[base][vprep0]overlay=x='(W-w)/2':y='(H-h)/2':eof_action=pass:" +
         "enable='between(t,0.000000,1.500000)'[vcomp0]",
       "[vcomp0]drawtext=text=Hello\\\\: % $ `:expansion=none:fontcolor=0xFFFFFF:" +
-        "fontsize=48:box=1:boxcolor=0x000000@0.65:boxborderw=12:x=(w-text_w)/2:" +
+        "font=sans-serif:fontsize=48:box=1:boxcolor=0x000000@0.65:boxborderw=12:x=(w-text_w)/2:" +
         "y=h-text_h-h/12:enable='between(t,0.000000,1.500000)'[captioned0]"
     ].join(';')
     expect(() => validateAndSubstituteFfmpegArguments(

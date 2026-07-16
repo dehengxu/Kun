@@ -174,6 +174,7 @@ const SAFE_DRAWTEXT_OPTIONS = new Set([
   'enable',
   'expansion',
   'fix_bounds',
+  'font',
   'fontcolor',
   'fontsize',
   'line_spacing',
@@ -812,10 +813,19 @@ function validateDrawtextOptions(raw: string): void {
     if (!SAFE_DRAWTEXT_OPTIONS.has(name)) {
       throw invalidArgument('FFmpeg drawtext path-loading or unknown options are not supported')
     }
-    seen.set(name, option.slice(separator + 1))
+    const value = option.slice(separator + 1)
+    if (name === 'font') validateDrawtextFontFamily(value)
+    seen.set(name, value)
   }
   if (!seen.has('text') || seen.get('expansion')?.toLowerCase() !== 'none') {
     throw invalidArgument('FFmpeg drawtext requires inline text with expansion=none')
+  }
+}
+
+function validateDrawtextFontFamily(value: string): void {
+  if (value.length < 1 || value.length > 128 || containsAsciiControl(value) ||
+    !/^[\p{L}\p{N}][\p{L}\p{N} ._+-]*$/u.test(value)) {
+    throw invalidArgument('FFmpeg drawtext font must be a bounded inline font family')
   }
 }
 
