@@ -94,6 +94,7 @@ async function main() {
     const settings = desktopVideoEditorSettings({
       runtimePort,
       workspaceRoot,
+      dataDir: profile,
       modelBaseUrl: 'http://127.0.0.1:9/v1'
     })
     const serializedSettings = `${JSON.stringify(settings, null, 2)}\n`

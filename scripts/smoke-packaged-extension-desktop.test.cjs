@@ -31,8 +31,12 @@ const {
   desktopSmokeWorkspaceParent,
   desktopUserDataCandidates,
   findUnexpectedPopupTargets,
+  hasWorkbenchContribution,
   WORKBENCH_DISCOVERY_RETRY_DELAYS_MS,
-  replayWorkbenchContributionDiscovery,
+  runGuestAsyncInspection,
+  sendToGuestSession,
+  synchronizeWorkbenchContributionDiscovery,
+  waitForSuccessfulGuestInspection,
   isExtensionGuestTarget,
   isWorkbenchTarget,
   platformDesktopArguments,
@@ -96,9 +100,16 @@ test('selects host-native packaged resources and never launches desktop Electron
     desktopApplicationEntry('/packaged/Resources', '/host/Electron', '/packaged/Kun'),
     join('/packaged/Resources', 'app.asar')
   )
-  assert.equal(
-    desktopSmokeSettings(43123, '/isolated-home/.kun/default_workspace').workspaceRoot,
-    '/isolated-home/.kun/default_workspace'
+  const smokeSettings = desktopSmokeSettings(
+    43123,
+    '/isolated-home/.kun/default_workspace',
+    '/isolated-home/.kun/data'
+  )
+  assert.equal(smokeSettings.workspaceRoot, '/isolated-home/.kun/default_workspace')
+  assert.equal(smokeSettings.agents.kun.dataDir, '/isolated-home/.kun/data')
+  assert.throws(
+    () => desktopSmokeSettings(43123, '/workspace', '~/.kun/data'),
+    /dataDir must be absolute/
   )
   assert.equal(
     desktopSmokeWorkspaceParent('/source-checkout'),
@@ -134,7 +145,10 @@ test('selects host-native packaged resources and never launches desktop Electron
   const linux = createDesktopLaunchPlan({
     executable: '/packaged/kun',
     applicationArguments: ['--remote-debugging-port=12345'],
-    environment: { ELECTRON_RUN_AS_NODE: '1' },
+    environment: {
+      ELECTRON_RUN_AS_NODE: '1',
+      KUN_DISABLE_OS_CREDENTIAL_STORE: '1'
+    },
     platform: 'linux',
     hasDisplay: false,
     xvfbExecutable: '/usr/bin/xvfb-run'
@@ -142,6 +156,7 @@ test('selects host-native packaged resources and never launches desktop Electron
   assert.equal(linux.command, '/usr/bin/xvfb-run')
   assert.deepEqual(linux.args, ['-a', '-s', '-screen 0 1280x900x24', '/packaged/kun', '--remote-debugging-port=12345'])
   assert.equal(linux.env.ELECTRON_RUN_AS_NODE, undefined)
+  assert.equal(linux.env.KUN_DISABLE_OS_CREDENTIAL_STORE, '1')
   assert.equal(linux.wrappedByXvfb, true)
 
   const isolated = createIsolatedEnvironment(
@@ -169,6 +184,7 @@ test('selects host-native packaged resources and never launches desktop Electron
   assert.equal(isolated.NODE_ENV, 'production')
   assert.equal(isolated.KUN_PACKAGED_EXTENSION_DESKTOP_SMOKE, '1')
   assert.equal(isolated.KUN_DISABLE_OS_CREDENTIAL_STORE, '1')
+  assert.equal(isolated.NO_AT_BRIDGE, '1')
   for (const key of [
     'ELECTRON_RENDERER_URL',
     'ELECTRON_RUN_AS_NODE',
@@ -426,24 +442,312 @@ test('recognizes the workbench and kun-extension guest CDP targets', () => {
   )
 })
 
-test('replays extension discovery through and beyond the cold renderer startup window', async () => {
-  assert.deepEqual(WORKBENCH_DISCOVERY_RETRY_DELAYS_MS, [0, 250, 1_000, 3_000, 10_000])
+test('synchronizes renderer discovery after the trusted bridge sees the installed smoke view', async () => {
+  assert.deepEqual(WORKBENCH_DISCOVERY_RETRY_DELAYS_MS, [0, 250, 1_000])
+  const response = {
+    ok: true,
+    status: 200,
+    body: JSON.stringify({
+      schemaVersion: 1,
+      revision: 7,
+      extensions: [{
+        id: EXTENSION_ID,
+        contributes: { 'views.rightSidebar': [{ id: 'smoke' }] }
+      }]
+    })
+  }
+  assert.equal(hasWorkbenchContribution(response, CONTRIBUTION_ID), true)
+  assert.equal(hasWorkbenchContribution(response, 'extension:other.example/smoke'), false)
   const calls = []
-  await replayWorkbenchContributionDiscovery({
-    cdp: { send: async (...args) => calls.push(args) },
-    sessionId: 'workbench-session'
+  const session = { targetId: 'workbench-target', sessionId: 'workbench-session' }
+  await synchronizeWorkbenchContributionDiscovery({
+    cdp: {
+      send: async (...args) => {
+        calls.push(args)
+        return args[1].expression.includes('extensionGetWorkbench')
+          ? { result: { value: response } }
+          : { result: { value: true } }
+      }
+    },
+    session,
+    workspaceRoot: '/workspace',
+    contributionId: CONTRIBUTION_ID,
+    timeoutMs: 1_000,
+    processState: () => ({ exitCode: null, signalCode: null })
   })
   assert.deepEqual(calls.map(([method, params, sessionId]) => ({ method, sessionId, params: {
     awaitPromise: params.awaitPromise,
     returnByValue: params.returnByValue
-  } })), [{
+  } })), [
+    {
+      method: 'Runtime.evaluate',
+      sessionId: 'workbench-session',
+      params: { awaitPromise: true, returnByValue: true }
+    },
+    {
+      method: 'Runtime.evaluate',
+      sessionId: 'workbench-session',
+      params: { awaitPromise: undefined, returnByValue: true }
+    }
+  ])
+  assert.match(calls[0][1].expression, /extensionGetWorkbench/)
+  assert.match(calls[1][1].expression, /window\.setTimeout/)
+})
+
+test('reattaches renderer discovery when the packaged workbench CDP session is replaced', async () => {
+  const response = {
+    ok: true,
+    status: 200,
+    body: JSON.stringify({
+      extensions: [{
+        id: EXTENSION_ID,
+        contributes: { 'views.rightSidebar': [{ id: 'smoke' }] }
+      }]
+    })
+  }
+  const calls = []
+  let rejectedOldSession = false
+  const session = { targetId: 'old-target', sessionId: 'old-session' }
+  await synchronizeWorkbenchContributionDiscovery({
+    cdp: {
+      send: async (method, params, sessionId) => {
+        calls.push([method, params, sessionId])
+        if (method === 'Runtime.evaluate' && sessionId === 'old-session' && !rejectedOldSession) {
+          rejectedOldSession = true
+          throw new Error('CDP Runtime.evaluate failed (-32001): Session with given id not found.')
+        }
+        if (method === 'Target.getTargets') {
+          return {
+            targetInfos: [{
+              targetId: 'replacement-target',
+              type: 'page',
+              url: 'file:///opt/Kun/resources/app.asar/out/renderer/index.html'
+            }]
+          }
+        }
+        if (method === 'Target.attachToTarget') return { sessionId: 'replacement-session' }
+        if (method === 'Runtime.enable') return {}
+        return params.expression.includes('extensionGetWorkbench')
+          ? { result: { value: response } }
+          : { result: { value: true } }
+      }
+    },
+    session,
+    workspaceRoot: '/workspace',
+    contributionId: CONTRIBUTION_ID,
+    timeoutMs: 1_000,
+    processState: () => ({ exitCode: null, signalCode: null })
+  })
+  assert.deepEqual(session, {
+    targetId: 'replacement-target',
+    sessionId: 'replacement-session'
+  })
+  assert.equal(calls.some(([method]) => method === 'Target.getTargets'), true)
+  assert.equal(calls.some(([method]) => method === 'Target.attachToTarget'), true)
+  assert.equal(
+    calls.filter(([method, , sessionId]) =>
+      method === 'Runtime.evaluate' && sessionId === 'replacement-session').length,
+    2
+  )
+})
+
+test('retries renderer discovery when the initial packaged workbench target is replaced before attach', async () => {
+  const response = {
+    ok: true,
+    status: 200,
+    body: JSON.stringify({
+      extensions: [{
+        id: EXTENSION_ID,
+        contributes: { 'views.rightSidebar': [{ id: 'smoke' }] }
+      }]
+    })
+  }
+  const calls = []
+  let targetLookupCount = 0
+  const session = { targetId: 'initial-target', sessionId: undefined }
+  await synchronizeWorkbenchContributionDiscovery({
+    cdp: {
+      send: async (method, params, sessionId) => {
+        calls.push([method, params, sessionId])
+        if (method === 'Target.getTargets') {
+          targetLookupCount += 1
+          return {
+            targetInfos: [{
+              targetId: targetLookupCount === 1 ? 'initial-target' : 'replacement-target',
+              type: 'page',
+              url: 'file:///opt/Kun/resources/app.asar/out/renderer/index.html'
+            }]
+          }
+        }
+        if (method === 'Target.attachToTarget') {
+          return {
+            sessionId: params.targetId === 'initial-target'
+              ? 'initial-session'
+              : 'replacement-session'
+          }
+        }
+        if (method === 'Runtime.enable' && sessionId === 'initial-session') {
+          throw new Error('CDP Runtime.enable failed (-32001): Session with given id not found.')
+        }
+        if (method === 'Runtime.enable') return {}
+        return params.expression.includes('extensionGetWorkbench')
+          ? { result: { value: response } }
+          : { result: { value: true } }
+      }
+    },
+    session,
+    workspaceRoot: '/workspace',
+    contributionId: CONTRIBUTION_ID,
+    timeoutMs: 1_000,
+    processState: () => ({ exitCode: null, signalCode: null })
+  })
+  assert.deepEqual(session, {
+    targetId: 'replacement-target',
+    sessionId: 'replacement-session'
+  })
+  assert.equal(targetLookupCount, 2)
+  assert.equal(calls.some(([method, params]) =>
+    method === 'Target.attachToTarget' && params.targetId === 'replacement-target'), true)
+  assert.equal(
+    calls.filter(([method, , sessionId]) =>
+      method === 'Runtime.evaluate' && sessionId === 'replacement-session').length,
+    2
+  )
+})
+
+test('reattaches a replaced packaged Extension guest before replaying its CDP command', async () => {
+  const calls = []
+  let rejectedOldSession = false
+  const session = { targetId: 'old-guest', sessionId: 'old-guest-session' }
+  const response = await sendToGuestSession({
+    cdp: {
+      send: async (method, params, sessionId) => {
+        calls.push([method, params, sessionId])
+        if (method === 'Runtime.evaluate' && sessionId === 'old-guest-session' && !rejectedOldSession) {
+          rejectedOldSession = true
+          throw new Error('CDP Runtime.evaluate failed (-32001): Session with given id not found.')
+        }
+        if (method === 'Target.getTargets') {
+          return {
+            targetInfos: [{
+              targetId: 'replacement-guest',
+              type: 'webview',
+              url: `kun-extension://${EXTENSION_ID}/dist/webview/index.html?kunViewSession=replacement`
+            }]
+          }
+        }
+        if (method === 'Target.attachToTarget') return { sessionId: 'replacement-guest-session' }
+        if (method === 'Runtime.enable') return {}
+        return { result: { value: 'replayed' } }
+      }
+    },
+    session,
     method: 'Runtime.evaluate',
-    sessionId: 'workbench-session',
-    params: { awaitPromise: undefined, returnByValue: true }
-  }])
-  const expression = calls[0][1].expression
-  assert.match(expression, /window\.setTimeout/)
-  assert.doesNotMatch(expression, /extensionGetWorkbench/)
+    params: { expression: 'location.href', returnByValue: true },
+    timeoutMs: 1_000,
+    processState: () => ({ exitCode: null, signalCode: null }),
+    operation: 'testing guest recovery'
+  })
+  assert.deepEqual(response, { result: { value: 'replayed' } })
+  assert.deepEqual(session, {
+    targetId: 'replacement-guest',
+    sessionId: 'replacement-guest-session'
+  })
+  assert.equal(calls.some(([method, params]) =>
+    method === 'Target.attachToTarget' && params.targetId === 'replacement-guest'), true)
+  assert.equal(calls.at(-1)?.[2], 'replacement-guest-session')
+})
+
+test('reattaches and replays a guest Runtime evaluation after a silent CDP timeout', async () => {
+  let timedOut = false
+  const session = { targetId: 'guest-target', sessionId: 'timed-out-session' }
+  const response = await sendToGuestSession({
+    cdp: {
+      send: async (method, params, sessionId) => {
+        if (method === 'Runtime.evaluate' && !timedOut) {
+          timedOut = true
+          throw new Error('CDP command timed out: Runtime.evaluate')
+        }
+        if (method === 'Target.getTargets') {
+          return {
+            targetInfos: [{
+              targetId: 'guest-target',
+              type: 'webview',
+              url: `kun-extension://${EXTENSION_ID}/dist/webview/index.html?kunViewSession=current`
+            }]
+          }
+        }
+        if (method === 'Target.attachToTarget') return { sessionId: 'reattached-session' }
+        if (method === 'Runtime.enable') return {}
+        return { result: { value: params.expression } }
+      }
+    },
+    session,
+    method: 'Runtime.evaluate',
+    params: { expression: 'document.readyState', returnByValue: true },
+    timeoutMs: 1_000,
+    processState: () => ({ exitCode: null, signalCode: null }),
+    operation: 'testing silent guest timeout recovery'
+  })
+  assert.deepEqual(response, { result: { value: 'document.readyState' } })
+  assert.equal(session.sessionId, 'reattached-session')
+})
+
+test('runs long guest inspections as a started task with short result polls', async () => {
+  const expressions = []
+  let polls = 0
+  let starts = 0
+  const result = await runGuestAsyncInspection({
+    cdp: {},
+    sessionId: 'guest-session',
+    sendCommand: async (_method, params) => {
+      expressions.push(params.expression)
+      if (params.expression.includes('Promise.resolve')) {
+        starts += 1
+        return { result: { value: '__kunPackagedGuestInspectionTest' } }
+      }
+      if (params.expression.startsWith('delete ')) return { result: { value: true } }
+      polls += 1
+      if (polls === 1) return { result: { value: null } }
+      if (polls === 2) return { result: { value: { state: 'pending' } } }
+      return { result: { value: { state: 'fulfilled', value: { mode: 'ok' } } } }
+    },
+    expression: '(async () => ({ mode: \'ok\' }))()',
+    userGesture: true,
+    timeoutMs: 1_000,
+    description: 'test asynchronous guest inspection'
+  })
+  assert.deepEqual(result, { mode: 'ok' })
+  assert.equal(polls, 3)
+  assert.equal(starts, 2)
+  assert.equal(expressions.some((expression) => expression.includes('Promise.resolve')), true)
+  assert.equal(expressions.at(-1)?.startsWith('delete '), true)
+})
+
+test('waits for the packaged Extension guest main-frame media binding to become current', async () => {
+  let attempts = 0
+  const result = await waitForSuccessfulGuestInspection({
+    inspect: async () => {
+      attempts += 1
+      return attempts === 1
+        ? { mediaPlaybackMode: 'rejected', mediaPlaybackError: { message: 'binding pending' } }
+        : { mediaPlaybackMode: 'ok', mediaPlayback: { leaseId: 'lease-1' } }
+    },
+    isSuccessful: (value) => value.mediaPlaybackMode === 'ok',
+    timeoutMs: 1_000,
+    description: 'test guest media binding'
+  })
+  assert.equal(attempts, 2)
+  assert.deepEqual(result, {
+    mediaPlaybackMode: 'ok',
+    mediaPlayback: { leaseId: 'lease-1' }
+  })
+})
+
+test('uses a command budget that covers bounded packaged guest security checks', () => {
+  const cdp = new CdpConnection(new FakeWebSocket())
+  assert.equal(cdp.commandTimeoutMs, 30_000)
+  cdp.close()
 })
 
 test('routes flattened CDP commands and rejects protocol errors', async () => {

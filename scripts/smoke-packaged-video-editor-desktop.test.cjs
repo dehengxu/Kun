@@ -48,11 +48,13 @@ test('seeds a Chinese light desktop profile against an offline OpenAI-compatible
   const settings = desktopVideoEditorSettings({
     runtimePort: 43123,
     workspaceRoot: '/isolated/workspace',
+    dataDir: '/isolated/home/.kun/data',
     modelBaseUrl: 'http://127.0.0.1:43124/v1'
   })
   assert.equal(settings.locale, 'zh')
   assert.equal(settings.theme, 'light')
   assert.equal(settings.workspaceRoot, '/isolated/workspace')
+  assert.equal(settings.agents.kun.dataDir, '/isolated/home/.kun/data')
   assert.equal(settings.agents.kun.port, 43123)
   assert.equal(settings.agents.kun.baseUrl, 'http://127.0.0.1:43124/v1')
   assert.equal(settings.agents.kun.model, MODEL_NAME)

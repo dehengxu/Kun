@@ -117,7 +117,7 @@ async function main() {
     }))
 
     const settings = {
-      ...desktopSmokeSettings(runtimePort, workspaceRoot),
+      ...desktopSmokeSettings(runtimePort, workspaceRoot, profile),
       locale: 'zh',
       theme: 'light'
     }

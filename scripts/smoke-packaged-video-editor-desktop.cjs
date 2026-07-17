@@ -151,6 +151,7 @@ async function main() {
     const settings = desktopVideoEditorSettings({
       runtimePort,
       workspaceRoot,
+      dataDir: profile,
       modelBaseUrl: modelFixture.baseUrl
     })
     const serializedSettings = `${JSON.stringify(settings, null, 2)}\n`
@@ -434,8 +435,8 @@ async function main() {
   }
 }
 
-function desktopVideoEditorSettings({ runtimePort, workspaceRoot, modelBaseUrl }) {
-  const base = desktopSmokeSettings(runtimePort, workspaceRoot)
+function desktopVideoEditorSettings({ runtimePort, workspaceRoot, dataDir, modelBaseUrl }) {
+  const base = desktopSmokeSettings(runtimePort, workspaceRoot, dataDir)
   return {
     ...base,
     locale: 'zh',
