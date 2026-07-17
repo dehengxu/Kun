@@ -123,6 +123,25 @@ describe('extension public routes', () => {
     )).status).toBe(400)
   })
 
+  it('keeps right-rail-hidden Views out of untrusted launcher discovery', async () => {
+    const fixture = await createFixture({ showInRightRail: false })
+    const response = await dispatchJson(
+      buildExtensionPublicRouter(fixture.runtime),
+      'GET',
+      '/v1/extensions/workbench?workspace_root=%2Funtrusted',
+      undefined,
+      runtimeHeaders()
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body.extensions[0].rightRailDiscovery.views).toEqual([{
+      id: 'panel',
+      title: 'Dashboard',
+      showInRightRail: false,
+      order: 0
+    }])
+  })
+
   it('projects real compatibility reports instead of admitting future API minors to workbench', async () => {
     const fixture = await createFixture({ apiVersion: '1.1.0' })
     const response = await dispatchJson(
@@ -1354,7 +1373,11 @@ describe('extension public routes', () => {
   })
 })
 
-async function createFixture(options: { maxEvents?: number; apiVersion?: string } = {}) {
+async function createFixture(options: {
+  maxEvents?: number
+  apiVersion?: string
+  showInRightRail?: boolean
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), 'kun-extension-public-routes-'))
   cleanupRoots.push(root)
   const paths = new ExtensionPaths({
@@ -1422,7 +1445,8 @@ async function createFixture(options: { maxEvents?: number; apiVersion?: string 
       'views.rightSidebar': [{
         id: 'panel',
         title: 'Dashboard',
-        entry: 'webview/index.html'
+        entry: 'webview/index.html',
+        ...(options.showInRightRail === undefined ? {} : { showInRightRail: options.showInRightRail })
       }],
       tools: [{
         id: 'echo',

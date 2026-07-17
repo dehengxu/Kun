@@ -63,7 +63,7 @@ Unknown locations fail validation and are never treated as arbitrary component s
 - `entry` must be an integrity-listed local resource in an allowed resource root.
 - Labels, titles, and descriptions are untrusted plain text, not executable HTML.
 - Icons must be supported package resources and remain clear in light/dark themes and on Retina displays.
-- Every visible `views.rightSidebar` View receives its own direct rail icon and top-level tab. If an icon is omitted, the Host uses an accessible fallback without executing extension code.
+- Every visible `views.rightSidebar` View whose `showInRightRail` is not `false` receives its own direct rail icon and top-level tab. If an icon is omitted, the Host uses an accessible fallback without executing extension code. A View with `showInRightRail: false` remains available from Extension management or commands without staying in that rail.
 - `when` controls visibility/enablement and never grants permission.
 - `order` participates only within host groups; equal priorities sort by fully qualified ID.
 - Multiple instances are created only when the contribution contract permits them, each with an independent View Session.

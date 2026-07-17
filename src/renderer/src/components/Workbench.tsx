@@ -363,6 +363,7 @@ export function Workbench(): ReactElement {
   const openExtensionSurface = useCallback((view: ExtensionWorkbenchView): void => {
     if (view.point === 'views.rightSidebar') {
       selectExtensionSurface(null)
+      setRoute('chat')
       if (isExtensionContributionId(view.id)) {
         openRightPanelTab(view.id)
       }
@@ -375,6 +376,7 @@ export function Workbench(): ReactElement {
     leftSidebarCollapsed,
     openRightPanelTab,
     selectExtensionSurface,
+    setRoute,
     setRightPanelMode,
     toggleLeftSidebar
   ])

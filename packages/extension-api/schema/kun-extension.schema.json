@@ -140,27 +140,6 @@
               "$ref": "#/$defs/__schema78"
             }
           },
-          "required": [
-            "commands",
-            "views.containers",
-            "views.leftSidebar",
-            "views.rightSidebar",
-            "views.auxiliaryPanel",
-            "views.editorTab",
-            "views.fullPage",
-            "actions.topBar",
-            "actions.composer",
-            "actions.message",
-            "message.resultPreviews",
-            "settings",
-            "contextMenus",
-            "notifications",
-            "agentProfiles",
-            "tools",
-            "modelProviders",
-            "authentication",
-            "hostContentScripts"
-          ],
           "additionalProperties": false
         },
         "permissions": {
@@ -756,8 +735,7 @@
       "required": [
         "id",
         "title",
-        "location",
-        "order"
+        "location"
       ],
       "additionalProperties": false
     },
@@ -800,6 +778,10 @@
         "when": {
           "$ref": "#/$defs/__schema34"
         },
+        "showInRightRail": {
+          "default": true,
+          "type": "boolean"
+        },
         "order": {
           "$ref": "#/$defs/__schema37"
         },
@@ -836,7 +818,6 @@
             }
           },
           "required": [
-            "presentation",
             "sites"
           ],
           "additionalProperties": false
@@ -845,10 +826,7 @@
       "required": [
         "id",
         "title",
-        "entry",
-        "order",
-        "multiple",
-        "localResourceRoots"
+        "entry"
       ],
       "additionalProperties": false
     },
@@ -959,8 +937,7 @@
       "required": [
         "id",
         "command",
-        "title",
-        "order"
+        "title"
       ],
       "additionalProperties": false
     },
@@ -1026,8 +1003,7 @@
         "id",
         "title",
         "entry",
-        "mimeTypes",
-        "localResourceRoots"
+        "mimeTypes"
       ],
       "additionalProperties": false
     },
@@ -1081,9 +1057,7 @@
       "required": [
         "id",
         "title",
-        "properties",
-        "scope",
-        "order"
+        "properties"
       ],
       "additionalProperties": false
     },
@@ -1131,8 +1105,7 @@
       "required": [
         "id",
         "location",
-        "command",
-        "order"
+        "command"
       ],
       "additionalProperties": false
     },
@@ -1183,9 +1156,7 @@
       },
       "required": [
         "id",
-        "title",
-        "severity",
-        "actions"
+        "title"
       ],
       "additionalProperties": false
     },
@@ -1309,8 +1280,7 @@
       },
       "required": [
         "id",
-        "title",
-        "visibility"
+        "title"
       ],
       "additionalProperties": false
     },
@@ -1363,9 +1333,7 @@
       "required": [
         "id",
         "description",
-        "inputSchema",
-        "sideEffects",
-        "idempotent"
+        "inputSchema"
       ],
       "additionalProperties": false
     },
@@ -1412,10 +1380,7 @@
       },
       "required": [
         "id",
-        "displayName",
-        "credentialHosts",
-        "adapterApiVersion",
-        "models"
+        "displayName"
       ],
       "additionalProperties": false
     },
@@ -1486,11 +1451,7 @@
           },
           "required": [
             "input",
-            "output",
-            "reasoning",
-            "tools",
-            "parallelTools",
-            "streaming"
+            "output"
           ],
           "additionalProperties": false
         }
@@ -1621,10 +1582,6 @@
           "maxLength": 64
         }
       },
-      "required": [
-        "header",
-        "prefix"
-      ],
       "additionalProperties": false
     },
     "__schema78": {
@@ -1677,9 +1634,7 @@
       "required": [
         "id",
         "matches",
-        "scripts",
-        "styles",
-        "runAt"
+        "scripts"
       ],
       "additionalProperties": false
     },
@@ -1904,27 +1859,6 @@
               "$ref": "#/$defs/__schema78"
             }
           },
-          "required": [
-            "commands",
-            "views.containers",
-            "views.leftSidebar",
-            "views.rightSidebar",
-            "views.auxiliaryPanel",
-            "views.editorTab",
-            "views.fullPage",
-            "actions.topBar",
-            "actions.composer",
-            "actions.message",
-            "message.resultPreviews",
-            "settings",
-            "contextMenus",
-            "notifications",
-            "agentProfiles",
-            "tools",
-            "modelProviders",
-            "authentication",
-            "hostContentScripts"
-          ],
           "additionalProperties": false
         },
         "permissions": {

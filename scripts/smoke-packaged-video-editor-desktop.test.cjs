@@ -16,8 +16,7 @@ const {
   desktopVideoEditorSettings,
   openAiTextFrames,
   openAiToolCallFrames,
-  resolveVideoEditorArchive,
-  shouldClickRightRailContribution
+  resolveVideoEditorArchive
 } = require('./smoke-packaged-video-editor-desktop.cjs')
 
 test('resolves only the catalogued bundled video editor archive or an explicit .kunx', async (t) => {
@@ -25,11 +24,11 @@ test('resolves only the catalogued bundled video editor archive or an explicit .
   t.after(() => rm(root, { recursive: true, force: true }))
   const bundled = join(root, 'bundled-extensions')
   await mkdir(bundled, { recursive: true })
-  const archive = join(bundled, 'kun-video-editor-0.4.3.kunx')
+  const archive = join(bundled, 'kun-video-editor-0.4.4.kunx')
   await writeFile(archive, 'archive bytes')
   await writeFile(join(bundled, 'catalog.json'), `${JSON.stringify({
     schemaVersion: 1,
-    extensions: [{ id: EXTENSION_ID, archive: 'kun-video-editor-0.4.3.kunx' }]
+    extensions: [{ id: EXTENSION_ID, archive: 'kun-video-editor-0.4.4.kunx' }]
   })}\n`)
 
   assert.equal(await resolveVideoEditorArchive(root), archive)
@@ -82,13 +81,7 @@ test('emits bounded OpenAI SSE frames for the Agent extension-tool round trip', 
   assert.equal(textFrames.at(-1), 'data: [DONE]\n\n')
 })
 
-test('does not toggle a persisted right-rail View closed while its guest is restoring', () => {
-  assert.equal(shouldClickRightRailContribution('true'), false)
-  assert.equal(shouldClickRightRailContribution('false'), true)
-  assert.equal(shouldClickRightRailContribution(null), true)
-})
-
-test('requires the first locked-rail protected prompt to expose localized permissions and host risks', () => {
+test('requires the first-launch protected prompt to expose localized permissions and host risks', () => {
   const workspaceRoot = '/isolated/workspace'
   const detail = [
     '此次权限变更仅适用于所选工作区。',
@@ -156,7 +149,7 @@ test('requires the first locked-rail protected prompt to expose localized permis
   )
 })
 
-test('source smoke covers the real right-sidebar desktop workflow and actionable capability path', async () => {
+test('source smoke keeps the editor hidden from the rail and opens it from Extension management', async () => {
   assert.equal(CONTRIBUTION_ID, 'extension:kun-examples.kun-video-editor/editor')
   assert.match(SUCCESS_MARKER, /desktop E2E OK/)
   const source = await readFile(join(__dirname, 'smoke-packaged-video-editor-desktop.cjs'), 'utf8')
@@ -168,11 +161,12 @@ test('source smoke covers the real right-sidebar desktop workflow and actionable
     'dialog.showOpenDialog',
     'dialog.showSaveDialog',
     'webContents.getAllWebContents',
-    'data-contribution-id',
-    "data-extension-trusted')",
-    "button.getAttribute('aria-pressed')",
-    'shouldClickRightRailContribution(pressedState)',
-    "'审核权限后打开'",
+    'assertVideoEditorHiddenFromRightRail',
+    'openVideoEditorManagementCard',
+    'extensionGetWorkbench',
+    'showInRightRail === false',
+    'Authorize to open Kun Video Editor',
+    'Review and apply in protected window',
     "'更改扩展权限'",
     "操作: 'extension.permissions'",
     "window.locator('#consent-approve')",

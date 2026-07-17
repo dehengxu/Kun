@@ -148,6 +148,43 @@ describe('ContributionRegistry', () => {
     )).toEqual([])
   })
 
+  it('keeps rail-hidden right-sidebar Views executable without adding a rail launcher', () => {
+    const registry = new ContributionRegistry()
+    registry.replaceExtensions(ExtensionWorkbenchSnapshotSchema.parse({
+      schemaVersion: 1,
+      revision: 1,
+      extensions: [
+        extension('acme.hidden', {
+          'views.rightSidebar': [{
+            id: 'editor',
+            title: 'Editor',
+            entry: 'dist/index.html',
+            showInRightRail: false
+          }]
+        }),
+        {
+          ...extension('acme.untrusted-hidden', {}, []),
+          workspaceTrusted: false,
+          rightRailDiscovery: {
+            views: [{
+              id: 'review',
+              title: 'Review',
+              showInRightRail: false,
+              order: 0
+            }],
+            containers: []
+          }
+        }
+      ]
+    }))
+
+    expect(registry.get('extension:acme.hidden/editor')).toMatchObject({
+      point: 'views.rightSidebar',
+      payload: { showInRightRail: false }
+    })
+    expect(registry.listRightRailViewEntries()).toEqual([])
+  })
+
   it('removes stale layout IDs and namespaces private command dispatch', () => {
     const registry = new ContributionRegistry()
     registry.replaceExtensions(snapshot([

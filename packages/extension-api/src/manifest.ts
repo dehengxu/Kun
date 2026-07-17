@@ -88,6 +88,7 @@ export const ViewContributionSchema = z.strictObject({
   icon: IconPathSchema.optional(),
   container: z.string().min(1).max(256).optional(),
   when: WhenExpressionSchema.optional(),
+  showInRightRail: z.boolean().default(true),
   order: OrderSchema,
   multiple: z.boolean().default(false),
   localResourceRoots: z.array(RelativePathSchema).max(32).default([]),

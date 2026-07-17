@@ -41,7 +41,7 @@ const {
 } = require('./lib/extension-native-media-smoke.cjs')
 
 const EXTENSION_ID = 'kun-examples.kun-video-editor'
-const EXTENSION_VERSION = '0.4.3'
+const EXTENSION_VERSION = '0.4.4'
 const CONTRIBUTION_ID = `extension:${EXTENSION_ID}/editor`
 const VIDEO_EDITOR_PERMISSIONS = Object.freeze([
   'agent.run',
@@ -323,7 +323,7 @@ async function main() {
     snapshot = await waitForGuestSnapshot(
       electronApplication,
       (value) => value.projectId === firstProjectId && value.syncText.length > 0,
-      'Main Agent video-project selection reflected in the right-sidebar View',
+      'Main Agent video-project selection reflected in the video editor View',
       timeoutMs
     )
     assertNoGuestErrors(snapshot, 'synchronizing the Main Agent tool result')
@@ -389,7 +389,7 @@ async function main() {
     process.stdout.write(
       `${SUCCESS_MARKER}${process.platform}/${process.arch}): real packaged Electron, ` +
       `desktop PID ${firstDesktopPid} -> ${relaunchedDesktopPid}, ` +
-      'locked first-launch right rail View with localized protected permission/risk review, ' +
+      'default-hidden first-launch View opened from Extension management with localized protected permission/risk review, ' +
       'main-process native picker stubs, zh/light -> en/dark, ' +
       'real MP4/SRT import, manual transcript edit, durable SRT export, Main Agent extension-tool sync, ' +
       'and close/reopen recovery.\n'
@@ -692,18 +692,14 @@ async function openUntrustedVideoEditor(
   if (await hasVideoEditorGuest(electronApplication)) {
     throw new Error('Kun Video Editor opened before the first-launch workspace trust review')
   }
-  const button = workbench.locator(`button[data-contribution-id="${CONTRIBUTION_ID}"]`)
-  await button.waitFor({ state: 'visible', timeout: timeoutMs })
-  const trustState = await button.getAttribute('data-extension-trusted')
-  const label = await button.getAttribute('aria-label')
-  if (trustState !== 'false') {
-    throw new Error(`First-launch right rail contribution was not locked (trust=${trustState})`)
-  }
-  if (!label?.includes('审核权限后打开')) {
-    throw new Error(`Locked right rail contribution did not follow Kun's Chinese locale: ${label ?? ''}`)
-  }
-
-  await button.click()
+  await assertVideoEditorHiddenFromRightRail(workbench, workspaceRoot, timeoutMs)
+  const card = await openVideoEditorManagementCard(workbench, timeoutMs)
+  const authorize = card.getByRole('button', { name: /^(?:授权后打开 Kun 视频编辑器|Authorize to open Kun Video Editor)$/ })
+  await authorize.waitFor({ state: 'visible', timeout: timeoutMs })
+  await authorize.click()
+  const review = card.getByRole('button', { name: /^(?:在受保护窗口审核并应用|Review and apply in protected window)$/ })
+  await review.waitFor({ state: 'visible', timeout: timeoutMs })
+  await review.click()
   const permissionPromptWindow = await findProtectedConsentWindow(
     electronApplication,
     workbench,
@@ -712,45 +708,69 @@ async function openUntrustedVideoEditor(
   const permissionPrompt = await readProtectedConsentPrompt(permissionPromptWindow)
   assertLocalizedFirstLaunchPermissionPrompt(permissionPrompt, { workspaceRoot })
   await permissionPromptWindow.locator('#consent-approve').click()
+  const open = card.getByRole('button', { name: /^(?:打开 Kun 视频编辑器|Open Kun Video Editor)$/ })
+  await open.waitFor({ state: 'visible', timeout: timeoutMs })
+  await open.click()
   await waitForVideoEditorGuest(
     workbench,
     electronApplication,
     timeoutMs,
-    `authorized right-rail contribution ${CONTRIBUTION_ID}`
+    `authorized Extension management View ${CONTRIBUTION_ID}`
   )
 }
 
 async function openVideoEditor(workbench, electronApplication, timeoutMs) {
   if (await hasVideoEditorGuest(electronApplication)) return
-  const button = workbench.locator(`button[data-contribution-id="${CONTRIBUTION_ID}"]`)
-  await button.waitFor({ state: 'visible', timeout: timeoutMs })
-  const trustState = await button.getAttribute('data-extension-trusted')
-  if (trustState !== 'true') {
-    throw new Error(`Previously approved right rail contribution lost workspace trust (${trustState})`)
-  }
-  const pressedState = await button.getAttribute('aria-pressed')
-  const clicked = shouldClickRightRailContribution(pressedState)
-  if (clicked) await button.click()
+  const card = await openVideoEditorManagementCard(workbench, timeoutMs)
+  const open = card.getByRole('button', { name: /^(?:打开 Kun 视频编辑器|Open Kun Video Editor)$/ })
+  await open.waitFor({ state: 'visible', timeout: timeoutMs })
+  await open.click()
   try {
     await waitForVideoEditorGuest(
       workbench,
       electronApplication,
       timeoutMs,
-      `right-rail contribution ${CONTRIBUTION_ID}`
+      `Extension management View ${CONTRIBUTION_ID}`
     )
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(
-      `${message}\nRight rail open decision: ${JSON.stringify({ pressedState, clicked })}`
+      `${message}\nExtension management open failed for ${CONTRIBUTION_ID}`
     )
   }
 }
 
-function shouldClickRightRailContribution(pressedState) {
-  // A persisted right-panel mode renders the rail button as pressed before
-  // its asynchronous View Session has produced a guest webContents. Clicking
-  // that state would toggle the restoring panel closed.
-  return pressedState !== 'true'
+async function assertVideoEditorHiddenFromRightRail(workbench, workspaceRoot, timeoutMs) {
+  const discovery = await pollUntil(async () => workbench.evaluate(
+    async ({ extensionId, workspaceRoot: currentWorkspaceRoot }) => {
+      const result = await globalThis.kunGui.extensionGetWorkbench({
+        workspaceRoot: currentWorkspaceRoot,
+        locale: 'zh-CN'
+      })
+      if (!result.ok) throw new Error(`Workbench contribution query failed: ${result.status}`)
+      const snapshot = JSON.parse(result.body)
+      const extension = snapshot.extensions?.find((entry) => entry?.id === extensionId)
+      if (!extension) return undefined
+      const view = extension.workspaceTrusted
+        ? extension.contributes?.['views.rightSidebar']?.find((entry) => entry?.id === 'editor')
+        : extension.rightRailDiscovery?.views?.find((entry) => entry?.id === 'editor')
+      return view?.showInRightRail === false ? view : undefined
+    }, { extensionId: EXTENSION_ID, workspaceRoot }), {
+    timeoutMs,
+    description: `default-hidden video editor contribution ${CONTRIBUTION_ID}`
+  })
+  if (!discovery || await workbench.locator(`button[data-contribution-id="${CONTRIBUTION_ID}"]`).count() !== 0) {
+    throw new Error('Kun Video Editor must not be displayed in the Code right rail by default')
+  }
+}
+
+async function openVideoEditorManagementCard(workbench, timeoutMs) {
+  const extensions = workbench.getByRole('button', { name: /^(?:扩展|Extensions)$/ })
+  await extensions.waitFor({ state: 'visible', timeout: timeoutMs })
+  await extensions.click()
+  const card = workbench.locator(`[data-extension-id="${EXTENSION_ID}"]`)
+  await card.waitFor({ state: 'visible', timeout: timeoutMs })
+  return card
 }
 
 async function waitForVideoEditorGuest(
@@ -1333,7 +1353,6 @@ module.exports = {
   openAiToolCallFrames,
   readGuestSnapshot,
   resolveVideoEditorArchive,
-  shouldClickRightRailContribution,
   sseFrame,
   waitForGuestSnapshot
 }

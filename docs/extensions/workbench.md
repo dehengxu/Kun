@@ -63,7 +63,7 @@ extension:acme.issues/backlog
 - `entry` 必须是完整性清单中的本地资源，并位于声明的 resource root。
 - label/title/description 是不可信纯文本，不能包含可执行 HTML。
 - icon 必须是包内允许类型；应在浅色/深色主题和 Retina 下清晰。
-- 每个可见 `views.rightSidebar` View 会在 Code 模式右侧图标栏获得直接入口，并拥有独立顶层标签；没有 icon 时宿主使用可访问的 fallback，不会执行扩展代码来生成图标。
+- 每个 `showInRightRail` 未设为 `false` 的可见 `views.rightSidebar` View 会在 Code 模式右侧图标栏获得直接入口，并拥有独立顶层标签；没有 icon 时宿主使用可访问的 fallback，不会执行扩展代码来生成图标。设为 `false` 的 View 仍可由扩展管理页或命令打开，但不会常驻该图标栏。
 - `when` 只决定 visibility/enablement，不授予权限。
 - `order` 只在宿主分组内参与排序；同优先级按 fully-qualified ID 稳定排序。
 - 多实例只在 contribution contract 明确允许时创建，每个实例有独立 View Session。

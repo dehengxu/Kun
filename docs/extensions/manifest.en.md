@@ -165,7 +165,7 @@ v1 supports:
 | `commands` | Extension commands | `id`, `title`, and argument/result schemas when applicable |
 | `views.containers` | Activity/sidebar containers | id, title, icon, location/order |
 | `views.leftSidebar` | Left sidebar View | `id`, `title`, `entry`; optional icon/`when`/order |
-| `views.rightSidebar` | Right sidebar View | Same |
+| `views.rightSidebar` | Right sidebar View | Same; optional `showInRightRail` |
 | `views.auxiliaryPanel` | Auxiliary panel | Same |
 | `views.editorTab` | Editor tab | Same; host manages tab lifecycle |
 | `views.fullPage` | Full-page View | Same; cannot replace protected surfaces |
@@ -182,7 +182,7 @@ v1 supports:
 | `authentication` | Authentication Providers | id, authentication kind, and protected-flow metadata |
 | `hostContentScripts` | Direct DOM | static scripts/styles, allowed host surfaces, activation conditions; high risk and unstable |
 
-`views.rightSidebar` is the canonical discoverable UI for new extensions. Its packaged icon and localized title appear in Code mode's vertical right rail and open an independent tab beside the main conversation. Other `views.*` locations remain Extension API v1 parse- and command-routing compatible, but the Host does not generate an aggregate extension picker for them.
+`views.rightSidebar` is the canonical discoverable UI for new extensions. By default, its packaged icon and localized title appear in Code mode's vertical right rail and open an independent tab beside the main conversation. Set `showInRightRail: false` to keep a View available from Extension management or commands without pinning it in that rail. Other `views.*` locations remain Extension API v1 parse- and command-routing compatible, but the Host does not generate an aggregate extension picker for them.
 
 A View that needs fixed remote websites may declare `externalBrowser: { presentation, sites }`. `presentation` is `desktop` or `mobile`; each site accepts only `id`, `title`, optional badge/accent, and a credential-free HTTPS `url`. This requires `webview.external`, and every site hostname must match an explicit `network:` grant. A Main-owned browser surface hosts the remote page without loading the extension `entry` or bridge into it.
 

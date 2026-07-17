@@ -12,6 +12,7 @@ const {
   resolveHostMediaExecutable
 } = require('./lib/extension-native-media-smoke.cjs')
 const {
+  EXTENSION_VERSION,
   EXPECTED_TOOL_IDS,
   SUCCESS_MARKER,
   assertContent,
@@ -247,7 +248,7 @@ test('requires exactly one video and one ordered deterministic SRT artifact', as
 test('accepts only the exact non-empty release archive for byte-identical lifecycle smoke', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kun-native-release-archive-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const archive = join(directory, 'kun-video-editor-0.4.3.kunx')
+  const archive = join(directory, 'kun-video-editor-0.4.4.kunx')
   await writeFile(archive, 'release archive bytes')
   assert.doesNotThrow(() => assertReleaseArchive(archive))
   const wrong = join(directory, 'kun-video-editor-9.9.9.kunx')
@@ -341,9 +342,10 @@ test('PR, release, and daily jobs run both native media smokes before evidence',
         const packIndex = commands.indexOf(VIDEO_EDITOR_PACK_COMMAND)
         assert.notEqual(packIndex, -1, `${label}/${jobId} omits deterministic release .kunx pack`)
         assert.ok(packIndex < packagedIndex, `${label}/${jobId} smokes before packing release .kunx`)
-        assert.match(
-          commands[packagedIndex],
-          /--archive dist\/kun-video-editor-0\.4\.3\.kunx/u,
+        assert.ok(
+          commands[packagedIndex].includes(
+            `--archive dist/kun-video-editor-${EXTENSION_VERSION}.kunx`
+          ),
           `${label}/${jobId} does not smoke the uploaded release .kunx bytes`
         )
       }

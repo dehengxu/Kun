@@ -165,7 +165,7 @@ v1 支持：
 | `commands` | 扩展命令 | `id`、`title`，参数/结果 Schema（如适用） |
 | `views.containers` | Activity/sidebar 容器 | `id`、title、icon、位置/排序 |
 | `views.leftSidebar` | 左侧栏 View | `id`、`title`、`entry`，可选 icon/`when`/order |
-| `views.rightSidebar` | 右侧栏 View | 同上 |
+| `views.rightSidebar` | 右侧栏 View | 同上；可选 `showInRightRail` |
 | `views.auxiliaryPanel` | 辅助面板 | 同上 |
 | `views.editorTab` | 编辑区 Tab | 同上；宿主管理 tab 生命周期 |
 | `views.fullPage` | 全页 View | 同上；不能覆盖受保护窗口 |
@@ -182,7 +182,7 @@ v1 支持：
 | `authentication` | 认证 Provider | id、认证类型和受保护流程元数据 |
 | `hostContentScripts` | Direct DOM | 静态脚本/样式、允许宿主 surface、激活条件；高风险且不稳定 |
 
-`views.rightSidebar` 是新扩展的规范可发现 UI：View 的包内 icon 和本地化标题会出现在 Code 模式右侧竖向图标栏，并在主会话旁打开独立标签。其它 `views.*` 位置继续保留 Extension API v1 解析和命令路由兼容，但宿主不会为它们生成额外的聚合扩展选择器。
+`views.rightSidebar` 是新扩展的规范可发现 UI：默认情况下，View 的包内 icon 和本地化标题会出现在 Code 模式右侧竖向图标栏，并在主会话旁打开独立标签。设置 `showInRightRail: false` 可保留可由扩展管理页或命令打开的 View，但不在图标栏常驻。其它 `views.*` 位置继续保留 Extension API v1 解析和命令路由兼容，但宿主不会为它们生成额外的聚合扩展选择器。
 
 需要固定远程网站时，View 可声明 `externalBrowser: { presentation, sites }`。`presentation` 为 `desktop` 或 `mobile`；每个 site 只接受 `id`、`title`、可选 badge/accent 和 credential-free HTTPS `url`。这要求 `webview.external`，且每个 site hostname 必须匹配显式 `network:` grant。远程页由 Main-owned browser surface 承载，不加载扩展 `entry` 或 bridge。
 

@@ -2155,6 +2155,7 @@ function projectRightRailDiscovery(manifest: ExtensionManifest): {
     icon?: string
     container?: string
     when?: string
+    showInRightRail?: boolean
     order: number
   }>
   containers: Array<{
@@ -2172,6 +2173,7 @@ function projectRightRailDiscovery(manifest: ExtensionManifest): {
       ...(view.icon ? { icon: view.icon } : {}),
       ...(view.container ? { container: view.container } : {}),
       ...(view.when ? { when: view.when } : {}),
+      ...(view.showInRightRail ? {} : { showInRightRail: false }),
       order: view.order
     })),
     containers: manifest.contributes['views.containers']

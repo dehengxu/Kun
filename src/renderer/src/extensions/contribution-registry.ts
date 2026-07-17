@@ -96,6 +96,7 @@ const RightRailViewDiscoveryPayloadSchema = ViewContributionSchema.pick({
   icon: true,
   container: true,
   when: true,
+  showInRightRail: true,
   order: true
 })
 
@@ -340,11 +341,14 @@ export class ContributionRegistry {
       if (
         launcher.enabled &&
         launcher.compatible &&
+        launcher.payload.showInRightRail &&
         evaluateWhenExpression(launcher.payload.when, context)
       ) entries.set(launcher.id, launcher)
     }
     for (const contribution of this.list('views.rightSidebar', context)) {
-      if (contribution.owner.kind === 'extension') entries.set(contribution.id, contribution)
+      if (contribution.owner.kind === 'extension' && contribution.payload.showInRightRail) {
+        entries.set(contribution.id, contribution)
+      }
     }
     return [...entries.values()].sort(compareContributions)
   }
@@ -663,6 +667,7 @@ export class ContributionRegistry {
           id: id.slice('builtin:'.length),
           title,
           entry: `builtin/${id.slice('builtin:'.length)}`,
+          showInRightRail: true,
           order: 0,
           multiple: false,
           localResourceRoots: []

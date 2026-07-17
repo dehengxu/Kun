@@ -39,9 +39,27 @@ describe('ExtensionManifestSchema', () => {
     expect(parsed.publisher).toBe('acme')
     expect(parsed.icon).toBe('assets/issue-assistant.svg')
     expect(parsed.contributes['views.rightSidebar'][0].order).toBe(0)
+    expect(parsed.contributes['views.rightSidebar'][0].showInRightRail).toBe(true)
     expect(parsed.contributes.tools[0].sideEffects).toBe('none')
     expect(parsed.localizations).toBeUndefined()
     expect(ExtensionManifestSchema.safeParse({ ...manifest, icon: '../icon.svg' }).success).toBe(false)
+  })
+
+  it('allows right-sidebar Views to opt out of the default rail launcher', () => {
+    const parsed = parseExtensionManifest({
+      ...manifest,
+      contributes: {
+        ...manifest.contributes,
+        'views.rightSidebar': [{
+          id: 'issues',
+          title: 'Issues',
+          entry: 'dist/webview/index.html',
+          showInRightRail: false
+        }]
+      }
+    })
+
+    expect(parsed.contributes['views.rightSidebar'][0].showInRightRail).toBe(false)
   })
 
   it('resolves exact and language locale overlays without mutating executable manifest data', () => {
@@ -303,11 +321,18 @@ describe('ExtensionManifestSchema', () => {
       await readFile(new URL('../schema/kun-extension.schema.json', import.meta.url), 'utf8')
     )
     const generated = toJSONSchema(ExtensionManifestSchema, {
+      io: 'input',
       target: 'draft-2020-12',
       unrepresentable: 'throw',
       reused: 'ref'
     })
     expect(checkedIn.anyOf ?? checkedIn.oneOf).toEqual(generated.anyOf ?? generated.oneOf)
+
+    const viewSchema = Object.values(checkedIn.$defs as Record<string, {
+      properties?: Record<string, unknown>
+      required?: string[]
+    }>).find((schema) => schema.properties?.showInRightRail)
+    expect(viewSchema?.required).not.toContain('showInRightRail')
   })
 })
 
