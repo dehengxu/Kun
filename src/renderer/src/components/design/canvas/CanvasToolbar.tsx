@@ -201,7 +201,7 @@ function CanvasToolbarInner({
 
   return (
     <div className="relative pointer-events-auto">
-      <div className="flex flex-col items-center gap-1 rounded-full border border-ds-border bg-white/82 px-1.5 py-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.13)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none">
+      <div className="design-canvas-toolbar flex flex-col items-center gap-1 rounded-full border border-ds-border bg-white/82 px-1.5 py-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.13)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none">
         {visibleTools.map((tool) => {
           const label = t(surface === 'code' && tool.codeLabelKey ? tool.codeLabelKey : tool.labelKey)
           return (

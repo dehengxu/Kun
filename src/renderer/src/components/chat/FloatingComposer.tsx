@@ -1524,7 +1524,7 @@ export function FloatingComposer({
           <textarea
             ref={draft.textareaRef}
             rows={1}
-            className={`ds-no-drag block w-full min-w-0 resize-none break-words bg-transparent px-1 py-2.5 text-[15px] leading-[1.45] text-ds-ink placeholder:text-ds-faint focus:outline-none [overflow-wrap:anywhere] ${
+            className={`ds-composer-textarea ds-no-drag block w-full min-w-0 resize-none break-words bg-transparent px-1 py-2.5 text-[15px] leading-[1.45] text-ds-ink placeholder:text-ds-faint focus:outline-none [overflow-wrap:anywhere] ${
               canEditComposer ? '' : 'opacity-80'
             } ${compact ? 'text-[14px] py-2' : 'min-h-[40px]'}`}
             placeholder={placeholder}
@@ -1619,7 +1619,7 @@ export function FloatingComposer({
                       type="button"
                       disabled={!canOpenComposerMenu}
                       onClick={handleComposerMenuButtonClick}
-                      className={`ds-no-drag flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 ${
+                      className={`ds-composer-menu-button ds-no-drag flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 ${
                         composerMenuOpen ? 'bg-ds-hover text-ds-ink' : ''
                       }`}
                       aria-label={t('composerMenuTitle')}
@@ -1773,7 +1773,7 @@ export function FloatingComposer({
                     type="button"
                     disabled={primaryActionDisabled}
                     onClick={handlePrimaryAction}
-                    className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white shadow-[0_10px_22px_rgba(20,47,95,0.22)] transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-ds-card disabled:text-ds-faint disabled:shadow-none dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200 dark:disabled:bg-ds-card dark:disabled:text-ds-faint"
+                    className="ds-composer-primary-action ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white shadow-[0_10px_22px_rgba(20,47,95,0.22)] transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-ds-card disabled:text-ds-faint disabled:shadow-none dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200 dark:disabled:bg-ds-card dark:disabled:text-ds-faint"
                     aria-label={primaryActionLabel}
                     title={primaryActionLabel}
                   >

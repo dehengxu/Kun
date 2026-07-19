@@ -12,6 +12,7 @@ const dedicatedCharacterChromeRecipes = [
   'synth',
   'midnight-pass',
   'nautical',
+  'grand-line',
   'dimension-lab',
   'starlight'
 ] as const
@@ -393,6 +394,113 @@ describe('UI plugin CDP theme activation', () => {
       lastError: null
     })
     expect(attributes.has('data-ui-plugin')).toBe(false)
+  })
+
+  it('reloads an active plugin immediately after reinstalling it', async () => {
+    const { attributes, localStorage } = createDomFixture('scene-theme')
+    const sceneManifest = {
+      id: 'scene-theme',
+      name: 'Scene',
+      version: '1.7.1',
+      figures: { portrait: 'img/portrait.png' },
+      presentation: {
+        character: {
+          anchor: 'bottom-right',
+          size: 'medium',
+          offsetX: 0,
+          offsetY: 0,
+          opacity: 0,
+          frame: 'paper',
+          motion: 'none',
+          contentReserve: 'none'
+        },
+        readability: { scrim: 'none', strength: 'soft' },
+        surfaces: {
+          sidebar: 'solid',
+          topbar: 'translucent',
+          composer: 'solid',
+          cards: 'translucent'
+        }
+      },
+      scene: {
+        apiVersion: '1.6',
+        layout: 'backdrop-center',
+        character: {
+          scale: 'compact',
+          fit: 'contain',
+          focalPoint: 'center',
+          mask: 'none',
+          offsetX: 0,
+          offsetY: 0,
+          opacity: 0,
+          flipX: false,
+          motion: { preset: 'none', speed: 'slow', phase: 'a' }
+        },
+        artwork: {
+          foreground: {
+            path: 'img/scene/foreground-light.webp',
+            anchor: 'bottom',
+            size: 'full',
+            fit: 'contain',
+            offsetX: 0,
+            offsetY: 0,
+            opacity: 1,
+            blend: 'normal',
+            motion: { preset: 'none', speed: 'slow', phase: 'a' }
+          }
+        },
+        chrome: {
+          sidebar: 'grand-line',
+          topbar: 'grand-line',
+          composer: 'grand-line',
+          cards: 'grand-line'
+        }
+      }
+    } as const
+    const installUiPlugin = vi.fn(async () => ({
+      canceled: false as const,
+      ok: true as const,
+      plugin: { manifest: sceneManifest, previewDataUrl: null }
+    }))
+    const listUiPlugins = vi.fn(async () => ({
+      plugins: [{ manifest: sceneManifest, previewDataUrl: null }]
+    }))
+    const activateUiPluginTheme = vi.fn(async () => ({
+      ok: true as const,
+      manifest: sceneManifest,
+      figures: { portrait: 'data:image/png;base64,AAAA' },
+      sceneAssets: {
+        assets: {
+          'img/scene/foreground-light.webp': 'data:image/webp;base64,AAAA'
+        }
+      }
+    }))
+    vi.stubGlobal('window', {
+      localStorage,
+      kunGui: { installUiPlugin, listUiPlugins, activateUiPluginTheme }
+    })
+    useUiPluginStore.setState({
+      uiMode: 'scene-theme',
+      activeRuntime: {
+        manifest: { id: 'scene-theme', name: 'Scene', version: '1.0.0', figures: {} },
+        figures: {},
+        sceneAssets: {}
+      }
+    })
+
+    const result = await useUiPluginStore.getState().installUiPluginFromDialog()
+
+    expect(result).toEqual({ ok: true })
+    expect(listUiPlugins).toHaveBeenCalledOnce()
+    expect(activateUiPluginTheme).toHaveBeenCalledWith('scene-theme')
+    expect(useUiPluginStore.getState().activeRuntime?.manifest.version).toBe('1.7.1')
+    expect(Object.fromEntries(attributes)).toMatchObject({
+      'data-ui-plugin': 'scene-theme',
+      'data-ui-plugin-scene': 'on',
+      'data-ui-plugin-scene-layout': 'backdrop-center',
+      'data-ui-plugin-scene-chrome-sidebar': 'grand-line',
+      'data-ui-plugin-scene-chrome-composer': 'grand-line'
+    })
   })
 
   it('surfaces a failed plugin removal instead of silently refreshing the list', async () => {

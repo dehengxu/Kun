@@ -211,12 +211,13 @@ export function FloatingComposerExecutionPicker({
         <button
           ref={approvalButtonRef}
           type="button"
+          data-permission-mode={permissionMode}
           disabled={disabled || applying}
           onClick={(event) => runTrustedUserActivation(
             event,
             () => toggleMenu('approval')
           )}
-          className={`inline-flex min-h-7 items-center gap-1.5 rounded-lg border px-2.5 py-0.5 text-[12.5px] font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-55 ${
+          className={`ds-composer-permission-button inline-flex min-h-7 items-center gap-1.5 rounded-lg border px-2.5 py-0.5 text-[12.5px] font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-55 ${
             bypass
               ? 'border-orange-300/70 bg-orange-50 text-orange-700 hover:bg-orange-100 dark:border-orange-800/70 dark:bg-orange-950/30 dark:text-orange-200'
               : 'border-ds-border-muted bg-ds-card/72 text-ds-muted hover:bg-ds-hover hover:text-ds-ink'

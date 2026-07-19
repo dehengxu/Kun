@@ -179,6 +179,7 @@ export const UI_PLUGIN_SCENE_CHROME_RECIPES = [
   'synth',
   'midnight-pass',
   'nautical',
+  'grand-line',
   'dimension-lab',
   'starlight'
 ] as const
@@ -226,8 +227,14 @@ export type UiPluginSceneV16 = {
   }
 }
 
-/** 可换肤的应用表面:整窗、侧栏和主舞台 */
-export const UI_PLUGIN_BACKGROUND_SLOTS = ['app', 'sidebar', 'stage'] as const
+/** 可换肤的应用表面:整窗、侧栏、通用舞台，以及写作/设计专用工作面 */
+export const UI_PLUGIN_BACKGROUND_SLOTS = [
+  'app',
+  'sidebar',
+  'stage',
+  'write',
+  'design'
+] as const
 
 export type UiPluginBackgroundSlot = (typeof UI_PLUGIN_BACKGROUND_SLOTS)[number]
 
@@ -413,7 +420,9 @@ export const UI_PLUGIN_BACKGROUND_DEFAULT_OPACITY: Readonly<
 > = {
   app: 0.22,
   sidebar: 0.18,
-  stage: 0.32
+  stage: 0.32,
+  write: 0.5,
+  design: 0.5
 }
 
 function normalizeUiPluginBackgroundLayer(
@@ -1403,6 +1412,14 @@ const UI_PLUGIN_BACKGROUND_HOSTS: Readonly<
   },
   stage: {
     selectors: ['.ds-stage-surface', '.ds-settings-stage'],
+    baseBackground: 'var(--ds-stage-gradient)'
+  },
+  write: {
+    selectors: ['.write-workspace-view'],
+    baseBackground: 'var(--ds-stage-gradient)'
+  },
+  design: {
+    selectors: ['.design-workspace-view .ds-stage-design-canvas'],
     baseBackground: 'var(--ds-stage-gradient)'
   }
 }

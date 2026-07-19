@@ -72,6 +72,7 @@ const dedicatedCharacterChromeRecipes = [
   'synth',
   'midnight-pass',
   'nautical',
+  'grand-line',
   'dimension-lab',
   'starlight'
 ] as const
@@ -363,7 +364,9 @@ describe('normalizeUiPluginManifest', () => {
         dark: {
           app: 'bg/app.jpeg',
           sidebar: 'bg/sidebar.webp',
-          stage: 'bg/stage.jpg'
+          stage: 'bg/stage.jpg',
+          write: 'bg/write.webp',
+          design: 'bg/design.webp'
         }
       }
     })
@@ -372,7 +375,9 @@ describe('normalizeUiPluginManifest', () => {
     expect(result.manifest.backgrounds?.dark).toEqual({
       app: { path: 'bg/app.jpeg', fit: 'cover', position: 'center', opacity: 0.22 },
       sidebar: { path: 'bg/sidebar.webp', fit: 'cover', position: 'center', opacity: 0.18 },
-      stage: { path: 'bg/stage.jpg', fit: 'cover', position: 'center', opacity: 0.32 }
+      stage: { path: 'bg/stage.jpg', fit: 'cover', position: 'center', opacity: 0.32 },
+      write: { path: 'bg/write.webp', fit: 'cover', position: 'center', opacity: 0.5 },
+      design: { path: 'bg/design.webp', fit: 'cover', position: 'center', opacity: 0.5 }
     })
   })
 
@@ -686,7 +691,9 @@ describe('buildUiPluginBackgroundCss', () => {
             position: 'top-left',
             opacity: 0.25
           },
-          stage: 'private/raw-stage.png'
+          stage: 'private/raw-stage.png',
+          write: 'private/raw-write.png',
+          design: 'private/raw-design.png'
         },
         dark: { sidebar: 'private/raw-sidebar.jpg' }
       }
@@ -697,6 +704,8 @@ describe('buildUiPluginBackgroundCss', () => {
       assets: {
         'private/raw-app.png': pngDataUrl,
         'private/raw-stage.png': pngDataUrl,
+        'private/raw-write.png': pngDataUrl,
+        'private/raw-design.png': pngDataUrl,
         'private/raw-sidebar.jpg': jpegDataUrl
       }
     })
@@ -711,6 +720,12 @@ describe('buildUiPluginBackgroundCss', () => {
     )
     expect(css).toContain(
       "html[data-ui-plugin='starlight']:not([data-theme='dark']) .ds-settings-stage::after"
+    )
+    expect(css).toContain(
+      "html[data-ui-plugin='starlight']:not([data-theme='dark']) .write-workspace-view::after"
+    )
+    expect(css).toContain(
+      "html[data-ui-plugin='starlight']:not([data-theme='dark']) .design-workspace-view .ds-stage-design-canvas::after"
     )
     expect(css).toContain(
       "html[data-ui-plugin='starlight'][data-theme='dark'] .ds-sidebar-shell::after"

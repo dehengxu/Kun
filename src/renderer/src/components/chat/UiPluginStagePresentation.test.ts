@@ -14,6 +14,7 @@ const dedicatedCharacterChromeRecipes = [
   'synth',
   'midnight-pass',
   'nautical',
+  'grand-line',
   'dimension-lab',
   'starlight'
 ] as const
@@ -241,5 +242,23 @@ describe('UiPluginStagePresentation', () => {
         expect(recipeCss, `${recipe} surface ${hostSurface}`).toContain(hostSurface)
       }
     }
+  })
+
+  it('keeps the Grand Line conversation card and composer status rail visually connected', async () => {
+    const nodeFs = 'node:fs/promises'
+    const { readFile } = await import(/* @vite-ignore */ nodeFs)
+    const [css, workbenchStage] = await Promise.all([
+      readFile(new URL('../../styles/surfaces-write.css', import.meta.url), 'utf8'),
+      readFile(new URL('../workbench/WorkbenchChatStage.tsx', import.meta.url), 'utf8')
+    ])
+
+    expect(css).toContain(
+      "html[data-ui-plugin-scene-chrome-cards='grand-line'] .ds-chat-answer"
+    )
+    expect(css).toContain("[data-streamdown='table-wrapper']")
+    expect(css).toContain(
+      "html[data-ui-plugin-scene-chrome-composer='grand-line'] .ds-composer-footer::before"
+    )
+    expect(workbenchStage).toContain('ds-composer-dock')
   })
 })

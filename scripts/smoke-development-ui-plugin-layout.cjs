@@ -41,7 +41,8 @@ async function main() {
     process.stdout.write(
       'Usage: node scripts/smoke-development-ui-plugin-layout.cjs ' +
       '--plugins-root <directory> --evidence-dir <directory> ' +
-      '[--ids id-one,id-two] [--timeout-ms 120000] [--repository-root <directory>]\n'
+      '[--ids id-one,id-two] [--capture-modes] [--timeout-ms 120000] ' +
+      '[--repository-root <directory>]\n'
     )
     return
   }
@@ -51,6 +52,7 @@ async function main() {
   const pluginsRoot = resolve(requiredArgumentValue('--plugins-root'))
   const evidenceRoot = resolve(requiredArgumentValue('--evidence-dir'))
   const requestedIds = commaSeparatedIdsArgument('--ids')
+  const captureModes = process.argv.includes('--capture-modes')
   const plugins = await discoverPlugins(pluginsRoot, requestedIds)
   assertPresentationPluginsReady(plugins)
 
@@ -97,6 +99,7 @@ async function main() {
     evidenceRoot,
     wideWindow: WIDE_BOUNDS,
     narrowWindow: NARROW_BOUNDS,
+    captureModes,
     themes: []
   }
 
@@ -120,7 +123,10 @@ async function main() {
     const settings = {
       ...desktopSmokeSettings(runtimePort, workspaceRoot, profile),
       locale: 'zh',
-      theme: 'light'
+      theme: 'light',
+      design: {
+        defaultWorkspaceRoot: workspaceRoot
+      }
     }
     const serializedSettings = `${JSON.stringify(settings, null, 2)}\n`
     await Promise.all(desktopUserDataCandidates({
@@ -219,6 +225,16 @@ async function main() {
       const screenshotPath = join(evidenceRoot, `${plugin.id}-kun-ui-plugin.png`)
       await captureWorkbench(electronApplication, screenshotPath)
 
+      const modeEvidence = captureModes
+        ? await captureModeEvidence({
+            electronApplication,
+            workbench,
+            plugin,
+            evidenceRoot,
+            timeoutMs
+          })
+        : undefined
+
       const narrowWindowState = await setWorkbenchBounds(electronApplication, NARROW_BOUNDS)
       await waitForNarrowPresentationHidden(workbench, plugin.id, timeoutMs)
       await workbench.waitForTimeout(150)
@@ -233,7 +249,8 @@ async function main() {
         wideWindowState,
         narrowWindowState,
         wide,
-        narrow
+        narrow,
+        ...(modeEvidence ? { modes: modeEvidence } : {})
       })
       await writeReport(evidenceRoot, report)
       process.stdout.write(formatThemeResult(plugin.id, wide, narrow, screenshotPath))
@@ -375,6 +392,109 @@ function assertPresentationPluginsReady(plugins) {
   }
 }
 
+async function captureModeEvidence({
+  electronApplication,
+  workbench,
+  plugin,
+  evidenceRoot,
+  timeoutMs
+}) {
+  const definitions = [
+    {
+      mode: 'write',
+      selector: '.write-workspace-view',
+      manifestSlot: 'write'
+    },
+    {
+      mode: 'design',
+      selector: '.design-workspace-view .ds-stage-design-canvas',
+      manifestSlot: 'design'
+    }
+  ]
+  const evidence = {}
+
+  for (const definition of definitions) {
+    if (!plugin.manifest?.backgrounds?.light?.[definition.manifestSlot]) continue
+    await workbench.locator(`[data-workspace-mode="${definition.mode}"]`).click()
+    await workbench.waitForFunction(({ id, selector, mode }) => {
+      const root = document.documentElement
+      const target = document.querySelector(selector)
+      const selected = document.querySelector(
+        `[data-workspace-mode="${mode}"][aria-selected="true"]`
+      )
+      if (!(target instanceof HTMLElement) || !(selected instanceof HTMLElement)) return false
+      const pseudo = getComputedStyle(target, '::after')
+      return (
+        root.getAttribute('data-ui-plugin') === id &&
+        root.getAttribute('data-ui-plugin-cdp') === id &&
+        pseudo.backgroundImage !== 'none' &&
+        Number.parseFloat(pseudo.opacity) > 0
+      )
+    }, { id: plugin.id, selector: definition.selector, mode: definition.mode }, {
+      timeout: timeoutMs
+    })
+    await workbench.waitForTimeout(300)
+
+    const snapshot = await workbench.evaluate(({ selector, mode }) => {
+      const target = document.querySelector(selector)
+      if (!(target instanceof HTMLElement)) throw new Error(`Missing mode surface: ${selector}`)
+      const rect = target.getBoundingClientRect()
+      const pseudo = getComputedStyle(target, '::after')
+      const root = document.documentElement
+      return {
+        mode,
+        selector,
+        selected: Boolean(document.querySelector(
+          `[data-workspace-mode="${mode}"][aria-selected="true"]`
+        )),
+        rect: {
+          x: Math.round(rect.x * 100) / 100,
+          y: Math.round(rect.y * 100) / 100,
+          width: Math.round(rect.width * 100) / 100,
+          height: Math.round(rect.height * 100) / 100
+        },
+        pseudo: {
+          backgroundImage: pseudo.backgroundImage.startsWith('url(') ? 'url(data-image)' : pseudo.backgroundImage,
+          backgroundSize: pseudo.backgroundSize,
+          backgroundPosition: pseudo.backgroundPosition,
+          opacity: pseudo.opacity,
+          pointerEvents: pseudo.pointerEvents
+        },
+        overflow: {
+          documentExcess: Math.max(0, root.scrollWidth - root.clientWidth),
+          surfaceExcess: Math.max(0, target.scrollWidth - target.clientWidth)
+        }
+      }
+    }, { selector: definition.selector, mode: definition.mode })
+
+    if (!snapshot.selected) throw new Error(`${plugin.id} ${definition.mode}: mode tab is not selected`)
+    if (snapshot.pseudo.backgroundImage !== 'url(data-image)') {
+      throw new Error(`${plugin.id} ${definition.mode}: dedicated background image is not active`)
+    }
+    if (snapshot.pseudo.pointerEvents !== 'none') {
+      throw new Error(`${plugin.id} ${definition.mode}: artwork must remain pointer-events:none`)
+    }
+    if (snapshot.overflow.documentExcess > OVERFLOW_TOLERANCE_PX) {
+      throw new Error(
+        `${plugin.id} ${definition.mode}: document horizontal overflow ` +
+        `${snapshot.overflow.documentExcess}px`
+      )
+    }
+
+    const screenshotPath = join(
+      evidenceRoot,
+      `${plugin.id}-${definition.mode}-kun-ui-plugin.png`
+    )
+    await captureWorkbench(electronApplication, screenshotPath)
+    evidence[definition.mode] = { screenshotPath, ...snapshot }
+  }
+
+  await workbench.locator('[data-workspace-mode="chat"]').click()
+  await waitForActivePresentation(workbench, plugin.id, timeoutMs)
+  await workbench.waitForTimeout(150)
+  return evidence
+}
+
 async function setWorkbenchBounds(electronApplication, bounds, options = {}) {
   return electronApplication.evaluate(async ({ BrowserWindow }, request) => {
     const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())
@@ -508,8 +628,13 @@ async function readLayoutSnapshot(workbench) {
       '.ds-ui-plugin-scene-visual-zone, .ds-ui-plugin-character-layer'
     )
     const sceneArtwork = [...document.querySelectorAll('.ds-ui-plugin-scene-artwork')]
+    const sceneForeground = document.querySelector(
+      ".ds-ui-plugin-scene-artwork-foreground[data-scene-variant='default']"
+    )
     const stage = document.querySelector('.ds-chat-stage')
     const composer = document.querySelector('.ds-floating-composer')
+    const composerInput = document.querySelector('.ds-composer-textarea')
+    const composerPrimaryAction = document.querySelector('.ds-composer-primary-action')
     const cdpStyle = document.querySelector('#kun-ui-plugin-theme-cdp')
     const attributes = Object.fromEntries(
       root.getAttributeNames()
@@ -554,6 +679,23 @@ async function readLayoutSnapshot(workbench) {
           candidate.naturalHeight > 0
         )).length
       },
+      sceneForeground: {
+        ...elementSnapshot(
+          ".ds-ui-plugin-scene-artwork-foreground[data-scene-variant='default']"
+        ),
+        complete: sceneForeground instanceof HTMLImageElement
+          ? sceneForeground.complete
+          : false,
+        naturalWidth: sceneForeground instanceof HTMLImageElement
+          ? sceneForeground.naturalWidth
+          : 0,
+        naturalHeight: sceneForeground instanceof HTMLImageElement
+          ? sceneForeground.naturalHeight
+          : 0,
+        visible: sceneForeground instanceof HTMLElement
+          ? sceneForeground.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+          : false
+      },
       stage: elementSnapshot('.ds-chat-stage'),
       layers: {
         decor: elementSnapshot('.ds-ui-plugin-decor-layer'),
@@ -568,6 +710,14 @@ async function readLayoutSnapshot(workbench) {
         composer: {
           ...elementSnapshot('.ds-floating-composer'),
           topmostAtCenter: elementOwnsTopmostAtCenter(composer)
+        },
+        composerInput: {
+          ...elementSnapshot('.ds-composer-textarea'),
+          topmostAtCenter: elementOwnsTopmostAtCenter(composerInput)
+        },
+        composerPrimaryAction: {
+          ...elementSnapshot('.ds-composer-primary-action'),
+          topmostAtCenter: elementOwnsTopmostAtCenter(composerPrimaryAction)
         },
         sidebar: elementSnapshot('.ds-sidebar-shell'),
         topbar: elementSnapshot('.ds-topbar-surface')
@@ -636,8 +786,21 @@ function assertWidePresentation(id, snapshot) {
   ) {
     throw new Error(`${id}: portrait image did not decode from a validated data-image source`)
   }
-  if (!snapshot.character.visible || !hasArea(snapshot.character.rect)) {
-    throw new Error(`${id}: portrait is not visible in the wide Kun workbench`)
+  const foregroundOwnsSubject = sceneEnabled && (
+    snapshot.sceneForeground.complete &&
+    snapshot.sceneForeground.naturalWidth > 0 &&
+    snapshot.sceneForeground.naturalHeight > 0 &&
+    snapshot.sceneForeground.visible &&
+    hasArea(snapshot.sceneForeground.rect)
+  )
+  if (
+    (!snapshot.character.visible || !hasArea(snapshot.character.rect)) &&
+    !foregroundOwnsSubject
+  ) {
+    throw new Error(
+      `${id}: neither the portrait nor a decoded visible foreground subject is ` +
+      'visible in the wide Kun workbench'
+    )
   }
   if (!sceneEnabled && !snapshot.character.topmostAtCenter) {
     throw new Error(`${id}: portrait is geometrically visible but occluded at its center`)
@@ -688,6 +851,13 @@ function assertWidePresentation(id, snapshot) {
     : ['decor', 'scrim']
   for (const name of layersBelowContent) {
     const layer = snapshot.layers[name]
+    if (
+      !hasArea(layer.rect) ||
+      layer.style?.display === 'none' ||
+      Number(layer.style?.opacity) === 0
+    ) {
+      continue
+    }
     const layerZIndex = numericZIndex(layer.style?.zIndex)
     if (layerZIndex === null || contentZIndex === null || layerZIndex >= contentZIndex) {
       throw new Error(
@@ -703,6 +873,15 @@ function assertWidePresentation(id, snapshot) {
   }
   if (!snapshot.content.composer.topmostAtCenter) {
     throw new Error(`${id}: Composer does not own the topmost hit target at its center`)
+  }
+  if (!snapshot.content.composerInput.topmostAtCenter) {
+    throw new Error(`${id}: Composer input is covered at its center`)
+  }
+  if (snapshot.content.composerInput.style?.pointerEvents === 'none') {
+    throw new Error(`${id}: Composer input cannot receive pointer input`)
+  }
+  if (!snapshot.content.composerPrimaryAction.topmostAtCenter) {
+    throw new Error(`${id}: Composer primary action is covered at its center`)
   }
   const topbarCollisionBounds = sceneEnabled
     ? snapshot.layers.sceneVisual.rect

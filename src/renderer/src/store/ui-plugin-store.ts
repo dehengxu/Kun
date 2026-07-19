@@ -295,6 +295,13 @@ export const useUiPluginStore = create<UiPluginState>((set, get) => ({
       if (result.canceled) return { ok: false, canceled: true }
       if (!result.ok) return { ok: false, errors: result.errors }
       await get().refreshUiPlugins()
+      // Reinstalling the currently selected plugin replaces its canonical
+      // manifest/assets on disk. Reload it immediately so the renderer and
+      // main-held CDP theme cannot keep presenting the previous version until
+      // the user manually switches themes or restarts Kun.
+      if (get().uiMode === result.plugin.manifest.id) {
+        await get().activateUiMode(result.plugin.manifest.id)
+      }
       return { ok: true }
     } catch (error) {
       set({ busy: false })

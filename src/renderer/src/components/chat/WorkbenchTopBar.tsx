@@ -409,7 +409,7 @@ export function WorkbenchSideRail({
   ]
 
   return (
-    <div className="ds-no-drag flex h-full w-12 shrink-0 flex-col items-center gap-1.5 border-l border-ds-border-muted bg-white/80 py-3 backdrop-blur-xl dark:bg-ds-canvas">
+    <div className="ds-workbench-side-rail ds-no-drag flex h-full w-12 shrink-0 flex-col items-center gap-1.5 border-l border-ds-border-muted bg-white/80 py-3 backdrop-blur-xl dark:bg-ds-canvas">
       {onOpenSideChat ? (
         <button
           type="button"

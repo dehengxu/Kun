@@ -1,7 +1,7 @@
 # UI 插件开发指南(形象工坊)
 
 Kun 的「形象工坊」允许任何人制作并安装自己的视觉形象包:既可以替换工作台里的
-泳动小鸟、欢迎/睡觉/坐着等状态形象,也可以给应用主体、侧边栏和主舞台换上主题背景,
+泳动小鸟、欢迎/睡觉/坐着等状态形象,也可以给应用主体、侧边栏、主舞台和写作/设计工作面换上主题背景,
 再配合主题 token 与进行中文案完成一套皮肤。v1.5 起可以把一张完整人物立绘放进
 Kun 会话舞台;v1.6 的 `scene` 进一步提供左右导轨、卡片、背景式构图、五类专属美术槽位、
 人物焦点/蒙版以及宿主内置动效,让每个人物主题拥有不同的 UI 语言而不开放任意 CSS。
@@ -153,7 +153,7 @@ my-plugin/
 | `version` | ✓ | 语义化版本,如 `1.0.0` |
 | `author` / `description` | | ≤80 / ≤240 字符 |
 | `figures` | 至少一类 | 形象槽位对象;活动小形象支持 `png/webp/jpg/jpeg/gif`;`portrait` 仅支持静态 `png/webp/jpg/jpeg` |
-| `backgrounds` | 至少一类 | `light` / `dark` 主题下可放 `app` / `sidebar` / `stage`;图片仅支持静态 `png/webp/jpg/jpeg`(不支持 APNG、animated WebP) |
+| `backgrounds` | 至少一类 | `light` / `dark` 主题下可放 `app` / `sidebar` / `stage` / `write` / `design`;图片仅支持静态 `png/webp/jpg/jpeg`(不支持 APNG、animated WebP) |
 | `presentation` | | 人物舞台的严格声明式配置;一旦提供就必须同时提供 `figures.portrait` |
 | `scene` | | v1.6 专属场景;必须同时提供完整 `presentation` 回退、`figures.portrait` 与至少一个 `artwork` 槽位 |
 | `labels` | | 仅 `zh` / `en`;键限 `working` / `workingSprint` / `workingDive` / `workingSurf`;每条 ≤24 字符 |
@@ -165,15 +165,17 @@ my-plugin/
 
 ## 背景图层(backgrounds)
 
-`backgrounds` 按主题和区域组织。三个区域彼此独立:
+`backgrounds` 按主题和区域组织。五个区域彼此独立;`write` / `design` 可省略,此时继续使用 `stage`:
 
 | 槽位 | 作用区域 | 默认透明度 |
 |---|---|---|
 | `app` | 整个工作台内容区的底层背景 | `0.22` |
 | `sidebar` | 左侧栏背景 | `0.18` |
 | `stage` | 主内容/会话舞台背景 | `0.32` |
+| `write` | 写作模式工作面 | `0.50` |
+| `design` | 设计模式制图工作面 | `0.50` |
 
-顶栏(`topbar`)不属于上述三个背景槽位,仍由主题 token `--ds-topbar-bg` 控制。
+顶栏(`topbar`)不属于上述五个背景槽位,仍由主题 token `--ds-topbar-bg` 控制。
 
 一个图层可以直接写成图片路径,也可以写成对象:
 
@@ -287,7 +289,7 @@ Kun 的侧栏、顶栏、输入框或其它应用界面烘焙进图片。Kun 会
 `inherit` / `soft` / `editorial` / `paper` / `crystal` / `hologram` / `backstage` /
 `portal` / `polaroid` / `ticket` / `seal`,也可以使用 11 套人物专属配方:
 `botanical` / `fortune-ledger` / `dream-gate` / `washi` / `scrapbook` / `aurora` /
-`synth` / `midnight-pass` / `nautical` / `dimension-lab` / `starlight`。
+`synth` / `midnight-pass` / `nautical` / `grand-line` / `dimension-lab` / `starlight`。
 
 人物专属配方由 Kun 宿主实现,会以同一套视觉语言同时处理侧边栏、顶栏、输入框、用户/助手
 消息、普通卡片与表格表面。例如 `botanical` 使用柔和植物感层次,`fortune-ledger` 使用账簿式

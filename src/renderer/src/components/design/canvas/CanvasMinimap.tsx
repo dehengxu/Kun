@@ -47,7 +47,7 @@ function CanvasMinimapInner() {
   if (!layout || layout.shapeRects.length === 0) return null
 
   return (
-    <div className="rounded-md border border-ds-border bg-ds-card/95 p-1 shadow-lg backdrop-blur">
+    <div className="design-canvas-minimap rounded-md border border-ds-border bg-ds-card/95 p-1 shadow-lg backdrop-blur">
       <svg
         role="img"
         aria-label={t('canvasMinimap')}
