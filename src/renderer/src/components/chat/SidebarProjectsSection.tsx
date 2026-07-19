@@ -73,6 +73,22 @@ import {
   type SidebarThreadWorktreeRecord,
   type SidebarThreadWorktrees
 } from './sidebar-project-selectors'
+import {
+  SIDEBAR_THREAD_DRAG_DATA_KEY,
+  SIDEBAR_WORKSPACE_DRAG_DATA_KEY,
+  readSidebarOrderRegistry,
+  reconcileSidebarThreadOrder,
+  reconcileSidebarWorkspaceOrder,
+  reorderSidebarThreadIds,
+  reorderSidebarWorkspacePaths,
+  saveSidebarOrderRegistry,
+  setSidebarThreadOrder,
+  setSidebarWorkspaceOrder,
+  sidebarDropPosition,
+  sidebarThreadOrderScope,
+  type SidebarDropPosition,
+  type SidebarOrderRegistry
+} from './sidebar-order'
 export {
   buildSidebarDraftWorkspacePaths,
   buildSidebarThreadMoveTargets,
@@ -115,9 +131,16 @@ type SidebarProjectsSectionProps = {
   t: (k: string, opts?: Record<string, unknown>) => string
 }
 
-const SIDEBAR_THREAD_DRAG_DATA_KEY = 'application/x-kun-thread-id'
-
 const SDD_DRAFT_HISTORY_LOAD_LIMIT = 40
+
+type WorkspaceOrderDropTarget = {
+  workspacePath: string
+  position: SidebarDropPosition
+}
+
+type ThreadOrderDropTarget = WorkspaceOrderDropTarget & {
+  threadId: string
+}
 
 export function SidebarProjectsSection({
   threads,
@@ -158,7 +181,11 @@ export function SidebarProjectsSection({
   const [actionDialog, setActionDialog] = useState<SidebarActionDialogState | null>(null)
   const [renameThreadDialog, setRenameThreadDialog] = useState<RenameThreadDialogState | null>(null)
   const [moveThreadDialog, setMoveThreadDialog] = useState<MoveThreadDialogState | null>(null)
+  const [sidebarOrder, setSidebarOrder] = useState<SidebarOrderRegistry>(() => readSidebarOrderRegistry())
+  const [draggingWorkspacePath, setDraggingWorkspacePath] = useState<string | null>(null)
+  const [workspaceOrderDropTarget, setWorkspaceOrderDropTarget] = useState<WorkspaceOrderDropTarget | null>(null)
   const [draggingThreadId, setDraggingThreadId] = useState<string | null>(null)
+  const [threadOrderDropTarget, setThreadOrderDropTarget] = useState<ThreadOrderDropTarget | null>(null)
   const [dragOverWorkspace, setDragOverWorkspace] = useState<string | null>(null)
   const [draftHistoryByWorkspace, setDraftHistoryByWorkspace] = useState<Record<string, SddDraftHistoryItem[]>>({})
   const [threadWorktrees, setThreadWorktrees] = useState<SidebarThreadWorktrees>(() => readThreadWorktreeRegistry().worktrees)
@@ -189,6 +216,35 @@ export function SidebarProjectsSection({
     })
   }, [threadWorktrees, threads, workspaceRoot, workspaceRoots])
 
+  const allProjectGroups = useMemo(() => {
+    const byWorkspace = new Map<string, [string, NormalizedThread[]]>()
+    for (const archived of [false, true]) {
+      const nextGroups = buildSidebarWorkspaceGroups({
+        threads,
+        searchQuery: '',
+        showArchived: archived,
+        workspaceRoot,
+        workspaceRoots,
+        conversationRoot,
+        threadWorktrees
+      })
+      for (const [workspacePath, items] of nextGroups) {
+        const key = workspaceRootIdentityKey(workspacePath)
+        const existing = byWorkspace.get(key)
+        if (existing) existing[1].push(...items)
+        else byWorkspace.set(key, [workspacePath, [...items]])
+      }
+    }
+    return [...byWorkspace.values()]
+  }, [conversationRoot, threadWorktrees, threads, workspaceRoot, workspaceRoots])
+
+  const allThreadIdsByScope = useMemo(() => {
+    return Object.fromEntries(allProjectGroups.map(([workspacePath, items]) => [
+      sidebarThreadOrderScope(workspacePath),
+      sortSidebarThreads(items).map((thread) => thread.id)
+    ]))
+  }, [allProjectGroups])
+
   const filteredDraftHistoryByWorkspace = useMemo(() => {
     return Object.fromEntries(
       Object.entries(draftHistoryByWorkspace)
@@ -200,13 +256,34 @@ export function SidebarProjectsSection({
     )
   }, [draftHistoryByWorkspace, searchQuery])
 
-  const displayGroups = useMemo(() => {
+  const unorderedDisplayGroups = useMemo(() => {
     return mergeSidebarWorkspaceGroupsWithDraftHistory({
       groups,
       draftHistoryByWorkspace: filteredDraftHistoryByWorkspace,
       workspaceRoot
     })
   }, [filteredDraftHistoryByWorkspace, groups, workspaceRoot])
+
+  const displayGroups = useMemo(() => {
+    const byWorkspace = new Map(
+      unorderedDisplayGroups.map((group) => [workspaceRootIdentityKey(group[0]), group] as const)
+    )
+    return reconcileSidebarWorkspaceOrder(
+      unorderedDisplayGroups.map(([workspacePath]) => workspacePath),
+      sidebarOrder.workspacePaths
+    ).flatMap((workspacePath) => {
+      const group = byWorkspace.get(workspaceRootIdentityKey(workspacePath))
+      return group ? [group] : []
+    })
+  }, [sidebarOrder.workspacePaths, unorderedDisplayGroups])
+
+  const workspacePathsForOrder = useMemo(() => reconcileSidebarWorkspaceOrder(
+    [
+      ...allProjectGroups.map(([workspacePath]) => workspacePath),
+      ...unorderedDisplayGroups.map(([workspacePath]) => workspacePath)
+    ],
+    sidebarOrder.workspacePaths
+  ), [allProjectGroups, sidebarOrder.workspacePaths, unorderedDisplayGroups])
 
   const searchVisible = searchOpen || searchQuery.trim().length > 0
   const allGroupsCollapsed = displayGroups.length > 0 && displayGroups.every(([workspacePath]) => collapsed[workspacePath] === true)
@@ -562,23 +639,53 @@ export function SidebarProjectsSection({
     }
   }
 
+  const persistSidebarOrder = (
+    update: (current: SidebarOrderRegistry) => SidebarOrderRegistry
+  ): void => {
+    const next = update(readSidebarOrderRegistry())
+    saveSidebarOrderRegistry(next)
+    setSidebarOrder(next)
+  }
+
+  const handleWorkspaceDragStart = (
+    event: ReactDragEvent<HTMLDivElement>,
+    workspacePath: string
+  ): void => {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData(SIDEBAR_WORKSPACE_DRAG_DATA_KEY, workspacePath)
+    setDraggingWorkspacePath(workspacePath)
+    setWorkspaceOrderDropTarget(null)
+    setDraggingThreadId(null)
+    setThreadOrderDropTarget(null)
+    setDragOverWorkspace(null)
+  }
+
+  const handleWorkspaceDragEnd = (): void => {
+    setDraggingWorkspacePath(null)
+    setWorkspaceOrderDropTarget(null)
+    setDragOverWorkspace(null)
+  }
+
   const handleThreadDragStart = (
     event: ReactDragEvent<HTMLDivElement>,
     thread: NormalizedThread
   ): void => {
-    const worktreeRecord = worktreeRecordForSidebarThread(thread, threadWorktrees)
-    if (busy || threadMoveDisabledReason(thread, worktreeRecord) || moveTargetsForThread(thread).length === 0) {
+    if (!thread.id.trim() || deletingThreadIds[thread.id] === true) {
       event.preventDefault()
       return
     }
     event.dataTransfer.effectAllowed = 'move'
     event.dataTransfer.setData(SIDEBAR_THREAD_DRAG_DATA_KEY, thread.id)
     setDraggingThreadId(thread.id)
+    setThreadOrderDropTarget(null)
+    setDraggingWorkspacePath(null)
+    setWorkspaceOrderDropTarget(null)
     setDragOverWorkspace(null)
   }
 
   const handleThreadDragEnd = (): void => {
     setDraggingThreadId(null)
+    setThreadOrderDropTarget(null)
     setDragOverWorkspace(null)
   }
 
@@ -586,6 +693,25 @@ export function SidebarProjectsSection({
     event: ReactDragEvent<HTMLDivElement>,
     workspacePath: string
   ): void => {
+    const sourceWorkspace = draggingWorkspacePath || event.dataTransfer.getData(SIDEBAR_WORKSPACE_DRAG_DATA_KEY)
+    if (sourceWorkspace) {
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      setDragOverWorkspace(null)
+      setWorkspaceOrderDropTarget(
+        workspaceRootIdentityKey(sourceWorkspace) === workspaceRootIdentityKey(workspacePath)
+          ? null
+          : {
+              workspacePath,
+              position: sidebarDropPosition(
+                event.clientY,
+                event.currentTarget.getBoundingClientRect().top,
+                event.currentTarget.getBoundingClientRect().height
+              )
+            }
+      )
+      return
+    }
     const threadId = draggingThreadId || event.dataTransfer.getData(SIDEBAR_THREAD_DRAG_DATA_KEY)
     if (!threadId) return
     const thread = threads.find((item) => item.id === threadId)
@@ -598,7 +724,28 @@ export function SidebarProjectsSection({
     }
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
+    setWorkspaceOrderDropTarget(null)
     setDragOverWorkspace(workspacePath)
+  }
+
+  const handleWorkspaceDragLeave = (
+    event: ReactDragEvent<HTMLDivElement>,
+    workspacePath: string
+  ): void => {
+    if (
+      event.relatedTarget instanceof Node
+      && event.currentTarget.contains(event.relatedTarget)
+    ) return
+    setWorkspaceOrderDropTarget((current) =>
+      current && workspaceRootIdentityKey(current.workspacePath) === workspaceRootIdentityKey(workspacePath)
+        ? null
+        : current
+    )
+    setDragOverWorkspace((current) =>
+      workspaceRootIdentityKey(current ?? undefined) === workspaceRootIdentityKey(workspacePath)
+        ? null
+        : current
+    )
   }
 
   const handleWorkspaceDrop = (
@@ -606,8 +753,24 @@ export function SidebarProjectsSection({
     workspacePath: string
   ): void => {
     event.preventDefault()
+    const sourceWorkspace = draggingWorkspacePath || event.dataTransfer.getData(SIDEBAR_WORKSPACE_DRAG_DATA_KEY)
+    if (sourceWorkspace) {
+      const rect = event.currentTarget.getBoundingClientRect()
+      const nextWorkspacePaths = reorderSidebarWorkspacePaths({
+        workspacePaths: workspacePathsForOrder,
+        sourcePath: sourceWorkspace,
+        targetPath: workspacePath,
+        position: sidebarDropPosition(event.clientY, rect.top, rect.height)
+      })
+      persistSidebarOrder((current) => setSidebarWorkspaceOrder(current, nextWorkspacePaths))
+      setDraggingWorkspacePath(null)
+      setWorkspaceOrderDropTarget(null)
+      setDragOverWorkspace(null)
+      return
+    }
     const threadId = draggingThreadId || event.dataTransfer.getData(SIDEBAR_THREAD_DRAG_DATA_KEY)
     setDraggingThreadId(null)
+    setThreadOrderDropTarget(null)
     setDragOverWorkspace(null)
     if (!threadId) return
     const thread = threads.find((item) => item.id === threadId)
@@ -617,6 +780,74 @@ export function SidebarProjectsSection({
       workspacePath,
       worktreeRecordForSidebarThread(thread, threadWorktrees)
     )
+  }
+
+  const handleThreadDragOver = (
+    event: ReactDragEvent<HTMLDivElement>,
+    targetThread: NormalizedThread,
+    workspacePath: string
+  ): void => {
+    const sourceId = draggingThreadId || event.dataTransfer.getData(SIDEBAR_THREAD_DRAG_DATA_KEY)
+    if (!sourceId || sourceId === targetThread.id) return
+    const sourceThread = threads.find((thread) => thread.id === sourceId)
+    if (!sourceThread) return
+    const candidatePaths = allProjectGroups.map(([path]) => path)
+    const sourceWorkspace = sidebarWorkspacePathForThread(sourceThread, threadWorktrees, candidatePaths)
+    if (workspaceRootIdentityKey(sourceWorkspace) !== workspaceRootIdentityKey(workspacePath)) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'move'
+    const rect = event.currentTarget.getBoundingClientRect()
+    setThreadOrderDropTarget({
+      workspacePath,
+      threadId: targetThread.id,
+      position: sidebarDropPosition(event.clientY, rect.top, rect.height)
+    })
+    setDragOverWorkspace(null)
+  }
+
+  const handleThreadDragLeave = (
+    event: ReactDragEvent<HTMLDivElement>,
+    threadId: string
+  ): void => {
+    if (
+      event.relatedTarget instanceof Node
+      && event.currentTarget.contains(event.relatedTarget)
+    ) return
+    setThreadOrderDropTarget((current) => current?.threadId === threadId ? null : current)
+  }
+
+  const handleThreadDrop = (
+    event: ReactDragEvent<HTMLDivElement>,
+    targetThread: NormalizedThread,
+    workspacePath: string
+  ): void => {
+    const sourceId = draggingThreadId || event.dataTransfer.getData(SIDEBAR_THREAD_DRAG_DATA_KEY)
+    if (!sourceId || sourceId === targetThread.id) return
+    const sourceThread = threads.find((thread) => thread.id === sourceId)
+    if (!sourceThread) return
+    const candidatePaths = allProjectGroups.map(([path]) => path)
+    const sourceWorkspace = sidebarWorkspacePathForThread(sourceThread, threadWorktrees, candidatePaths)
+    if (workspaceRootIdentityKey(sourceWorkspace) !== workspaceRootIdentityKey(workspacePath)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const scope = sidebarThreadOrderScope(workspacePath)
+    const baseIds = allThreadIdsByScope[scope] ?? []
+    const orderedIds = reconcileSidebarThreadOrder(
+      baseIds.map((id) => ({ id })),
+      sidebarOrder.threadIdsByScope[scope] ?? []
+    ).map(({ id }) => id)
+    const rect = event.currentTarget.getBoundingClientRect()
+    const nextIds = reorderSidebarThreadIds({
+      threadIds: orderedIds,
+      sourceId,
+      targetId: targetThread.id,
+      position: sidebarDropPosition(event.clientY, rect.top, rect.height)
+    })
+    persistSidebarOrder((current) => setSidebarThreadOrder(current, workspacePath, nextIds))
+    setDraggingThreadId(null)
+    setThreadOrderDropTarget(null)
+    setDragOverWorkspace(null)
   }
 
   const openThreadContextMenu = (
@@ -840,9 +1071,16 @@ export function SidebarProjectsSection({
           const isDragOver =
             dragOverWorkspace !== null
             && workspaceRootIdentityKey(dragOverWorkspace) === workspaceRootIdentityKey(workspacePath)
+          const workspaceDropPosition =
+            workspaceOrderDropTarget
+            && workspaceRootIdentityKey(workspaceOrderDropTarget.workspacePath) === workspaceRootIdentityKey(workspacePath)
+              ? workspaceOrderDropTarget.position
+              : null
           const draftHistory = sddDraftHistoryForWorkspace(filteredDraftHistoryByWorkspace, workspacePath)
-          const sortedThreads = sortSidebarThreads(
-            filterEmptySddAssistantThreadsFromSidebar(list, draftHistory)
+          const threadOrderScope = sidebarThreadOrderScope(workspacePath)
+          const sortedThreads = reconcileSidebarThreadOrder(
+            sortSidebarThreads(filterEmptySddAssistantThreadsFromSidebar(list, draftHistory)),
+            sidebarOrder.threadIdsByScope[threadOrderScope] ?? []
           )
           const workspaceExpanded = expandedWorkspaces[workspacePath] === true
           const hasOverflow = sortedThreads.length > 5
@@ -850,25 +1088,36 @@ export function SidebarProjectsSection({
             ? sortedThreads
             : sortedThreads.slice(0, 5)
           return (
-            <div key={workspacePath} className="mb-2">
+            <div
+              key={workspacePath}
+              className={`relative mb-2 ${
+                workspaceDropPosition === 'before'
+                  ? "before:absolute before:inset-x-2 before:top-0 before:z-10 before:h-0.5 before:rounded-full before:bg-accent before:content-['']"
+                  : workspaceDropPosition === 'after'
+                    ? "after:absolute after:bottom-0 after:inset-x-2 after:z-10 after:h-0.5 after:rounded-full after:bg-accent after:content-['']"
+                    : ''
+              }`}
+            >
               <SidebarTreeRow
                 title={workspacePath}
                 onClick={() =>
                   setCollapsed((current) => ({ ...current, [workspacePath]: !current[workspacePath] }))
                 }
                 onContextMenu={(event) => openWorkspaceContextMenu(event, workspacePath)}
+                draggable
+                onDragStart={(event) => handleWorkspaceDragStart(event, workspacePath)}
+                onDragEnd={handleWorkspaceDragEnd}
                 onDragOver={(event) => handleWorkspaceDragOver(event, workspacePath)}
-                onDragLeave={() =>
-                  setDragOverWorkspace((current) =>
-                    workspaceRootIdentityKey(current ?? undefined) === workspaceRootIdentityKey(workspacePath)
-                      ? null
-                      : current
-                  )
-                }
+                onDragLeave={(event) => handleWorkspaceDragLeave(event, workspacePath)}
                 onDrop={(event) => handleWorkspaceDrop(event, workspacePath)}
                 className={`min-h-[36px] text-[13.5px] ${
                   isDragOver
                     ? 'bg-accent/10 shadow-[inset_0_0_0_1px_rgba(79,124,255,0.32)]'
+                    : ''
+                } ${
+                  draggingWorkspacePath !== null
+                  && workspaceRootIdentityKey(draggingWorkspacePath) === workspaceRootIdentityKey(workspacePath)
+                    ? 'opacity-55'
                     : ''
                 }`}
                 buttonClassName="items-center gap-2 px-2.5 py-2"
@@ -953,13 +1202,19 @@ export function SidebarProjectsSection({
                         onContextMenu={(event) => openThreadContextMenu(event, thread)}
                         onPreviewOpen={openThreadPreview}
                         onPreviewClose={closeThreadPreview}
-                        draggable={
-                          !busy
-                          && !threadMoveDisabledReason(thread, worktreeRecordForSidebarThread(thread, threadWorktrees))
-                          && moveTargetsForThread(thread).length > 0
+                        draggable={deletingThreadIds[thread.id] !== true}
+                        dragging={draggingThreadId === thread.id}
+                        dropPosition={
+                          threadOrderDropTarget?.threadId === thread.id
+                          && workspaceRootIdentityKey(threadOrderDropTarget.workspacePath) === workspaceRootIdentityKey(workspacePath)
+                            ? threadOrderDropTarget.position
+                            : null
                         }
                         onDragStart={(event) => handleThreadDragStart(event, thread)}
                         onDragEnd={handleThreadDragEnd}
+                        onDragOver={(event) => handleThreadDragOver(event, thread, workspacePath)}
+                        onDragLeave={(event) => handleThreadDragLeave(event, thread.id)}
+                        onDrop={(event) => handleThreadDrop(event, thread, workspacePath)}
                         onPin={() => void handlePinThread(thread, thread.pinned !== true)}
                         onRename={() => openRenameThreadDialog(thread)}
                         onArchive={() => void handleArchiveThread(thread)}
