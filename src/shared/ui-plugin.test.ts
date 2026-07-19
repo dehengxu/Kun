@@ -73,6 +73,7 @@ const dedicatedCharacterChromeRecipes = [
   'midnight-pass',
   'nautical',
   'grand-line',
+  'arc-reactor',
   'dimension-lab',
   'starlight'
 ] as const

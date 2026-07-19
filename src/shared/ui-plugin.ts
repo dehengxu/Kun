@@ -180,6 +180,7 @@ export const UI_PLUGIN_SCENE_CHROME_RECIPES = [
   'midnight-pass',
   'nautical',
   'grand-line',
+  'arc-reactor',
   'dimension-lab',
   'starlight'
 ] as const
