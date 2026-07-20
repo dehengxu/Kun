@@ -26,13 +26,15 @@ import {
 } from './app-ipc-schemas'
 
 describe('app-ipc-schemas', () => {
-  it('accepts only the provider identity fields needed for models.dev lookup', () => {
+  it('accepts only provider identity and refresh fields for models.dev lookup', () => {
     expect(modelsDevCatalogPayloadSchema.parse({
       providerId: 'xiaomi-token-plan',
-      baseUrl: ' https://token-plan-cn.xiaomimimo.com/v1 '
+      baseUrl: ' https://token-plan-cn.xiaomimimo.com/v1 ',
+      forceRefresh: true
     })).toEqual({
       providerId: 'xiaomi-token-plan',
-      baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1'
+      baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+      forceRefresh: true
     })
     expect(() => modelsDevCatalogPayloadSchema.parse({
       providerId: 'xiaomi-token-plan',

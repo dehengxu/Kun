@@ -214,6 +214,27 @@ describe('ModelsDevCatalogService', () => {
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
+  it('revalidates a fresh cache when a manual refresh is requested', async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(catalogBody(), {
+        status: 200,
+        headers: { etag: '"catalog-v1"' }
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 304 }))
+    const service = new ModelsDevCatalogService(fetcher)
+    const request = { providerId: 'deepseek', baseUrl: 'https://api.deepseek.com' }
+
+    await service.fetch(request)
+    await service.fetch({ ...request, forceRefresh: true })
+
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(fetcher.mock.calls[1]?.[1]?.headers).toEqual({
+      Accept: 'application/json',
+      'If-None-Match': '"catalog-v1"'
+    })
+  })
+
   it('uses ETag conditional refresh after the freshness window', async () => {
     let now = 1_000
     const fetcher = vi

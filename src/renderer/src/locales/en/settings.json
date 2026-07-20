@@ -472,6 +472,8 @@
   "providerModelImportSelectedCount": "{{count}} selected",
   "providerModelImportCancel": "Cancel",
   "providerModelImportConfirm": "Import {{count}}",
+  "providerModelImportApplyMetadata": "Apply model metadata",
+  "providerModelImportMetadataUpdates": "{{count}} existing models can be updated",
   "providerModelImportProviderWarning": "The provider API could not verify availability: {{message}} Catalog-only models remain unchecked.",
   "providerModelImportProviderReturnedEmpty": "The provider API returned no models; catalog-only models are not verified for this account.",
   "providerModelImportCatalogError": "models.dev enrichment is unavailable: {{message}}",

@@ -472,6 +472,8 @@
   "providerModelImportSelectedCount": "Выбрано: {{count}}",
   "providerModelImportCancel": "Отмена",
   "providerModelImportConfirm": "Импортировать {{count}}",
+  "providerModelImportApplyMetadata": "Применить метаданные моделей",
+  "providerModelImportMetadataUpdates": "Можно обновить существующие модели: {{count}}",
   "providerModelImportProviderWarning": "API провайдера не подтвердил доступность: {{message}}. Модели только из каталога не выбраны.",
   "providerModelImportProviderReturnedEmpty": "API провайдера не вернул моделей; доступность моделей только из каталога для этой учётной записи не подтверждена.",
   "providerModelImportCatalogError": "Данные models.dev недоступны: {{message}}",

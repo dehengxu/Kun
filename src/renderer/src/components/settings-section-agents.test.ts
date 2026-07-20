@@ -115,6 +115,8 @@ const labels: Record<string, string> = {
   providerModelImportSelectedCount: '{{count}} selected',
   providerModelImportCancel: 'Cancel import',
   providerModelImportConfirm: 'Import {{count}}',
+  providerModelImportApplyMetadata: 'Apply model metadata',
+  providerModelImportMetadataUpdates: '{{count}} existing models can be updated',
   providerModelImportProviderWarning: 'Provider verification failed: {{message}}',
   providerModelImportProviderReturnedEmpty: 'Provider API returned no models.',
   providerModelImportCatalogError: 'Catalog unavailable: {{message}}',
@@ -1158,7 +1160,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       })
       expect(fetchModelsDevCatalog).toHaveBeenCalledWith({
         providerId: target.id,
-        baseUrl: target.baseUrl
+        baseUrl: target.baseUrl,
+        forceRefresh: true
       })
       expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('models.dev only')
       expect(findButton(renderer, 'Import 2').props.disabled).toBe(false)
@@ -1169,6 +1172,48 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       const updatedTarget = updatedProviders.find((item) => item.id === target.id)
       expect(updatedTarget?.models).toEqual(['model-a', 'model-b'])
       expect(updatedTarget?.models).not.toContain('catalog-only')
+      expect(updatedTarget?.modelProfiles['model-a']).toEqual(expect.objectContaining({
+        contextWindowTokens: 128_000,
+        maxOutputTokens: 16_000,
+        inputModalities: ['text', 'image'],
+        supportsToolCalling: true,
+        messageParts: ['text', 'image_url']
+      }))
+    })
+
+    it('applies catalog metadata to models that were already configured', async () => {
+      const settings = defaultModelProviderSettings()
+      const target = {
+        id: 'probe-provider',
+        name: 'Probe Provider',
+        apiKey: 'sk-probe',
+        baseUrl: 'https://api.example.com/v1',
+        endpointFormat: 'chat_completions',
+        models: ['model-a', 'model-b'],
+        modelProfiles: {}
+      } satisfies ModelProviderProfileV1
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, target] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: target.id },
+        update
+      })
+
+      await act(async () => findButton(renderer, 'Models').props.onClick())
+      await act(async () => {
+        findButton(renderer, 'Fetch models').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(findButton(renderer, 'Apply model metadata').props.disabled).toBe(false)
+      await act(async () => findButton(renderer, 'Apply model metadata').props.onClick())
+
+      const updatedProviders = update.mock.calls[0]?.[0]?.provider?.providers as ModelProviderProfileV1[]
+      const updatedTarget = updatedProviders.find((item) => item.id === target.id)
+      expect(updatedTarget?.models).toEqual(target.models)
       expect(updatedTarget?.modelProfiles['model-a']).toEqual(expect.objectContaining({
         contextWindowTokens: 128_000,
         maxOutputTokens: 16_000,

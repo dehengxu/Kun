@@ -324,6 +324,7 @@ export type ModelsDevCatalogModel = {
 export type ModelsDevCatalogRequest = {
   providerId: string
   baseUrl: string
+  forceRefresh?: boolean
 }
 export type ModelsDevCatalogMatchMode = 'catalog' | 'enrichment-only'
 export type ModelsDevCatalogResult =

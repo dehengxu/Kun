@@ -472,6 +472,8 @@
   "providerModelImportSelectedCount": "{{count}} 個が選択されました",
   "providerModelImportCancel": "キャンセル",
   "providerModelImportConfirm": "{{count}} をインポートします",
+  "providerModelImportApplyMetadata": "モデルメタデータを適用",
+  "providerModelImportMetadataUpdates": "既存の {{count}} モデルを更新できます",
   "providerModelImportProviderWarning": "プロバイダー API で利用可否を確認できませんでした: {{message}}。カタログのみのモデルは未選択のままです。",
   "providerModelImportProviderReturnedEmpty": "プロバイダー API はモデルを返しませんでした。カタログのみのモデルはこのアカウントで未確認です。",
   "providerModelImportCatalogError": "models.dev の拡張情報を利用できません: {{message}}",

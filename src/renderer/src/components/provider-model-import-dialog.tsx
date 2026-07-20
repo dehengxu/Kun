@@ -13,6 +13,7 @@ import {
 import {
   buildProviderModelImportEntries,
   defaultSelectedProviderModelImportKeys,
+  providerModelImportEntryCanEnrich,
   providerModelImportEntryKey,
   providerModelImportResult,
   type ProviderModelImportResult
@@ -121,6 +122,9 @@ export function ProviderModelImportDialog({
   }
 
   const totalSelected = selected.size
+  const existingMetadataCount = entries.filter((entry) =>
+    providerModelImportEntryCanEnrich(provider, entry)
+  ).length
   const allVisibleSelected = visibleEntries.length > 0 && visibleEntries.every((entry) =>
     selected.has(providerModelImportEntryKey(entry.kind, entry.modelId))
   )
@@ -356,6 +360,11 @@ export function ProviderModelImportDialog({
             <span className="text-[12px] text-ds-faint">
               {t('providerModelImportSelectedCount', { count: totalSelected })}
             </span>
+            {existingMetadataCount > 0 ? (
+              <span className="text-[12px] text-ds-faint">
+                {t('providerModelImportMetadataUpdates', { count: existingMetadataCount })}
+              </span>
+            ) : null}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -368,10 +377,14 @@ export function ProviderModelImportDialog({
             <button
               type="button"
               onClick={() => onConfirm(providerModelImportResult(entries, selected))}
-              disabled={totalSelected === 0}
+              disabled={totalSelected === 0 && existingMetadataCount === 0}
               className="inline-flex h-8 items-center rounded-full bg-accent px-4 text-[12.5px] font-semibold text-white shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {t('providerModelImportConfirm', { count: totalSelected })}
+              {totalSelected > 0
+                ? t('providerModelImportConfirm', { count: totalSelected })
+                : existingMetadataCount > 0
+                  ? t('providerModelImportApplyMetadata')
+                  : t('providerModelImportConfirm', { count: 0 })}
             </button>
           </div>
         </footer>

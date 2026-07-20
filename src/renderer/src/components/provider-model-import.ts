@@ -96,6 +96,22 @@ export function defaultSelectedProviderModelImportKeys(
   return selected
 }
 
+export function providerModelImportEntryCanEnrich(
+  provider: Pick<ModelProviderProfileV1, 'modelProfiles'>,
+  entry: ProviderModelImportEntry
+): boolean {
+  if (!entry.alreadyExists || entry.kind !== 'chat' || !entry.catalog) return false
+  const normalizedId = modelKey(entry.modelId)
+  const existingKey = Object.keys(provider.modelProfiles)
+    .find((key) => modelKey(key) === normalizedId)
+  if (!existingKey) return true
+  const existing = provider.modelProfiles[existingKey]
+  return (
+    (existing.contextWindowTokens === undefined && entry.catalog.contextWindowTokens !== undefined) ||
+    (existing.maxOutputTokens === undefined && entry.catalog.maxOutputTokens !== undefined)
+  )
+}
+
 export function providerModelImportResult(
   entries: readonly ProviderModelImportEntry[],
   selected: ReadonlySet<string>
@@ -111,9 +127,9 @@ export function providerModelImportResult(
   }
   const catalogKeys = new Set<string>()
   for (const entry of entries) {
-    if (!selected.has(providerModelImportEntryKey(entry.kind, entry.modelId))) continue
-    result[entry.kind].push(entry.modelId)
-    if (entry.catalog && !catalogKeys.has(modelKey(entry.catalog.id))) {
+    const isSelected = selected.has(providerModelImportEntryKey(entry.kind, entry.modelId))
+    if (isSelected) result[entry.kind].push(entry.modelId)
+    if ((isSelected || entry.alreadyExists) && entry.catalog && !catalogKeys.has(modelKey(entry.catalog.id))) {
       catalogKeys.add(modelKey(entry.catalog.id))
       result.catalogModels.push(entry.catalog)
     }
@@ -168,8 +184,12 @@ export function enrichProviderModelProfiles(
     if (next === provider.modelProfiles) next = { ...provider.modelProfiles }
     next[existingKey] = {
       ...existing,
-      ...(addContext ? { contextWindowTokens: catalog.contextWindowTokens } : {}),
-      ...(addOutput ? { maxOutputTokens: catalog.maxOutputTokens } : {})
+      ...(addContext
+        ? { contextWindowTokens: catalog.contextWindowTokens }
+        : {}),
+      ...(addOutput
+        ? { maxOutputTokens: catalog.maxOutputTokens }
+        : {})
     }
   }
 
@@ -191,7 +211,16 @@ export function modelProfileFromCatalog(
     inputModalities: supportsImageInput ? ['text', 'image'] : ['text'],
     outputModalities: supportsImageOutput ? ['text', 'image'] : ['text'],
     supportsToolCalling: catalog.toolCalling ?? true,
-    messageParts: supportsImageInput ? ['text', 'image_url'] : ['text']
+    messageParts: supportsImageInput ? ['text', 'image_url'] : ['text'],
+    ...(catalog.reasoning === true ? { reasoning: catalogReasoningProfile() } : {})
+  }
+}
+
+function catalogReasoningProfile(): NonNullable<ModelProviderModelProfileV1['reasoning']> {
+  return {
+    supportedEfforts: ['auto'],
+    defaultEffort: 'auto',
+    requestProtocol: 'none'
   }
 }
 

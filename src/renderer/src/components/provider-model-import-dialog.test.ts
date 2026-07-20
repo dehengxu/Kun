@@ -31,6 +31,8 @@ const labels: Record<string, string> = {
   providerModelImportSelectedCount: '{{count}} selected',
   providerModelImportCancel: 'Cancel',
   providerModelImportConfirm: 'Import {{count}}',
+  providerModelImportApplyMetadata: 'Apply model metadata',
+  providerModelImportMetadataUpdates: '{{count}} existing models can be updated',
   providerModelImportProviderWarning: 'Provider verification failed: {{message}}',
   providerModelImportCatalogError: 'Catalog unavailable: {{message}}',
   providerModelImportCatalogUnmapped: 'No exact catalog mapping.',
@@ -143,6 +145,55 @@ describe('ProviderModelImportDialog', () => {
     expect(html).not.toContain('Already added')
     expect(html).toContain('Hide already added (1)')
     expect(html).toContain('Import 1')
+  })
+
+  it('allows catalog metadata to be applied when every matching model already exists', () => {
+    const html = render({
+      target: provider({ models: ['gpt-4o'] }),
+      providerModelIds: ['gpt-4o'],
+      catalogResult: catalog([{
+        id: 'gpt-4o',
+        inputModalities: ['text', 'image'],
+        outputModalities: ['text'],
+        contextWindowTokens: 128_000,
+        reasoning: true
+      }])
+    })
+    expect(html).toContain('1 existing models can be updated')
+    expect(html).toContain('Apply model metadata')
+    const applyButton = html.match(/<button[^>]*>Apply model metadata<\/button>/)?.[0]
+    expect(applyButton).toBeDefined()
+    expect(applyButton).not.toContain('disabled=""')
+  })
+
+  it('does not claim that a fully configured existing model needs an update', () => {
+    const html = render({
+      target: provider({
+        models: ['gpt-4o'],
+        modelProfiles: {
+          'gpt-4o': {
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 16_000,
+            inputModalities: ['text', 'image'],
+            outputModalities: ['text'],
+            supportsToolCalling: true,
+            messageParts: ['text', 'image_url']
+          }
+        }
+      }),
+      providerModelIds: ['gpt-4o'],
+      catalogResult: catalog([{
+        id: 'gpt-4o',
+        inputModalities: ['text', 'image'],
+        outputModalities: ['text'],
+        contextWindowTokens: 128_000,
+        maxOutputTokens: 16_000,
+        reasoning: true
+      }])
+    })
+    expect(html).not.toContain('existing models can be updated')
+    expect(html).toContain('Import 0')
+    expect(html).toContain('disabled=""')
   })
 
   it('shows independent provider and stale-catalog warnings', () => {

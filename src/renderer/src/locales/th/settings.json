@@ -472,6 +472,8 @@
   "providerModelImportSelectedCount": "เลือกแล้ว {{count}}",
   "providerModelImportCancel": "ยกเลิก",
   "providerModelImportConfirm": "นำเข้า {{count}}",
+  "providerModelImportApplyMetadata": "ใช้ข้อมูลเมตาของโมเดล",
+  "providerModelImportMetadataUpdates": "อัปเดตโมเดลที่มีอยู่ได้ {{count}} รายการ",
   "providerModelImportProviderWarning": "API ผู้ให้บริการยืนยันความพร้อมใช้งานไม่ได้: {{message}} โมเดลจากแค็ตตาล็อกเท่านั้นจะยังไม่ถูกเลือก",
   "providerModelImportProviderReturnedEmpty": "API ผู้ให้บริการไม่ส่งคืนโมเดล โมเดลจากแค็ตตาล็อกเท่านั้นยังไม่ได้ยืนยันสำหรับบัญชีนี้",
   "providerModelImportCatalogError": "ข้อมูลเสริมจาก models.dev ไม่พร้อมใช้งาน: {{message}}",

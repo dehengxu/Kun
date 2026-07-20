@@ -48,7 +48,8 @@ export const providerProbePayloadSchema = z
 export const modelsDevCatalogPayloadSchema = z
   .object({
     providerId: trimmedString(128),
-    baseUrl: trimmedString(MAX_URL_LENGTH)
+    baseUrl: trimmedString(MAX_URL_LENGTH),
+    forceRefresh: z.boolean().optional()
   })
   .strict()
 

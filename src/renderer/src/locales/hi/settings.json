@@ -472,6 +472,8 @@
   "providerModelImportSelectedCount": "{{count}} selected",
   "providerModelImportCancel": "रद्द करें",
   "providerModelImportConfirm": "Import {{count}}",
+  "providerModelImportApplyMetadata": "Apply model metadata",
+  "providerModelImportMetadataUpdates": "{{count}} existing models can be updated",
   "providerModelImportProviderWarning": "प्रदाता API उपलब्धता सत्यापित नहीं कर सका: {{message}}। केवल कैटलॉग वाले मॉडल अचयनित हैं।",
   "providerModelImportProviderReturnedEmpty": "प्रदाता API ने कोई मॉडल नहीं लौटाया; केवल कैटलॉग वाले मॉडल इस खाते के लिए सत्यापित नहीं हैं।",
   "providerModelImportCatalogError": "models.dev संवर्धन उपलब्ध नहीं है: {{message}}",

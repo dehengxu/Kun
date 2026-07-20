@@ -472,6 +472,8 @@
   "providerModelImportSelectedCount": "已选 {{count}} 个",
   "providerModelImportCancel": "取消",
   "providerModelImportConfirm": "导入 {{count}} 个",
+  "providerModelImportApplyMetadata": "应用模型元数据",
+  "providerModelImportMetadataUpdates": "可更新 {{count}} 个现有模型",
   "providerModelImportProviderWarning": "供应商 API 未能验证可用性：{{message}}。仅来自目录的模型保持未选中。",
   "providerModelImportProviderReturnedEmpty": "供应商 API 没有返回模型；仅来自目录的模型尚未验证当前账号是否可用。",
   "providerModelImportCatalogError": "models.dev 元数据暂不可用：{{message}}",

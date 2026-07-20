@@ -190,7 +190,7 @@ export class ModelsDevCatalogService {
 
     try {
       const proxyUrl = settings ? resolveModelProviderProxyUrl(settings) : ''
-      const loaded = await this.loadCatalog(proxyUrl)
+      const loaded = await this.loadCatalog(proxyUrl, request.forceRefresh === true)
       match ??= resolveUniqueCatalogApiMatch(loaded.catalog, normalizedBaseUrl)
       if (!match) return { status: 'unmapped', models: [] }
       const provider = sanitizeProvider(loaded.catalog[match.providerKey])
@@ -223,9 +223,9 @@ export class ModelsDevCatalogService {
     this.inFlight = null
   }
 
-  private async loadCatalog(proxyUrl: string): Promise<LoadedCatalog> {
+  private async loadCatalog(proxyUrl: string, forceRefresh: boolean): Promise<LoadedCatalog> {
     const cached = this.cache
-    if (cached && this.now() - cached.fetchedAt < MODELS_DEV_CACHE_TTL_MS) {
+    if (!forceRefresh && cached && this.now() - cached.fetchedAt < MODELS_DEV_CACHE_TTL_MS) {
       return { catalog: cached.catalog, stale: false }
     }
     if (this.inFlight) return this.inFlight

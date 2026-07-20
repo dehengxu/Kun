@@ -144,10 +144,14 @@ describe('models.dev profile enrichment', () => {
       inputModalities: ['text', 'image'],
       outputModalities: ['text'],
       supportsToolCalling: false,
-      messageParts: ['text', 'image_url']
+      messageParts: ['text', 'image_url'],
+      reasoning: {
+        supportedEfforts: ['auto'],
+        defaultEffort: 'auto',
+        requestProtocol: 'none'
+      }
     })
     expect(next['vision-model']).not.toHaveProperty('description')
-    expect(next['vision-model']).not.toHaveProperty('reasoning')
   })
 
   it('fills only missing limits on an existing profile and preserves behavior fields', () => {
@@ -199,5 +203,69 @@ describe('models.dev profile enrichment', () => {
       maxOutputTokens: 16_000,
       toolCalling: false
     }])).toBe(target.modelProfiles)
+  })
+
+  it('hydrates existing unprofiled models with current models.dev capabilities', () => {
+    const target = provider({ models: ['glm-5.2', 'kimi-k2.5'] })
+    const entries = buildProviderModelImportEntries(
+      target,
+      ['glm-5.2', 'kimi-k2.5'],
+      catalog([
+        {
+          id: 'glm-5.2',
+          inputModalities: ['text'],
+          outputModalities: ['text'],
+          contextWindowTokens: 1_000_000,
+          maxOutputTokens: 131_072,
+          reasoning: true,
+          toolCalling: true
+        },
+        {
+          id: 'kimi-k2.5',
+          inputModalities: ['text', 'image', 'video'],
+          outputModalities: ['text'],
+          contextWindowTokens: 262_144,
+          maxOutputTokens: 65_536,
+          reasoning: true,
+          toolCalling: true
+        }
+      ])
+    )
+    const result = providerModelImportResult(entries, new Set())
+    const next = enrichProviderModelProfiles(target, target.models, result.catalogModels)
+
+    expect(next['glm-5.2']).toMatchObject({
+      contextWindowTokens: 1_000_000,
+      maxOutputTokens: 131_072,
+      inputModalities: ['text'],
+      supportsToolCalling: true,
+      reasoning: { requestProtocol: 'none' }
+    })
+    expect(next['kimi-k2.5']).toMatchObject({
+      contextWindowTokens: 262_144,
+      maxOutputTokens: 65_536,
+      inputModalities: ['text', 'image'],
+      messageParts: ['text', 'image_url'],
+      supportsToolCalling: true,
+      reasoning: { requestProtocol: 'none' }
+    })
+  })
+
+  it('returns metadata for matching existing rows even when no new model is selected', () => {
+    const entries = buildProviderModelImportEntries(
+      provider({ models: ['glm-5.2'] }),
+      ['glm-5.2'],
+      catalog([{
+        id: 'glm-5.2',
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        contextWindowTokens: 1_000_000,
+        maxOutputTokens: 131_072,
+        reasoning: true,
+        toolCalling: true
+      }])
+    )
+
+    expect(providerModelImportResult(entries, new Set()).catalogModels).toHaveLength(1)
   })
 })

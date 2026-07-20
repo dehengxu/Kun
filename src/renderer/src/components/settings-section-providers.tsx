@@ -1405,7 +1405,8 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     try {
       return await window.kunGui.fetchModelsDevCatalog({
         providerId: target.id,
-        baseUrl: target.baseUrl
+        baseUrl: target.baseUrl,
+        forceRefresh: true
       })
     } catch (error) {
       return {
@@ -1601,7 +1602,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       : picked.video
     const nextModelProfiles = enrichProviderModelProfiles(
       target,
-      picked.chat,
+      nextChatModels,
       picked.catalogModels
     )
     const added =
