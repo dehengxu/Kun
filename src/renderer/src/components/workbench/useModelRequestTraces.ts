@@ -7,6 +7,7 @@ import {
 
 const FIRST_PAGE_SIZE = 30
 const POLL_INTERVAL_MS = 1_000
+const POST_RUN_SETTLE_DELAY_MS = 1_000
 
 export type ModelRequestTraceViewState = {
   records: ModelRequestTraceRecord[]
@@ -100,16 +101,24 @@ export function useModelRequestTraces({
   }, [fetchLatest, threadId, visible])
 
   useEffect(() => {
-    if (!threadId || !visible || !threadRunning) return
+    if (!threadId || !visible || (!threadRunning && activeCount === 0)) return
     const timer = globalThis.setInterval(() => void fetchLatest(false), POLL_INTERVAL_MS)
     return () => globalThis.clearInterval(timer)
-  }, [fetchLatest, threadId, threadRunning, visible])
+  }, [activeCount, fetchLatest, threadId, threadRunning, visible])
 
   useEffect(() => {
+    let settleTimer: ReturnType<typeof globalThis.setTimeout> | undefined
     if (threadId && visible && previousRunning.current && !threadRunning) {
       void fetchLatest(false)
+      settleTimer = globalThis.setTimeout(
+        () => void fetchLatest(false),
+        POST_RUN_SETTLE_DELAY_MS
+      )
     }
     previousRunning.current = threadRunning
+    return () => {
+      if (settleTimer !== undefined) globalThis.clearTimeout(settleTimer)
+    }
   }, [fetchLatest, threadId, threadRunning, visible])
 
   const loadOlder = useCallback(async (): Promise<void> => {

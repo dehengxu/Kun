@@ -134,7 +134,7 @@ describe('useModelRequestTraces', () => {
     act(() => renderer.unmount())
   })
 
-  it('polls a visible running thread and performs a final refresh when it settles', async () => {
+  it('polls a visible running thread and performs immediate and delayed refreshes when it settles', async () => {
     vi.useFakeTimers()
     fetchPage.mockResolvedValue(page([]))
     let renderer!: ReactTestRenderer
@@ -163,6 +163,59 @@ describe('useModelRequestTraces', () => {
       await Promise.resolve()
     })
     expect(fetchPage).toHaveBeenCalledTimes(3)
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000)
+      await Promise.resolve()
+    })
+    expect(fetchPage).toHaveBeenCalledTimes(4)
+    act(() => renderer.unmount())
+  })
+
+  it('keeps polling after the thread settles until a post-turn request completes', async () => {
+    vi.useFakeTimers()
+    const pending = {
+      ...trace('title', 1, '2026-07-20T00:00:00.000Z'),
+      status: 'pending' as const
+    }
+    const completed = {
+      ...pending,
+      status: 'completed' as const,
+      response: {
+        status: 200,
+        statusText: 'OK',
+        headers: { values: {}, redactedNames: [] },
+        body: { text: 'data: title', capturedBytes: 11, originalBytes: 11, truncated: false }
+      }
+    }
+    fetchPage
+      .mockResolvedValueOnce(page([pending]))
+      .mockResolvedValueOnce(page([completed]))
+    let renderer!: ReactTestRenderer
+
+    await act(async () => {
+      renderer = create(createElement(Harness, {
+        threadId: 'thread-a',
+        visible: true,
+        threadRunning: false
+      }))
+      await Promise.resolve()
+    })
+    expect(exposed?.activeCount).toBe(1)
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000)
+      await Promise.resolve()
+    })
+    expect(fetchPage).toHaveBeenCalledTimes(2)
+    expect(exposed?.records[0]).toEqual(completed)
+    expect(exposed?.activeCount).toBe(0)
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000)
+      await Promise.resolve()
+    })
+    expect(fetchPage).toHaveBeenCalledTimes(2)
     act(() => renderer.unmount())
   })
 })
