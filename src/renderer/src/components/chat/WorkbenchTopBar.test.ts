@@ -98,6 +98,7 @@ describe('WorkbenchSideRail', () => {
 
     for (const label of [
       'Open branch conversation',
+      'Agent Perspective',
       'Plan',
       'Changes',
       'Preview',
@@ -138,6 +139,20 @@ describe('WorkbenchSideRail', () => {
     expect(html).not.toContain(`data-tooltip="Terminal"`)
 
     expect(html.match(/ds-side-rail-button/g)?.length).toBeGreaterThanOrEqual(8)
+  })
+
+  it('disables Agent Perspective until a Code conversation is selected', () => {
+    let renderer!: ReturnType<typeof createRenderer>
+    act(() => {
+      renderer = createRenderer(createElement(WorkbenchSideRail, {
+        rightPanelMode: null,
+        onToggleRightPanelMode: vi.fn(),
+        agentPerspectiveEnabled: false
+      }))
+    })
+    const button = renderer.root.findByProps({ 'aria-label': 'Agent Perspective' })
+    expect(button.props.disabled).toBe(true)
+    act(() => renderer.unmount())
   })
 
   it('routes an untrusted rail launcher to permission review without opening a panel', () => {

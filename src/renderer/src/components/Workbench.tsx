@@ -663,7 +663,10 @@ export function Workbench(): ReactElement {
       unavailable.push(BUILTIN_RIGHT_PANEL_IDS.files)
     }
     if (!filePreviewTarget) unavailable.push(BUILTIN_RIGHT_PANEL_IDS.file)
-    if (!activeThreadId) unavailable.push(BUILTIN_RIGHT_PANEL_IDS.sideConversations)
+    if (!activeThreadId) {
+      unavailable.push(BUILTIN_RIGHT_PANEL_IDS.sideConversations)
+      unavailable.push(BUILTIN_RIGHT_PANEL_IDS.agentPerspective)
+    }
     for (const id of unavailable) {
       if (codeRightTabs.tabs.includes(id)) closeRightPanelTab(id)
     }
@@ -968,6 +971,8 @@ export function Workbench(): ReactElement {
     extensionView: activeExtensionRightPanel,
     code: {
       state: codeRightTabs,
+      activeThreadId,
+      threadRunning: busy,
       sideConversationCount: currentSideConversations.length,
       sideConversationRunningCount: currentSideRunningCount,
       files: {
@@ -1198,6 +1203,7 @@ export function Workbench(): ReactElement {
             sideChatRunningCount: currentSideRunningCount,
             sideChatOpen: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.sideConversations,
             sideChatEnabled: runtimeConnection === 'ready' && Boolean(activeThreadId),
+            agentPerspectiveEnabled: Boolean(activeThreadId),
             fileTreeOpen: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.files,
             fileTreeEnabled: Boolean(fileTreeWorkspaceRoot),
             onToggleFileTree: () => openCodeRightTool(BUILTIN_RIGHT_PANEL_IDS.files),

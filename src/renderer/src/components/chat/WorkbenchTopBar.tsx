@@ -21,6 +21,7 @@ import {
   PanelRight,
   Puzzle,
   RefreshCw,
+  ScanSearch,
   Shapes,
   Terminal
 } from 'lucide-react'
@@ -50,6 +51,7 @@ type Props = {
   sideChatRunningCount?: number
   sideChatOpen?: boolean
   sideChatEnabled?: boolean
+  agentPerspectiveEnabled?: boolean
   fileTreeOpen?: boolean
   fileTreeEnabled?: boolean
   onToggleFileTree?: () => void
@@ -388,6 +390,7 @@ export function WorkbenchSideRail({
   sideChatRunningCount = 0,
   sideChatOpen = false,
   sideChatEnabled = true,
+  agentPerspectiveEnabled = true,
   fileTreeOpen = false,
   fileTreeEnabled = true,
   onToggleFileTree,
@@ -398,6 +401,12 @@ export function WorkbenchSideRail({
 }: Props): ReactElement {
   const { t } = useTranslation(['common', 'settings'])
   const items = [
+    {
+      mode: BUILTIN_RIGHT_PANEL_IDS.agentPerspective,
+      label: t('rightPanelAgentPerspective'),
+      icon: ScanSearch,
+      disabled: !agentPerspectiveEnabled
+    },
     ...(planPanelEnabled ? [{ mode: BUILTIN_RIGHT_PANEL_IDS.plan, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
     { mode: BUILTIN_RIGHT_PANEL_IDS.changes, label: t('rightPanelChanges'), icon: FileEdit },
     { mode: BUILTIN_RIGHT_PANEL_IDS.browser, label: t('rightPanelBrowser'), icon: Globe2 },
@@ -438,7 +447,8 @@ export function WorkbenchSideRail({
             key={item.mode}
             type="button"
             onClick={() => onToggleRightPanelMode(item.mode)}
-            className={sideRailButtonClass(active)}
+            disabled={'disabled' in item && item.disabled === true}
+            className={sideRailButtonClass(active, 'disabled:cursor-not-allowed disabled:opacity-45')}
             data-tooltip={item.label}
             aria-label={item.label}
             aria-pressed={active}

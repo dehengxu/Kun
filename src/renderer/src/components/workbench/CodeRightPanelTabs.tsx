@@ -14,6 +14,7 @@ import {
   MessageCircleMore,
   PanelRightClose,
   Puzzle,
+  ScanSearch,
   Shapes,
   X,
   type LucideIcon
@@ -80,7 +81,12 @@ export function CodeRightPanelTabs({
     { id: BUILTIN_RIGHT_PANEL_IDS.changes, label: t('rightPanelChangesReview'), icon: FileEdit },
     { id: BUILTIN_RIGHT_PANEL_IDS.canvas, label: t('rightPanelWhiteboard'), icon: Shapes },
     { id: BUILTIN_RIGHT_PANEL_IDS.subagents, label: t('rightPanelSubagents'), icon: Bot },
-    { id: BUILTIN_RIGHT_PANEL_IDS.mcpSkills, label: t('rightPanelMcpSkills'), icon: Blocks }
+    { id: BUILTIN_RIGHT_PANEL_IDS.mcpSkills, label: t('rightPanelMcpSkills'), icon: Blocks },
+    {
+      id: BUILTIN_RIGHT_PANEL_IDS.agentPerspective,
+      label: t('rightPanelAgentPerspective'),
+      icon: ScanSearch
+    }
   ], [t])
 
   const builtinById = useMemo(
@@ -173,6 +179,7 @@ export function CodeRightPanelTabs({
                 id={tabId}
                 role="tab"
                 tabIndex={active ? 0 : -1}
+                aria-label={meta.label}
                 aria-selected={active}
                 aria-controls={panelId}
                 onClick={() => onActivate(id)}

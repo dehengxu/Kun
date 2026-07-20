@@ -31,6 +31,7 @@ import { resolveUserInput } from './user-inputs.js'
 import { resumeSession } from './sessions.js'
 import { usageJsonResponse } from './usage.js'
 import { llmDebugRoundsResponse } from './debug-llm.js'
+import { modelRequestsResponse } from './model-requests.js'
 import { runtimeInfoJsonResponse, runtimeToolDiagnosticsJsonResponse } from './runtime-info.js'
 import { applyRuntimeConfig } from './runtime-config.js'
 import { listSkills } from './skills.js'
@@ -93,6 +94,7 @@ import {
  * - `GET /v1/workspace/status` (auth)
  * - `GET/POST /v1/threads` (auth)
  * - `GET/PATCH/DELETE /v1/threads/{id}` (auth)
+ * - `GET /v1/threads/{id}/model-requests` (auth)
  * - `POST /v1/threads/{id}/fork` (auth)
  * - `POST /v1/threads/{id}/summarize` (auth)
  * - `GET/POST/DELETE /v1/threads/{id}/goal` (auth)
@@ -281,6 +283,10 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('GET', '/v1/threads/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return getThread(runtime.threadService, ctx.params.id, runtime.sessionStore, runtime.userInputGate)
+  })
+  router.add('GET', '/v1/threads/:id/model-requests', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return modelRequestsResponse(runtime, ctx.params.id, request)
   })
   router.add('PATCH', '/v1/threads/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

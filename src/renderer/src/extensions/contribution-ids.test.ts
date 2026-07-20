@@ -16,6 +16,9 @@ describe('right panel contribution identity migration', () => {
     )
     expect(normalizeStoredRightPanelId('sdd-ai')).toBe(BUILTIN_RIGHT_PANEL_IDS.sddAi)
     expect(normalizeStoredRightPanelId('canvas')).toBe(BUILTIN_RIGHT_PANEL_IDS.canvas)
+    expect(normalizeStoredRightPanelId('agent-perspective')).toBe(
+      BUILTIN_RIGHT_PANEL_IDS.agentPerspective
+    )
   })
 
   it('preserves valid extension IDs and ignores stale or malformed layout values', () => {

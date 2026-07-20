@@ -267,6 +267,9 @@ export async function createKunServeRuntime(
   const ids = new RandomIdGenerator()
   const nowIso = () => new Date().toISOString()
   const allocateSeq = (threadId: string) => eventBus.allocateSeq(threadId)
+  // Agent Perspective is always available for HTTP-backed model providers.
+  // Records are private, thread-scoped JSONL under the configured data dir.
+  const llmDebug = new LlmDebugRecorder({ dataDir: activeOptions.dataDir })
   const agentObservability = createAgentObservabilityRecorder({
     config: activeOptions.observability,
     dataDir: activeOptions.dataDir
@@ -303,11 +306,12 @@ export async function createKunServeRuntime(
       abortThreadExecution?.(threadId)
       await stopThreadAuxiliaryWork?.(threadId)
     },
-    onDeleted: (threadId) => {
+    onDeleted: async (threadId) => {
       eventStreamRegistry.closeThread(threadId)
       usageService.reset(threadId)
       events.clearThread(threadId)
       eventBus.clearThread(threadId)
+      await llmDebug.deleteThread(threadId)
     }
   })
   const artifactStore = new FileArtifactStore(join(activeOptions.dataDir, 'artifacts'), nowIso)
@@ -316,7 +320,6 @@ export async function createKunServeRuntime(
     models: activeOptions.models
   })
   const modelCapabilities = (model: string) => modelCapabilitiesForModel(model, modelProfiles)
-  const llmDebug = activeOptions.runtime?.llmDebug?.enabled ? new LlmDebugRecorder() : undefined
   // Providers whose kind is 'agent-sdk' don't get an HTTP client — their turns
   // are delegated to the embedded Claude Agent SDK (subscription) instead.
   const agentSdkProviderIds = agentSdkProviderIdsForOptions(activeOptions)
@@ -1729,6 +1732,7 @@ export async function createKunServeRuntime(
 	        await migrationImportService.shutdown()
       } finally {
         try {
+          await llmDebug.shutdown()
           await agentObservability?.shutdown()
         } finally {
           await stores.shutdown?.()

@@ -93,4 +93,23 @@ describe('CodeRightPanelTabs', () => {
     expect(renderer!.root.findAll((node) => node.props.role === 'tab')).toHaveLength(0)
     expect(renderer!.root.findAllByProps({ 'aria-label': 'Open right workspace tool' })).toHaveLength(0)
   })
+
+  it('labels the Agent Perspective singleton tab for assistive technology', () => {
+    let renderer: ReactTestRenderer
+    act(() => {
+      renderer = create(createElement(CodeRightPanelTabs, {
+        state: openCodeRightTab(emptyCodeRightTabsState(), BUILTIN_RIGHT_PANEL_IDS.agentPerspective),
+        domIdPrefix: 'agent-perspective-tabs',
+        sideConversationCount: 0,
+        sideConversationRunningCount: 0,
+        extensionItems: [],
+        onActivate: vi.fn(),
+        onClose: vi.fn(),
+        onCollapse: vi.fn()
+      }))
+    })
+    const tab = renderer!.root.findByProps({ role: 'tab' })
+    expect(tab.props['aria-label']).toBe('Agent Perspective')
+    expect(textContent(tab)).toBe('Agent Perspective')
+  })
 })

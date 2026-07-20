@@ -117,6 +117,11 @@ export function kunThreadEventsPath(threadId: string): string {
   return `${kunThreadPath(threadId)}/events`
 }
 
+export const KUN_THREAD_MODEL_REQUESTS_TEMPLATE = '/v1/threads/{id}/model-requests'
+export function kunThreadModelRequestsPath(threadId: string): string {
+  return `${kunThreadPath(threadId)}/model-requests`
+}
+
 export const KUN_APPROVAL_TEMPLATE = '/v1/approvals/{id}'
 export function kunApprovalPath(approvalId: string): string {
   return `/v1/approvals/${encodeURIComponent(approvalId)}`

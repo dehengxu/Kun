@@ -177,19 +177,27 @@ export class CompatModelClient implements ModelClient {
       yield* this.streamInner(request, null)
       return
     }
-    const round = sink.start({
+    const round = ignoreModelTraceFailure(() => sink.start({
       threadId: request.threadId,
       turnId: request.turnId,
       provider: this.provider,
       model: request.model?.trim() || this.config.model
-    })
+    })) ?? null
+    if (!round) {
+      yield* this.streamInner(request, null)
+      return
+    }
     try {
       for await (const chunk of this.streamInner(request, round)) {
-        sink.captureChunk(round, chunk)
+        ignoreModelTraceFailure(() => sink.captureChunk(round, chunk))
         yield chunk
       }
     } finally {
-      sink.finish(round)
+      try {
+        await sink.finish(round)
+      } catch {
+        warnModelTraceFailure()
+      }
     }
   }
 
@@ -217,9 +225,6 @@ export class CompatModelClient implements ModelClient {
     const url = buildModelEndpointUrl(this.config.baseUrl, configuredEndpointFormat)
     const stream = request.stream ?? !this.config.nonStreaming
     const body = this.buildRequestBody(request, stream, { endpointFormat })
-    if (round) {
-      this.config.debugSink?.captureRequest(round, body, redactUrlForLog(url))
-    }
     const headers = this.buildHeaders(
       stream,
       endpointFormat,
@@ -230,7 +235,17 @@ export class CompatModelClient implements ModelClient {
     const modelStreamLimits = normalizeModelStreamLimits(this.config.streamLimits)
     const maxErrorBodyBytes = Math.min(modelStreamLimits.maxTotalBytes, 1 * 1024 * 1024)
     const retryStatuses = new Set(retry.httpStatusCodes)
-    let result = await this.postChatCompletion(url, headers, body, request.abortSignal)
+    let attemptOrdinal = 0
+    const post = (
+      requestBody: Record<string, unknown>,
+      reason: 'initial' | 'transport_retry' | 'stream_options_fallback'
+    ) => this.postChatCompletion(url, headers, requestBody, request.abortSignal, {
+      round,
+      endpointFormat,
+      attempt: ++attemptOrdinal,
+      reason
+    })
+    let result = await post(body, 'initial')
     for (let attempt = 0; attempt < retry.maxAttempts; attempt += 1) {
       if (result.kind === 'error') break
       if (result.response.ok || !retryStatuses.has(result.response.status)) break
@@ -249,7 +264,7 @@ export class CompatModelClient implements ModelClient {
         yield { kind: 'error', message: 'request was aborted during retry backoff' }
         return
       }
-      result = await this.postChatCompletion(url, headers, body, request.abortSignal)
+      result = await post(body, 'transport_retry')
     }
     if (result.kind === 'error') {
       yield { kind: 'error', message: result.message }
@@ -269,8 +284,7 @@ export class CompatModelClient implements ModelClient {
       const text = errorBody.text
       if (usesChatCompletionsShape(endpointFormat) && shouldRetryWithoutStreamUsage(response.status, text, body)) {
         const retryBody = this.buildRequestBody(request, stream, { endpointFormat, includeStreamUsage: false })
-        if (round) this.config.debugSink?.captureRequest(round, retryBody, redactUrlForLog(url))
-        const retry = await this.postChatCompletion(url, headers, retryBody, request.abortSignal)
+        const retry = await post(retryBody, 'stream_options_fallback')
         if (retry.kind === 'error') {
           yield { kind: 'error', message: retry.message }
           return
@@ -424,17 +438,45 @@ export class CompatModelClient implements ModelClient {
     url: string,
     headers: Record<string, string>,
     body: Record<string, unknown>,
-    signal: AbortSignal
+    signal: AbortSignal,
+    trace: {
+      round: LlmDebugRound | null
+      endpointFormat: ModelEndpointFormat
+      attempt: number
+      reason: 'initial' | 'transport_retry' | 'stream_options_fallback'
+    }
   ): Promise<{ kind: 'response'; response: Response } | { kind: 'error'; message: string }> {
+    const bodyText = JSON.stringify(body)
+    const traceRound = trace.round
+    const traceSink = this.config.debugSink
+    const traceRecord = traceRound && traceSink
+      ? ignoreModelTraceFailure(() => traceSink.beginHttpAttempt(traceRound, {
+          endpointFormat: trace.endpointFormat,
+          attempt: trace.attempt,
+          reason: trace.reason,
+          url,
+          headers,
+          bodyText,
+          secretValues: [this.config.apiKey]
+        }))
+      : undefined
     try {
       const response = await this.fetchImpl(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body: bodyText,
         signal
       })
+      if (traceRound && traceSink && traceRecord) {
+        ignoreModelTraceFailure(() => {
+          traceSink.captureHttpResponse(traceRound, traceRecord, response)
+        })
+      }
       return { kind: 'response', response }
     } catch (error) {
+      if (traceRecord) {
+        ignoreModelTraceFailure(() => traceSink?.captureHttpError(traceRecord, error))
+      }
       const message = error instanceof Error ? error.message : String(error)
       // Only blame the proxy for genuine transport failures. A user-initiated
       // abort (turn cancelled, idle-timeout watchdog) also surfaces here as an
@@ -1044,6 +1086,23 @@ function normalizeModelStreamLimits(input: Partial<ModelStreamLimits> | undefine
       DEFAULT_MODEL_STREAM_LIMITS.maxCompletedToolArgumentBytes
     )
   }
+}
+
+let modelTraceFailureWarned = false
+
+function ignoreModelTraceFailure<T>(operation: () => T): T | undefined {
+  try {
+    return operation()
+  } catch {
+    warnModelTraceFailure()
+    return undefined
+  }
+}
+
+function warnModelTraceFailure(): void {
+  if (modelTraceFailureWarned) return
+  modelTraceFailureWarned = true
+  console.warn('[kun:model] model request observability capture failed; the provider request continues unchanged')
 }
 
 type LimitedResponseJson =

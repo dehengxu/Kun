@@ -58,6 +58,9 @@ const SideConversationPanel = lazy(() =>
 const McpSkillsPanel = lazy(() =>
   import('./McpSkillsPanel').then((module) => ({ default: module.McpSkillsPanel }))
 )
+const AgentPerspectivePanel = lazy(() =>
+  import('./AgentPerspectivePanel').then((module) => ({ default: module.AgentPerspectivePanel }))
+)
 
 type WriteAssistantPanelProps = ComponentProps<typeof WriteAssistantPanel>
 type SddAssistantPanelProps = ComponentProps<typeof SddAssistantPanel>
@@ -68,6 +71,8 @@ type WorkspaceFilePreviewPanelProps = ComponentProps<typeof WorkspaceFilePreview
 
 export type WorkbenchCodeRightWorkspaceProps = {
   state: CodeRightTabsState
+  activeThreadId: string | null
+  threadRunning: boolean
   sideConversationCount: number
   sideConversationRunningCount: number
   files: WorkbenchFileTreeSidePanelProps
@@ -284,6 +289,15 @@ function CodeRightPanelWorkspace({
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.mcpSkills) {
       return <McpSkillsPanel workspaceRoot={workspaceRoot} onOpenSettings={mcpSkills.onOpenSettings} />
+    }
+    if (id === BUILTIN_RIGHT_PANEL_IDS.agentPerspective) {
+      return (
+        <AgentPerspectivePanel
+          threadId={code.activeThreadId}
+          active={visible && code.state.activeId === id}
+          threadRunning={code.threadRunning}
+        />
+      )
     }
     if (isExtensionContributionId(id)) {
       const contribution = code.extensionViews.find((view) => view.id === id)
