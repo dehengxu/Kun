@@ -48,6 +48,18 @@ The Advanced Local Relay workspace SHALL separately report local persistence and
 - **WHEN** a route edit has been saved but Kun reports a different effective configuration
 - **THEN** the UI reports synchronization pending and disables complete-chain testing with an actionable reason
 
+#### Scenario: Synchronization takes longer than the UI threshold
+- **WHEN** Runtime synchronization remains in progress while the saved and effective configurations differ
+- **THEN** the UI continues to report synchronization pending and does not infer failure from elapsed time
+
+#### Scenario: Runtime synchronization explicitly fails
+- **WHEN** the main process reports that the latest hot apply or fallback restart failed
+- **THEN** the UI reports synchronization failure with the returned reason while retaining the locally saved route configuration
+
+#### Scenario: Rapid route edits are coalesced
+- **WHEN** multiple automatic saves occur while a Runtime apply is already running
+- **THEN** the current apply is allowed to finish and only the newest pending configuration is applied next
+
 #### Scenario: Runtime is unavailable
 - **WHEN** the route status endpoint cannot be reached
 - **THEN** the UI reports that local settings remain saved, identifies Runtime as unavailable, and does not start a chain test

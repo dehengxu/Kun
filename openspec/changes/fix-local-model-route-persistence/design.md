@@ -37,16 +37,22 @@ Startup configuration, hot apply, model catalog construction, Runtime comparison
 
 Settings remain atomically persisted before the existing asynchronous Runtime apply. If process-critical settings require rollback, the rollback merge will preserve the newest `routePools` and `localGateway` rather than restoring those fields from the old provider snapshot. A route-only apply failure will be reported as unsynchronized and will not rewrite desired routing settings.
 
-### Compare effective configuration for synchronization
+### Compare effective configuration and report apply state
 
 `GET /v1/model-routes` will add the effective local gateway enabled state while retaining existing fields. The renderer will compare the full saved executable projection with the returned Runtime pools and gateway state. Save status comes from the existing settings persistence pipeline; Runtime state comes from authenticated status polling. A chain test is enabled only when persistence is complete, the selected pool is executable, and the effective configurations match.
 
-This avoids a second revision protocol and keeps the Runtime status endpoint authoritative for what is actually active.
+The Electron main process will additionally publish a non-persistent settings-sync state over IPC. A configuration mismatch remains pending for any duration; only an explicit failed apply/restart result may be presented as synchronization failure. Runtime status remains authoritative for what is actually active, while the main-process state explains whether the latest background apply is queued, complete, unavailable, or failed.
+
+### Coalesce automatic-save Runtime applies
+
+Settings are saved independently and may arrive faster than Kun can hot-apply them. The managed Runtime operation coordinator will run at most one apply and retain only the newest pending apply. Intermediate pending snapshots are replaced, while the latest desired settings anchor is preserved. Sync-state generations prevent completion or failure from an older in-flight apply from overwriting the state of a newer edit.
 
 ## Risks / Trade-offs
 
 - [A dangling target can remain stored indefinitely] → Render a prominent invalid-reference state with replace and delete actions; never expose it in executable model lists.
 - [Runtime comparison can be sensitive to ordering] → Compare a canonical projection with stable field ordering while preserving target order because priority routing depends on it.
+- [A slow apply can look indistinguishable from a failed apply] → Keep mismatched configurations pending until the main process reports an explicit failure; do not infer failure from an elapsed UI timer.
+- [Rapid field edits can enqueue redundant hot applies] → Coalesce pending applies to the newest snapshot and ignore stale sync-state completions by generation.
 - [A mixed settings save can roll back provider transport but retain route references to the rejected provider state] → Preserve the routes as invalid, visible repairable intent rather than deleting them.
 - [The existing settings file could be overwritten by a still-running affected build] → Create one permission-preserving pre-fix backup before implementation and do not use it as a second source of truth.
 

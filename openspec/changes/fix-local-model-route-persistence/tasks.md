@@ -21,3 +21,10 @@
 - [x] 4.1 Add Runtime projection/status and route-editor interaction tests covering stopped, pending, synchronized, and invalid-reference states
 - [x] 4.2 Run relevant Vitest suites, typecheck, Kun build, and top-level build
 - [x] 4.3 Verify a close/reload persistence smoke flow, complete the OpenSpec checklist, and create the requested local commit
+
+## 5. Follow-up Runtime Synchronization Fix
+
+- [x] 5.1 Coalesce consecutive pending settings applies so only the latest saved Runtime projection remains queued
+- [x] 5.2 Expose non-persistent main-process Runtime settings-sync state through typed IPC with stale-generation protection
+- [x] 5.3 Remove elapsed-time failure inference from the route UI and show explicit pending, unavailable, synchronized, and failed states
+- [x] 5.4 Add queue, IPC, and renderer regression coverage and rerun the relevant validation matrix

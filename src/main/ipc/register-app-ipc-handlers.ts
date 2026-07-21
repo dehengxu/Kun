@@ -33,6 +33,7 @@ import type {
   ClawImInstallQrResult,
   ConversationWorkspaceCreateResult,
   DesktopCommand,
+  KunRuntimeSettingsSyncStatusPayload,
   RuntimeRequestResult,
   SystemNotificationResult,
   TurnCompleteNotificationPayload,
@@ -310,6 +311,7 @@ type RegisterAppIpcHandlersOptions = {
     body?: string,
     headers?: Record<string, string>
   ) => Promise<RuntimeRequestResult>
+  getRuntimeSettingsSyncStatus: () => KunRuntimeSettingsSyncStatusPayload
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   getClawRuntime: () => ClawRuntime | null
@@ -542,6 +544,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     applySettingsPatch,
     saveSettingsPatch,
     runtimeRequest,
+    getRuntimeSettingsSyncStatus,
     restartRuntime,
     fetchUpstreamModels,
     getClawRuntime,
@@ -862,6 +865,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
 
   ipcMain.handle('runtime:restart', async () => restartRuntime())
+  ipcMain.handle('runtime:settings-sync-status:get', () => getRuntimeSettingsSyncStatus())
 
   ipcMain.handle('upstream:models', async () => fetchUpstreamModels())
 

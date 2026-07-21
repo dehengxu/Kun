@@ -230,7 +230,105 @@ describe('ModelRoutesSettings', () => {
     const testButton = renderer!.root.findAllByType('button').find((button) => textContent(button).includes('等待配置同步'))
     expect(testButton?.props.disabled).toBe(true)
     expect(textContent(renderer!.root)).toContain('本地配置已保存，正在等待 Kun Runtime')
+    expect(textContent(renderer!.root)).toContain('等待 Kun Runtime 同步')
+    expect(textContent(renderer!.root)).not.toContain('Kun Runtime 同步失败')
     expect(runtimeRequest.mock.calls.some((call) => call[1] === 'POST')).toBe(false)
+
+    await act(async () => { renderer!.unmount() })
+  })
+
+  it('shows synchronization failure only when the main process reports one', async () => {
+    const draft = settings()
+    vi.stubGlobal('window', {
+      kunGui: {
+        runtimeRequest: vi.fn(async () => ({
+          ok: true,
+          status: 200,
+          body: routeStatus(draft, [], [])
+        })),
+        getRuntimeSettingsSyncStatus: vi.fn(async () => ({
+          state: 'failed' as const,
+          generation: 4,
+          message: 'hot apply rejected the route config',
+          at: '2026-07-22T08:00:00.000Z'
+        })),
+        onRuntimeSettingsSyncStatus: vi.fn(() => () => undefined)
+      }
+    })
+
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = createRenderer(createElement(ModelRoutesSettings, {
+        settings: draft,
+        onChange: () => undefined,
+        saveStatus: 'saved'
+      }))
+      await Promise.resolve()
+    })
+
+    const content = textContent(renderer!.root)
+    expect(content).toContain('Kun Runtime 同步失败')
+    expect(content).toContain('hot apply rejected the route config')
+    expect(content).toContain('本地配置已保存，但 Kun Runtime 同步失败')
+
+    await act(async () => { renderer!.unmount() })
+  })
+
+  it('does not let an older status snapshot overwrite a newer sync event', async () => {
+    const draft = settings()
+    let resolveSnapshot!: (value: {
+      state: 'syncing'
+      generation: number
+      at: string
+    }) => void
+    let statusHandler!: (value: {
+      state: 'failed'
+      generation: number
+      message: string
+      at: string
+    }) => void
+    vi.stubGlobal('window', {
+      kunGui: {
+        runtimeRequest: vi.fn(async () => ({
+          ok: true,
+          status: 200,
+          body: routeStatus(draft, [], [])
+        })),
+        getRuntimeSettingsSyncStatus: vi.fn(() => new Promise((resolve) => {
+          resolveSnapshot = resolve
+        })),
+        onRuntimeSettingsSyncStatus: vi.fn((handler) => {
+          statusHandler = handler
+          return () => undefined
+        })
+      }
+    })
+
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = createRenderer(createElement(ModelRoutesSettings, {
+        settings: draft,
+        onChange: () => undefined,
+        saveStatus: 'saved'
+      }))
+    })
+    await act(async () => {
+      statusHandler({
+        state: 'failed',
+        generation: 5,
+        message: 'latest apply failed',
+        at: '2026-07-22T08:00:05.000Z'
+      })
+      resolveSnapshot({
+        state: 'syncing',
+        generation: 4,
+        at: '2026-07-22T08:00:04.000Z'
+      })
+      await Promise.resolve()
+    })
+
+    expect(textContent(renderer!.root)).toContain('Kun Runtime 同步失败')
+    expect(textContent(renderer!.root)).toContain('latest apply failed')
 
     await act(async () => { renderer!.unmount() })
   })

@@ -169,6 +169,13 @@ export type KunRuntimeStatusPayload = {
   at: string
 }
 
+export type KunRuntimeSettingsSyncStatusPayload = {
+  state: 'idle' | 'syncing' | 'synced' | 'unavailable' | 'failed'
+  generation: number
+  message?: string
+  at: string
+}
+
 export type RuntimeRequestResult = { ok: boolean; status: number; body: string }
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
 export type LocalFilesPickResult = { canceled: boolean; paths: string[] }
@@ -521,6 +528,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   setSettings: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   saveSettingsSilent: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   runtimeRequest: (path: string, method?: string, body?: string) => Promise<RuntimeRequestResult>
+  getRuntimeSettingsSyncStatus: () => Promise<KunRuntimeSettingsSyncStatusPayload>
   uploadRuntimeImageAttachment: (
     request: RuntimeImageAttachmentUploadRequest
   ) => Promise<RuntimeImageAttachmentUploadResult>
@@ -749,6 +757,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   onClawChannelActivity: (handler: (payload: ClawChannelActivityPayload) => void) => () => void
   onTrayAction: (handler: (payload: TrayActionPayload) => void) => () => void
   onRuntimeStatus: (handler: (payload: KunRuntimeStatusPayload) => void) => () => void
+  onRuntimeSettingsSyncStatus: (
+    handler: (payload: KunRuntimeSettingsSyncStatusPayload) => void
+  ) => () => void
   mirrorClawChannelMessage: (
     threadId: string,
     text: string,

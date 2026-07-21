@@ -122,6 +122,11 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     applySettingsPatch,
     saveSettingsPatch,
     runtimeRequest: vi.fn() as never,
+    getRuntimeSettingsSyncStatus: () => ({
+      state: 'idle' as const,
+      generation: 0,
+      at: '2026-07-22T00:00:00.000Z'
+    }),
     restartRuntime: vi.fn(async () => undefined),
     fetchUpstreamModels: vi.fn() as never,
     getClawRuntime: () => null,
@@ -676,6 +681,24 @@ describe('registerAppIpcHandlers', () => {
 
     await expect(handlers.get('runtime:restart')?.({})).resolves.toBeUndefined()
     expect(restartRuntime).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns the current Runtime settings synchronization status', async () => {
+    registerAppIpcHandlers(registerOptions({
+      getRuntimeSettingsSyncStatus: () => ({
+        state: 'failed',
+        generation: 7,
+        message: 'hot apply failed',
+        at: '2026-07-22T08:00:00.000Z'
+      })
+    }))
+
+    expect(handlers.get('runtime:settings-sync-status:get')?.({})).toEqual({
+      state: 'failed',
+      generation: 7,
+      message: 'hot apply failed',
+      at: '2026-07-22T08:00:00.000Z'
+    })
   })
 
   it('saves generated files to a user-selected path', async () => {

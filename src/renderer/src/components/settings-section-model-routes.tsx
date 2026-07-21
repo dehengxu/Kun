@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type DragEvent, type ReactElement } from 'react'
 import type { ModelProviderSettingsV1, ModelRoutePoolV1, ModelRouteStrategy } from '@shared/app-settings'
+import type { KunRuntimeSettingsSyncStatusPayload } from '@shared/kun-gui-api'
 import {
   DEFAULT_MODEL_ROUTE_FAILURE_POLICY,
   DEFAULT_MODEL_ROUTE_HEALTH_POLICY,
@@ -74,7 +75,7 @@ export function ModelRoutesSettings({
   const [selectedId, setSelectedId] = useState(settings.routePools[0]?.id ?? '')
   const [status, setStatus] = useState<RouteStatus | null>(null)
   const [statusError, setStatusError] = useState('')
-  const [syncWaitExpired, setSyncWaitExpired] = useState(false)
+  const [runtimeSyncStatus, setRuntimeSyncStatus] = useState<KunRuntimeSettingsSyncStatusPayload | null>(null)
   const [startPending, setStartPending] = useState(false)
   const [startError, setStartError] = useState('')
   const selected = settings.routePools.find((pool) => pool.id === selectedId) ?? settings.routePools[0]
@@ -84,8 +85,6 @@ export function ModelRoutesSettings({
     () => runtimeConfigurationMatches(executablePools, settings.localGateway.enabled, status),
     [executablePools, settings.localGateway.enabled, status]
   )
-  const runtimeStatusAvailable = status !== null
-
   useEffect(() => {
     if (!selected && settings.routePools[0]) setSelectedId(settings.routePools[0].id)
   }, [selected, settings.routePools])
@@ -107,15 +106,34 @@ export function ModelRoutesSettings({
     const interval = globalThis.setInterval(() => { void refreshStatus() }, 1_000)
     return () => globalThis.clearInterval(interval)
   }, [refreshStatus])
-  useEffect(() => { setStartError('') }, [selected?.id])
   useEffect(() => {
-    if (!runtimeStatusAvailable || configurationSynced || saveStatus === 'saving' || saveStatus === 'error') {
-      setSyncWaitExpired(false)
-      return
+    let active = true
+    if (typeof window.kunGui.getRuntimeSettingsSyncStatus === 'function') {
+      void window.kunGui.getRuntimeSettingsSyncStatus()
+        .then((next) => {
+          if (active) {
+            setRuntimeSyncStatus((current) =>
+              current && current.generation > next.generation ? current : next
+            )
+          }
+        })
+        .catch(() => undefined)
     }
-    const timeout = globalThis.setTimeout(() => setSyncWaitExpired(true), 8_000)
-    return () => globalThis.clearTimeout(timeout)
-  }, [runtimeStatusAvailable, configurationSynced, saveStatus])
+    const unsubscribe = typeof window.kunGui.onRuntimeSettingsSyncStatus === 'function'
+      ? window.kunGui.onRuntimeSettingsSyncStatus((next) => {
+          if (active) {
+            setRuntimeSyncStatus((current) =>
+              current && current.generation > next.generation ? current : next
+            )
+          }
+        })
+      : undefined
+    return () => {
+      active = false
+      unsubscribe?.()
+    }
+  }, [])
+  useEffect(() => { setStartError('') }, [selected?.id])
 
   const updatePool = (patch: Partial<ModelRoutePoolV1>): void => {
     if (!selected) return
@@ -211,13 +229,18 @@ export function ModelRoutesSettings({
     : saveStatus === 'error'
       ? '本地保存失败'
       : '已保存到本地'
-  const runtimeSyncLabel = !status
-    ? 'Kun Runtime 未连接'
-    : configurationSynced
-      ? 'Kun Runtime 已同步'
-      : syncWaitExpired
+  const runtimeSyncFailed = Boolean(
+    !configurationSynced && runtimeSyncStatus?.state === 'failed'
+  )
+  const runtimeSyncLabel = configurationSynced
+    ? 'Kun Runtime 已同步'
+    : runtimeSyncFailed
         ? 'Kun Runtime 同步失败'
-        : '正在同步到 Kun Runtime'
+        : !status
+          ? runtimeSyncStatus?.state === 'unavailable' ? 'Kun Runtime 未运行' : 'Kun Runtime 未连接'
+          : runtimeSyncStatus?.state === 'syncing'
+              ? '正在同步到 Kun Runtime'
+              : '等待 Kun Runtime 同步'
 
   return (
     <div className="grid min-h-[620px] gap-4 p-4 lg:grid-cols-[280px_minmax(0,1fr)]">
@@ -268,6 +291,8 @@ export function ModelRoutesSettings({
           <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
             configurationSynced
               ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-200'
+              : runtimeSyncFailed
+                ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-200'
               : status
                 ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200'
                 : 'bg-ds-card text-ds-muted'
@@ -279,6 +304,7 @@ export function ModelRoutesSettings({
           ) : null}
           {saveStatus === 'error' && saveError ? <span className="min-w-0 truncate text-[11px] text-red-600" title={saveError}>{saveError}</span> : null}
           {!status && statusError ? <span className="min-w-0 truncate text-[11px] text-ds-faint" title={statusError}>本地配置不受影响；Kun 启动后会自动同步。</span> : null}
+          {runtimeSyncFailed && runtimeSyncStatus?.message ? <span className="min-w-0 truncate text-[11px] text-red-600" title={runtimeSyncStatus.message}>{runtimeSyncStatus.message}</span> : null}
         </div>
       </section>
       <aside className="grid min-w-0 content-start gap-3 border-b border-ds-border-muted pb-4 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4">
@@ -395,7 +421,7 @@ export function ModelRoutesSettings({
             {startError ? <div className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-700">{startError}</div> : null}
             {selected.enabled && !runtimeReady ? (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-700">
-                {chainTestBlockedReason({ saveStatus, status, statusError, configurationSynced, selectedHasExecutableTarget, invalidTargetCount })}
+                {chainTestBlockedReason({ saveStatus, status, statusError, runtimeSyncStatus, configurationSynced, selectedHasExecutableTarget, invalidTargetCount })}
               </div>
             ) : null}
 
@@ -528,6 +554,7 @@ function chainTestBlockedReason(input: {
   saveStatus: 'idle' | 'saving' | 'saved' | 'error'
   status: RouteStatus | null
   statusError: string
+  runtimeSyncStatus: KunRuntimeSettingsSyncStatusPayload | null
   configurationSynced: boolean
   selectedHasExecutableTarget: boolean
   invalidTargetCount: number
@@ -538,6 +565,9 @@ function chainTestBlockedReason(input: {
     return input.invalidTargetCount > 0
       ? `当前路由有 ${input.invalidTargetCount} 个失效引用且没有可执行目标，请先替换供应商或模型。`
       : '当前路由没有已启用的有效目标，请先添加或启用一个目标。'
+  }
+  if (!input.configurationSynced && input.runtimeSyncStatus?.state === 'failed') {
+    return `本地配置已保存，但 Kun Runtime 同步失败。${input.runtimeSyncStatus.message ? ` ${input.runtimeSyncStatus.message}` : '请检查 Runtime 日志后重试保存。'}`
   }
   if (!input.status) return `本地配置已保存，但 Kun Runtime 当前不可用；启动后会自动同步。${input.statusError ? ` ${input.statusError}` : ''}`
   if (!input.configurationSynced) return '本地配置已保存，正在等待 Kun Runtime 应用相同的路由池和本地 API 状态。'

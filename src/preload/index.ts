@@ -78,6 +78,8 @@ const api = {
     ipcRenderer.invoke('settings:save-silent', partial),
   runtimeRequest: (path, method, body) =>
     ipcRenderer.invoke('runtime:request', { path, method, body }),
+  getRuntimeSettingsSyncStatus: () =>
+    ipcRenderer.invoke('runtime:settings-sync-status:get'),
   uploadRuntimeImageAttachment: (request) =>
     ipcRenderer.invoke('runtime:attachment:upload-image', request),
   resolveKunApproval: (request) => ipcRenderer.invoke('approval:decide', request),
@@ -371,6 +373,14 @@ const api = {
     ) => handler(payload)
     ipcRenderer.on('runtime:status', wrapped)
     return () => ipcRenderer.removeListener('runtime:status', wrapped)
+  },
+  onRuntimeSettingsSyncStatus: (handler) => {
+    const wrapped = (
+      _: Electron.IpcRendererEvent,
+      payload: Parameters<typeof handler>[0]
+    ) => handler(payload)
+    ipcRenderer.on('runtime:settings-sync-status', wrapped)
+    return () => ipcRenderer.removeListener('runtime:settings-sync-status', wrapped)
   },
   mirrorClawChannelMessage: (threadId, text, direction) =>
     ipcRenderer.invoke('claw:channel:mirror', { threadId, text, direction }),
