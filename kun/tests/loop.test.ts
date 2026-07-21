@@ -191,7 +191,8 @@ describe('AgentLoop', () => {
     const instructions = request.contextInstructions?.join('\n') ?? ''
     expect(instructions).toContain('Specialized source-code MCP tools are available')
     expect(instructions).toContain('`mcp_semantic_find_symbol`')
-    expect(instructions).toContain('before broad `read`/`grep`/`find`/`ls` scans')
+    expect(instructions).toContain('before broad scans')
+    expect(instructions).toContain('Use `read`, `grep`, `find`, `ls`, `repo_map` for unsupported files')
   })
 
   it('records elapsed seconds for active goals after a turn finishes', async () => {

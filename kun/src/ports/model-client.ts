@@ -51,10 +51,16 @@ export type ModelRequest = {
   accountId?: string
   systemPrompt?: string
   /**
+   * Optional thread-scoped persona/profile. Emitted as a separate system
+   * message after the stable Kun contract so per-thread customization never
+   * mutates the immutable prefix field.
+   */
+  threadProfileInstruction?: string
+  /**
    * Optional mode-scoped instruction (e.g. Plan mode guidance). Emitted
-   * as a second system message immediately after the byte-stable
-   * `systemPrompt` so the cached prefix stays unchanged while the mode
-   * note still rides at the front of the request.
+   * after the byte-stable `systemPrompt` and optional thread profile so
+   * the cached prefix stays unchanged while the mode note still rides at
+   * the front of the request.
    */
   modeInstruction?: string
   /**
