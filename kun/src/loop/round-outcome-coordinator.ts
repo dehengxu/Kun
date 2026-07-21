@@ -426,6 +426,7 @@ export class RoundOutcomeCoordinator {
       activePlanContext: prepared.activePlanContext,
       guiDesignCanvas: input.turn.guiDesignCanvas === true,
       guiDesignMode: input.turn.guiDesignMode === true,
+      agentSurface: input.turn.agentSurface ?? 'code',
       guiDesignArtifact: input.turn.guiDesignArtifact,
       modelProviderId: input.modelProviderId,
       modelCapabilities: prepared.modelCapabilities,

@@ -73,6 +73,7 @@ const ChildRoutingMetadata = z.object({
   ]),
   selectedKind: z.enum(['profile', 'skill', 'custom', 'generated']),
   selectedId: z.string().min(1),
+  agentSurface: z.enum(['code', 'write', 'design']).optional(),
   reason: z.string().max(2_000).optional(),
   confidence: z.number().min(0).max(1).optional(),
   candidates: z.array(z.object({
@@ -94,10 +95,19 @@ const ChildRoutingMetadata = z.object({
 }).strict()
 export type ChildRoutingMetadata = z.infer<typeof ChildRoutingMetadata>
 
+export function profileAvailableOnSurface(
+  profile: Pick<SubagentProfileConfig, 'surfaces'>,
+  surface: 'code' | 'write' | 'design'
+): boolean {
+  const surfaces = profile.surfaces ?? ['shared']
+  return surfaces.includes('shared') || surfaces.includes(surface)
+}
+
 export const ChildRunRecord = z.object({
   id: z.string().min(1),
   parentThreadId: z.string().min(1),
   parentTurnId: z.string().min(1),
+  agentSurface: z.enum(['code', 'write', 'design']).optional(),
   label: z.string().optional(),
   prompt: z.string().min(1),
   workspace: z.string().optional(),
@@ -320,6 +330,7 @@ export class DelegationRuntime {
       source?: 'builtin' | 'configured' | 'workspace' | 'custom' | 'generated'
     }
     routing?: ChildRoutingMetadata
+    agentSurface?: 'code' | 'write' | 'design'
     /** Optional task-level maximum applied after profile resolution. */
     toolPolicyCeiling?: 'readOnly'
     /** Immutable parent capability boundary captured by delegate_task. */
@@ -394,6 +405,10 @@ export class DelegationRuntime {
     if (profile?.mode === 'primary') {
       throw new Error(`subagent profile "${profileName}" is primary-session-only`)
     }
+    const agentSurface = input.agentSurface ?? 'code'
+    if (!inlineProfile && profile && !profileAvailableOnSurface(profile, agentSurface)) {
+      throw new Error(`subagent profile "${profileName}" is unavailable on the ${agentSurface} surface`)
+    }
     const toolPolicy = input.toolPolicyCeiling === 'readOnly'
       ? 'readOnly'
       : profile?.toolPolicy ?? config.defaultToolPolicy
@@ -435,6 +450,7 @@ export class DelegationRuntime {
       id,
       parentThreadId: input.parentThreadId,
       parentTurnId: input.parentTurnId,
+      agentSurface,
       label: input.label,
       prompt: input.prompt,
       workspace,
@@ -882,17 +898,23 @@ export class DelegationRuntime {
   /** Resolve one explicit profile once so routing and execution share a snapshot. */
   async resolveProfileSnapshot(
     profileId: string,
-    workspace?: string
+    workspace?: string,
+    agentSurface: 'code' | 'write' | 'design' = 'code'
   ): Promise<{ id: string; source: 'builtin' | 'configured' | 'workspace'; profile: SubagentProfileConfig } | undefined> {
     const id = profileId.trim()
     if (!id) return undefined
     if (workspace) {
       const hit = (await loadWorkspaceAgentProfiles(workspace)).find((entry) => entry.id === id)
-      if (hit) return { id, source: 'workspace', profile: hit.profile }
+      if (hit) {
+        return profileAvailableOnSurface(hit.profile, agentSurface)
+          ? { id, source: 'workspace', profile: hit.profile }
+          : undefined
+      }
     }
     if (!Object.prototype.hasOwnProperty.call(this.options.config.profiles, id)) return undefined
     const profile = this.options.config.profiles[id]
     if (!profile) return undefined
+    if (!profileAvailableOnSurface(profile, agentSurface)) return undefined
     return {
       id,
       source: BUILTIN_SUBAGENT_PROFILES[id] === profile ? 'builtin' : 'configured',
@@ -901,7 +923,10 @@ export class DelegationRuntime {
   }
 
   /** Trusted profiles visible to automatic routing. Workspace roles require explicit selection. */
-  async listRoutingProfiles(_workspace?: string): Promise<SubagentRoutingDocument[]> {
+  async listRoutingProfiles(
+    _workspace?: string,
+    agentSurface: 'code' | 'write' | 'design' = 'code'
+  ): Promise<SubagentRoutingDocument[]> {
     const profiles = new Map<string, SubagentProfileConfig>(Object.entries(this.options.config.profiles))
     const sources = new Map<string, 'builtin' | 'configured' | 'workspace'>(
       Object.entries(this.options.config.profiles).map(([id, profile]) => [
@@ -910,7 +935,7 @@ export class DelegationRuntime {
       ])
     )
     return [...profiles.entries()]
-      .filter(([, profile]) => profile.mode !== 'primary')
+      .filter(([, profile]) => profile.mode !== 'primary' && profileAvailableOnSurface(profile, agentSurface))
       .map(([id, profile]) => ({
         kind: 'profile' as const,
         id,

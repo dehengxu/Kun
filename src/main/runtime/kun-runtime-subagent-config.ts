@@ -51,7 +51,16 @@ function stripBlankProfileFields(profile: Record<string, unknown>): Record<strin
   const next: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(profile)) {
     if (typeof value === 'string' && value.trim() === '') continue
-    if (Array.isArray(value) && value.length === 0) continue
+    // An explicit empty surface list disables routing for this profile. Other
+    // empty deny/allow lists retain their historical "inherit" semantics.
+    if (Array.isArray(value) && value.length === 0 && key !== 'surfaces') continue
+    if (key === 'surfaces' && Array.isArray(value)) {
+      const surfaces = [...new Set(value.filter((entry) =>
+        entry === 'shared' || entry === 'code' || entry === 'write' || entry === 'design'
+      ))]
+      next[key] = surfaces.includes('shared') ? ['shared'] : surfaces
+      continue
+    }
     next[key] = value
   }
   return next

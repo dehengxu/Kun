@@ -921,6 +921,7 @@ export function createThreadActions(
             ...(overrides?.guiPlan ? { guiPlan: overrides.guiPlan } : {}),
             ...(overrides?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
             ...(overrides?.guiDesignMode ? { guiDesignMode: true } : {}),
+            ...(overrides?.agentSurface ? { agentSurface: overrides.agentSurface } : {}),
             ...(overrides?.guiDesignArtifact ? { guiDesignArtifact: overrides.guiDesignArtifact } : {}),
             ...(writeContext ? { writeContext } : {}),
             ...(attachmentIds?.length ? { attachmentIds } : {}),
@@ -1193,6 +1194,8 @@ export function createThreadActions(
       const runtimeDisplayText = channel ? displayText : (userDisplayText ?? trimmedText)
       const { turnId, userMessageItemId } = await p.sendUserMessage(activeThreadId, runtimeText, {
         mode,
+        agentSurface: queued?.agentSurface ?? overrides?.agentSurface ??
+          (writeContext || get().route === 'write' ? 'write' : guiDesignMode || get().route === 'design' ? 'design' : 'code'),
         ...(composerModel ? { model: composerModel } : {}),
         ...(!channel && composerProviderId ? { providerId: composerProviderId } : {}),
         ...(!channel && composerAccountId ? { accountId: composerAccountId } : {}),

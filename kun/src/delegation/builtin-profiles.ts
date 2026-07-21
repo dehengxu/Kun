@@ -14,6 +14,7 @@ import type {
 import { AGENT_SKILLS_SUBAGENT_PROFILES } from './agent-skills-profiles.js'
 import { WORKFLOW_SUBAGENT_PROFILES } from './workflow-subagent-profiles.js'
 import { BUILTIN_AGENT_CATALOG } from './builtin-agent-catalog.js'
+import { SURFACE_SPECIALIST_SUBAGENT_PROFILES } from './surface-specialist-profiles.js'
 
 /**
  * A read-only design reviewer. It inspects frontend code/prototypes and
@@ -139,7 +140,8 @@ const BUILTIN_SUBAGENT_PROFILE_BASES: Readonly<Record<string, SubagentProfileCon
   'design-reviewer': DESIGN_REVIEWER_PROFILE,
   'over-engineering-reviewer': OVER_ENGINEERING_REVIEWER_PROFILE,
   ...AGENT_SKILLS_SUBAGENT_PROFILES,
-  ...WORKFLOW_SUBAGENT_PROFILES
+  ...WORKFLOW_SUBAGENT_PROFILES,
+  ...SURFACE_SPECIALIST_SUBAGENT_PROFILES
 }
 
 /** All builtin profiles, keyed by their `delegate_task` profile name. */
@@ -152,7 +154,8 @@ export const BUILTIN_SUBAGENT_PROFILES: Readonly<Record<string, SubagentProfileC
       name: metadata.name,
       description: metadata.description,
       color: metadata.color,
-      toolPolicy: metadata.toolPolicy
+      toolPolicy: metadata.toolPolicy,
+      surfaces: [...metadata.surfaces]
     } satisfies SubagentProfileConfig]
   }))
 
@@ -166,15 +169,26 @@ export function mergeBuiltinSubagentProfiles(
   // name; a shallow `{ ...builtins, ...config.profiles }` would let that thin
   // override clobber the builtin's promptPreamble/description/systemPrompt.
   // Merging per id keeps those as fallbacks while the user's fields still win.
-  const profiles: Record<string, SubagentProfileConfig> = { ...config.profiles }
+  const profiles: Record<string, SubagentProfileConfig> = Object.fromEntries(
+    Object.entries(config.profiles).map(([id, profile]) => [id, canonicalSurfaceProfile(profile)])
+  )
   for (const [id, builtin] of Object.entries(BUILTIN_SUBAGENT_PROFILES)) {
     const override = config.profiles[id]
-    profiles[id] = override ? { ...builtin, ...override } : builtin
+    profiles[id] = canonicalSurfaceProfile(override ? { ...builtin, ...override } : builtin)
   }
+  profiles.general = { ...profiles.general, surfaces: ['shared'] }
   // Default a child with no explicit `profile` to the built-in `general`
   // profile (always present after the merge). Without this, an omitted profile
   // resolves to `undefined`, so the run carries no profile id — the GUI then
   // can't label the subagent and falls back to a generic name.
   const defaultProfile = config.defaultProfile ?? 'general'
   return { ...config, profiles, defaultProfile }
+}
+
+function canonicalSurfaceProfile(profile: SubagentProfileConfig): SubagentProfileConfig {
+  const surfaces = profile.surfaces ?? ['shared']
+  return {
+    ...profile,
+    surfaces: surfaces.includes('shared') ? ['shared'] : [...new Set(surfaces)]
+  }
 }

@@ -91,6 +91,7 @@ export type ToolTurnContextInput = {
   activePlanContext?: GuiPlanContext
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
+  agentSurface?: 'code' | 'write' | 'design'
   guiDesignArtifact?: GuiDesignArtifactContext
   modelProviderId?: string
   modelCapabilities: ModelCapabilityMetadata

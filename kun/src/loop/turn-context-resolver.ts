@@ -147,6 +147,7 @@ export class TurnContextResolver {
       ...(input.mode.activePlanContext ? { activePlanContext: input.mode.activePlanContext } : {}),
       ...(input.turn.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
       ...(input.turn.guiDesignMode ? { guiDesignMode: true } : {}),
+      agentSurface: input.turn.agentSurface ?? 'code',
       ...(input.turn.guiDesignArtifact ? { guiDesignArtifact: input.turn.guiDesignArtifact } : {}),
       ...(input.turn.imContext ? { imContext: true } : {}),
       modelCapabilities: input.modelCapabilities,

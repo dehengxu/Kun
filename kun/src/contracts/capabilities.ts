@@ -240,6 +240,10 @@ export type SubagentToolPolicy = z.infer<typeof SubagentToolPolicy>
 export const SubagentMode = z.enum(['subagent', 'primary', 'all'])
 export type SubagentMode = z.infer<typeof SubagentMode>
 
+/** Product surfaces where a profile is available for delegation. */
+export const SubagentSurface = z.enum(['shared', 'code', 'write', 'design'])
+export type SubagentSurface = z.infer<typeof SubagentSurface>
+
 /**
  * Tools a `readOnly` subagent may call. The list is enforced twice: the
  * child loop advertises only these names (schema filter) and the
@@ -272,6 +276,12 @@ export const SubagentProfileConfig = z
     color: z.string().min(1).optional(),
     /** Where the agent can be used: delegated subagent, primary session persona, or both. */
     mode: SubagentMode.default('subagent'),
+    /**
+     * Product surfaces where this role participates in routing. `shared`
+     * makes the role available everywhere and is canonicalized without other
+     * values. Missing values retain legacy global availability.
+     */
+    surfaces: z.array(SubagentSurface).max(4).optional(),
     /** Overrides the child model for this role (falls back to the server default). */
     model: z.string().min(1).optional(),
     /** Routes this role's child to a specific provider id (falls back to the runtime default provider). */

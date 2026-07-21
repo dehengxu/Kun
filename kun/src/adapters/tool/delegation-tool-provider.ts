@@ -1,5 +1,9 @@
 import { BUILTIN_SUBAGENT_PROFILES } from '../../delegation/builtin-profiles.js'
-import type { ChildRoutingMetadata, DelegationRuntime } from '../../delegation/delegation-runtime.js'
+import {
+  profileAvailableOnSurface,
+  type ChildRoutingMetadata,
+  type DelegationRuntime
+} from '../../delegation/delegation-runtime.js'
 import {
   generatedSubagentProfileId,
   type SubagentGenerationResult,
@@ -75,6 +79,7 @@ export function buildDelegationToolProviders(
           let inlineProfile: InlineProfile | undefined
           let routing: ChildRoutingMetadata | undefined
           let generatedResult: SubagentGenerationResult | undefined
+          const agentSurface = context.agentSurface ?? 'code'
 
           if (customDefinition) {
             inlineProfile = {
@@ -84,8 +89,10 @@ export function buildDelegationToolProviders(
             }
             routing = explicitCustomMetadata(inlineProfile)
           } else if (requestedProfile) {
-            const snapshot = await runtime.resolveProfileSnapshot(requestedProfile, common.workspace)
-            if (!snapshot) return toolError(`unknown subagent profile: ${requestedProfile}`)
+            const snapshot = await runtime.resolveProfileSnapshot(requestedProfile, common.workspace, agentSurface)
+            if (!snapshot) {
+              return toolError(`unknown or unavailable ${agentSurface} subagent profile: ${requestedProfile}`)
+            }
             inlineProfile = { id: snapshot.id, profile: snapshot.profile, source: snapshot.source }
             resolvedProfile = undefined
             routing = {
@@ -93,14 +100,16 @@ export function buildDelegationToolProviders(
               selectedKind: 'profile',
               selectedId: requestedProfile,
               reason: 'The parent agent explicitly selected this standalone profile.',
+              agentSurface,
               candidates: []
             }
           } else if (router) {
-            const documents = await runtime.listRoutingProfiles(common.workspace)
+            const documents = await runtime.listRoutingProfiles(common.workspace, agentSurface)
             const route = await router.route({
               threadId: context.threadId,
               turnId: context.turnId,
               task: common.prompt,
+              agentSurface,
               documents,
               mainModel: common.inheritedModel,
               mainProviderId: common.inheritedProviderId,
@@ -114,7 +123,8 @@ export function buildDelegationToolProviders(
                 turnId: context.turnId,
                 task: common.prompt,
                 roleBrief: route.generate.roleBrief,
-                documents: builtinDocuments,
+                documents: builtinDocuments.filter((document) =>
+                  profileAvailableOnSurface(document.profile, agentSurface)),
                 toolPolicy: route.generate.permissionHint,
                 mainModel: common.inheritedModel,
                 mainProviderId: common.inheritedProviderId,
@@ -122,13 +132,13 @@ export function buildDelegationToolProviders(
               })
               generatedResult = generated
               inlineProfile = generatedInlineProfile(generated)
-              routing = generatedRouteMetadata(route, generated, inlineProfile)
+              routing = generatedRouteMetadata(route, generated, inlineProfile, agentSurface)
             } else {
               const snapshot = documents.find((document) => document.id === resolvedProfile)
               if (!snapshot) return toolError(`routed subagent profile disappeared: ${resolvedProfile ?? ''}`)
               inlineProfile = { id: snapshot.id, profile: snapshot.profile, source: snapshot.source }
               resolvedProfile = undefined
-              routing = existingRouteMetadata(route)
+              routing = existingRouteMetadata(route, agentSurface)
             }
           }
 
@@ -170,13 +180,22 @@ export function buildDelegationToolProviders(
           if (unknownReferences.length) {
             return toolError(`unknown built-in reference agent id: ${unknownReferences.join(', ')}`)
           }
+          const agentSurface = context.agentSurface ?? 'code'
+          const unavailableReferences = requestedReferences.filter((id) => {
+            const profile = BUILTIN_SUBAGENT_PROFILES[id]
+            return profile ? !profileAvailableOnSurface(profile, agentSurface) : false
+          })
+          if (unavailableReferences.length) {
+            return toolError(`built-in reference agent is unavailable on ${agentSurface}: ${unavailableReferences.join(', ')}`)
+          }
           const policy = stringValue(args.tool_policy)
           const generated = await generator.generate({
             threadId: context.threadId,
             turnId: context.turnId,
             task: common.prompt,
             roleBrief: stringValue(args.role_brief) || undefined,
-            documents: builtinDocuments,
+            documents: builtinDocuments.filter((document) =>
+              profileAvailableOnSurface(document.profile, agentSurface)),
             ...(requestedReferences.length ? { referenceAgentIds: requestedReferences } : {}),
             toolPolicy: policy === 'readOnly' || policy === 'inherit' ? policy : 'auto',
             mainModel: common.inheritedModel,
@@ -189,6 +208,7 @@ export function buildDelegationToolProviders(
             selectedKind: 'generated',
             selectedId: inlineProfile.id,
             reason: generated.reason,
+            agentSurface,
             candidates: generated.candidates,
             customAgent: inlineProfile.profile,
             generation: generationSnapshot(generated)
@@ -263,6 +283,7 @@ async function runChild(
     ...(selection.profile ? { profile: selection.profile } : {}),
     ...(selection.inlineProfile ? { inlineProfile: selection.inlineProfile } : {}),
     ...(selection.routing ? { routing: selection.routing } : {}),
+    agentSurface: context.agentSurface ?? 'code',
     ...(subagentTaskRequiresReadOnly(common.prompt) ? { toolPolicyCeiling: 'readOnly' as const } : {}),
     security: {
       sandboxRoot: context.workspace,
@@ -373,11 +394,15 @@ function explicitCustomMetadata(inlineProfile: InlineProfile): ChildRoutingMetad
   }
 }
 
-function existingRouteMetadata(route: SubagentRouteResult): ChildRoutingMetadata {
+function existingRouteMetadata(
+  route: SubagentRouteResult,
+  agentSurface: 'code' | 'write' | 'design'
+): ChildRoutingMetadata {
   return {
     method: route.source === 'llm-profile' ? 'bm25-llm-profile' : 'bm25-fallback-profile',
     selectedKind: 'profile',
     selectedId: route.profileId ?? 'general',
+    agentSurface,
     reason: route.reason,
     ...(route.confidence !== undefined ? { confidence: route.confidence } : {}),
     candidates: route.candidates
@@ -387,12 +412,14 @@ function existingRouteMetadata(route: SubagentRouteResult): ChildRoutingMetadata
 function generatedRouteMetadata(
   route: SubagentRouteResult,
   generated: SubagentGenerationResult,
-  inlineProfile: InlineProfile
+  inlineProfile: InlineProfile,
+  agentSurface: 'code' | 'write' | 'design'
 ): ChildRoutingMetadata {
   return {
     method: route.source === 'llm-generate' ? 'bm25-llm-generated' : 'bm25-fallback-generated',
     selectedKind: 'generated',
     selectedId: inlineProfile.id,
+    agentSurface,
     reason: `${route.reason} ${generated.reason}`.trim(),
     ...(route.confidence !== undefined ? { confidence: route.confidence } : {}),
     candidates: route.candidates,

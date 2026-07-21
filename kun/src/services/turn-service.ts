@@ -179,6 +179,7 @@ export class TurnService {
             guiPlan: input.request.guiPlan,
             guiDesignCanvas: input.request.guiDesignCanvas,
             guiDesignMode: input.request.guiDesignMode,
+            agentSurface: input.request.agentSurface,
             guiDesignArtifact: input.request.guiDesignArtifact,
             mode: input.request.mode,
             disableUserInput: input.request.disableUserInput,

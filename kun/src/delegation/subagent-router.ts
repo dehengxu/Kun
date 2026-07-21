@@ -156,6 +156,7 @@ export class SubagentRouter {
     threadId: string
     turnId: string
     task: string
+    agentSurface?: 'code' | 'write' | 'design'
     documents: readonly SubagentRoutingDocument[]
     mainModel?: string
     mainProviderId?: string
@@ -316,6 +317,7 @@ function buildRouterRequest(input: {
     threadId: string
     turnId: string
     task: string
+    agentSurface?: 'code' | 'write' | 'design'
   }
   candidates: readonly SubagentRecallHit[]
   resolvedModel: RouterModel
@@ -335,6 +337,7 @@ function buildRouterRequest(input: {
       threadId: input.input.threadId,
       turnId,
       text: [
+        `<agent_surface>${input.input.agentSurface ?? 'code'}</agent_surface>`,
         '<delegated_task>',
         truncate(input.input.task, 12_000),
         '</delegated_task>',

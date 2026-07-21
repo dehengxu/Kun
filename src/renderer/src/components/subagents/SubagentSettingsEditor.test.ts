@@ -9,6 +9,7 @@ import {
 import { SubagentSettingsEditor } from './SubagentSettingsEditor'
 
 const loadComposerModels = vi.fn(async () => undefined)
+let mockRoute = 'chat'
 
 vi.mock('../../store/chat-store', () => ({
   useChatStore: (selector: (state: Record<string, unknown>) => unknown) => selector({
@@ -18,6 +19,7 @@ vi.mock('../../store/chat-store', () => ({
       modelIds: ['model-a'],
       modelProfiles: {}
     }],
+    route: mockRoute,
     loadComposerModels
   })
 }))
@@ -63,6 +65,12 @@ function customProfile(patch: Partial<KunSubagentProfileV1> = {}): KunSubagentPr
   }
 }
 
+function buttonWithText(renderer: ReactTestRenderer, text: string) {
+  return renderer.root.findAllByType('button').find((button) =>
+    button.findAllByType('span').some((span) => span.children.includes(text))
+  )
+}
+
 describe('SubagentSettingsEditor', () => {
   beforeEach(() => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -76,6 +84,7 @@ describe('SubagentSettingsEditor', () => {
       })
     }
     loadComposerModels.mockClear()
+    mockRoute = 'chat'
   })
 
   it('renders the settings policy, built-in roster, custom profiles, and automatic roles', async () => {
@@ -102,18 +111,26 @@ describe('SubagentSettingsEditor', () => {
     const text = JSON.stringify(renderer.toJSON())
     expect(text).toContain('Runtime policy')
     expect(text).toContain('General')
-    expect(text).toContain('Explore')
-    expect(text).toContain('Design review')
-    expect(text).toContain('Over-engineering review')
-    expect(text).toContain('Code reviewer')
-    expect(text).toContain('Test engineer')
-    expect(text).toContain('Security auditor')
-    expect(text).toContain('Web performance auditor')
-    expect(text).toContain('Researcher')
+    expect(text).toContain('Search names, capabilities, or scenarios')
+    expect(text).toContain('Development')
+    expect(text).toContain('Review')
+    expect(text).toContain('Quality')
+    expect(text).toContain('Planning')
+    expect(text).toContain('Operations')
+    expect(text).toContain('Research')
+    expect(text).toContain('Custom')
+    expect(text).toContain('Base agents')
     expect(text).toContain('Code review')
     expect(text).toContain('Plan mode')
     expect(text).toContain('Small model')
     expect(loadComposerModels).toHaveBeenCalledOnce()
+
+    const researchChip = buttonWithText(renderer, 'Research')
+    expect(researchChip).toBeDefined()
+    await act(async () => {
+      researchChip!.props.onClick()
+    })
+    expect(JSON.stringify(renderer.toJSON())).toContain('Explore')
   })
 
   it('keeps the compact side-panel surface on the same shared editor', async () => {
@@ -122,6 +139,111 @@ describe('SubagentSettingsEditor', () => {
       subagents: {
         enabled: true,
         profiles: [customProfile()]
+      }
+    }
+    const onPatch = vi.fn()
+    let renderer!: ReactTestRenderer
+
+    await act(async () => {
+      renderer = create(createElement(SubagentSettingsEditor, {
+        kun,
+        onPatch,
+        variant: 'panel'
+      }))
+    })
+
+    let text = JSON.stringify(renderer.toJSON())
+    expect(text).toContain('Custom')
+    expect(text).toContain('New subagent')
+    expect(text).toContain('Extension agents')
+    expect(text).toContain('Base agents are always available')
+    expect(text).toContain('Enable extension agents')
+    expect(text).toContain('System · internal')
+    expect(text).not.toContain('Runtime policy')
+    expect(renderer.root.findAll((node) => typeof node.props.className === 'string'
+      && node.props.className.includes('touch-pan-y')
+      && node.props.className.includes('overflow-y-auto'))).toHaveLength(1)
+
+    const baseChip = buttonWithText(renderer, 'Base agents')
+    expect(baseChip).toBeDefined()
+    expect(baseChip!.findAllByType('span').some((span) => span.children.includes('8'))).toBe(true)
+
+    const extensionSwitch = renderer.root.findByProps({ role: 'switch' })
+    expect(extensionSwitch.props['aria-checked']).toBe(false)
+    await act(async () => {
+      extensionSwitch.props.onClick()
+    })
+    const patch = onPatch.mock.calls.at(-1)?.[0] as KunRuntimeSettingsPatchV1
+    const extensionProfiles = (patch.subagents?.profiles ?? []).filter((profile) => profile.id !== 'researcher')
+    expect(extensionProfiles).toHaveLength(37)
+    expect(extensionProfiles.every((profile) => (profile.surfaces?.length ?? 0) > 0)).toBe(true)
+    expect(extensionProfiles.filter((profile) => profile.id.startsWith('write-'))
+      .every((profile) => profile.surfaces?.join() === 'write')).toBe(true)
+    expect(extensionProfiles.filter((profile) => profile.id.startsWith('design-'))
+      .every((profile) => profile.surfaces?.join() === 'design')).toBe(true)
+    expect(extensionProfiles.some((profile) => profile.id === 'general')).toBe(false)
+
+    const customChip = buttonWithText(renderer, 'Custom')
+    expect(customChip).toBeDefined()
+    await act(async () => {
+      customChip!.props.onClick()
+    })
+    text = JSON.stringify(renderer.toJSON())
+    expect(text).toContain('Researcher')
+  })
+
+  it('turns off every extension agent in one action without changing base agents', async () => {
+    const onPatch = vi.fn()
+    const kun = {
+      ...defaultKunRuntimeSettings(),
+      subagents: {
+        enabled: true,
+        profiles: [{
+          id: 'write-copy-editor',
+          enabled: true,
+          name: 'Copy Editor',
+          mode: 'subagent' as const,
+          toolPolicy: 'inherit' as const,
+          surfaces: ['write' as const]
+        }]
+      }
+    }
+    let renderer!: ReactTestRenderer
+
+    await act(async () => {
+      renderer = create(createElement(SubagentSettingsEditor, { kun, onPatch, variant: 'panel' }))
+    })
+
+    const extensionSwitch = renderer.root.findByProps({ role: 'switch' })
+    expect(extensionSwitch.props['aria-checked']).toBe(true)
+    const keepBaseOnly = buttonWithText(renderer, 'Keep base agents only')
+    expect(keepBaseOnly).toBeDefined()
+    await act(async () => {
+      keepBaseOnly!.props.onClick()
+    })
+    const patch = onPatch.mock.calls.at(-1)?.[0] as KunRuntimeSettingsPatchV1
+    const profiles = patch.subagents?.profiles ?? []
+    const extensionProfiles = profiles.filter((profile) => ![
+      'general',
+      'explore',
+      'design-reviewer',
+      'over-engineering-reviewer',
+      'code-reviewer',
+      'test-engineer',
+      'security-auditor',
+      'web-performance-auditor'
+    ].includes(profile.id))
+    expect(extensionProfiles).toHaveLength(37)
+    expect(extensionProfiles.every((profile) => profile.surfaces?.length === 0)).toBe(true)
+    expect(profiles.some((profile) => profile.id === 'general')).toBe(false)
+  })
+
+  it('searches across collapsed categories and routing vocabulary', async () => {
+    const kun = {
+      ...defaultKunRuntimeSettings(),
+      subagents: {
+        enabled: true,
+        profiles: []
       }
     }
     let renderer!: ReactTestRenderer
@@ -134,11 +256,96 @@ describe('SubagentSettingsEditor', () => {
       }))
     })
 
+    const search = renderer.root.findAllByType('input')
+      .find((input) => input.props.type === 'search')
+    expect(search).toBeDefined()
+    await act(async () => {
+      search!.props.onChange({ target: { value: 'OWASP' } })
+    })
+
     const text = JSON.stringify(renderer.toJSON())
-    expect(text).toContain('Researcher')
-    expect(text).toContain('New subagent')
-    expect(text).toContain('System · internal')
-    expect(text).not.toContain('Runtime policy')
+    expect(text).toContain('Security auditor')
+    expect(text).not.toContain('General')
+
+    const securityAgent = buttonWithText(renderer, 'Security auditor')
+    expect(securityAgent).toBeDefined()
+    await act(async () => {
+      securityAgent!.props.onClick()
+    })
+    const clearSearch = renderer.root.findAllByType('button')
+      .find((button) => button.props['aria-label'] === 'Clear search')
+    expect(clearSearch).toBeDefined()
+    await act(async () => {
+      clearSearch!.props.onClick()
+    })
+
+    const reviewSection = renderer.root.findByProps({ 'data-agent-category': 'review' })
+    const reviewToggle = reviewSection.findAllByType('button')
+      .find((button) => button.props['aria-expanded'] !== undefined)
+    expect(reviewToggle?.props['aria-expanded']).toBe(true)
+    expect(JSON.stringify(renderer.toJSON())).toContain('Security auditor')
+  })
+
+  it('paginates settings by twelve and exposes mode assignment state', async () => {
+    const onPatch = vi.fn<(patch: KunRuntimeSettingsPatchV1) => void>()
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(SubagentSettingsEditor, {
+        kun: { ...defaultKunRuntimeSettings(), subagents: { enabled: true, profiles: [] } },
+        onPatch,
+        variant: 'settings'
+      }))
+    })
+
+    expect(JSON.stringify(renderer.toJSON())).toContain('"1","/","4"')
+    const writeTab = renderer.root.findAllByProps({ role: 'tab' })
+      .find((button) => button.children.includes('Write'))
+    expect(writeTab).toBeDefined()
+    await act(async () => writeTab!.props.onClick())
+    const general = buttonWithText(renderer, 'General')
+    expect(general).toBeDefined()
+    await act(async () => general!.props.onClick())
+    const inheritedSwitch = renderer.root.findAllByProps({ role: 'switch' })[0]
+    expect(inheritedSwitch.props['aria-checked']).toBe(true)
+    expect(inheritedSwitch.props.disabled).toBe(true)
+
+    const search = renderer.root.findAllByType('input').find((input) => input.props.type === 'search')
+    await act(async () => search!.props.onChange({ target: { value: 'copy edit' } }))
+    expect(JSON.stringify(renderer.toJSON())).toContain('Copy Editor')
+    expect(JSON.stringify(renderer.toJSON())).toContain('"1","/","1"')
+  })
+
+  it('filters the compact panel to the active product surface', async () => {
+    mockRoute = 'design'
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(SubagentSettingsEditor, {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          subagents: {
+            enabled: true,
+            profiles: [{
+              id: 'design-screen-designer',
+              enabled: true,
+              name: 'Screen Designer',
+              mode: 'subagent',
+              toolPolicy: 'inherit',
+              surfaces: ['design']
+            }]
+          }
+        },
+        onPatch: () => undefined,
+        variant: 'panel'
+      }))
+    })
+    const allChip = buttonWithText(renderer, 'All')
+    expect(allChip).toBeDefined()
+    await act(async () => allChip!.props.onClick())
+    const search = renderer.root.findAllByType('input').find((input) => input.props.type === 'search')
+    await act(async () => search!.props.onChange({ target: { value: 'screen design' } }))
+    expect(JSON.stringify(renderer.toJSON())).toContain('Screen Designer')
+    await act(async () => search!.props.onChange({ target: { value: 'copy edit' } }))
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('Copy Editor')
   })
 
   it('patches runtime policy without dropping the roster or sibling limits', async () => {
@@ -207,6 +414,12 @@ describe('SubagentSettingsEditor', () => {
       }))
     })
 
+    const customChip = buttonWithText(renderer, 'Custom')
+    expect(customChip).toBeDefined()
+    await act(async () => {
+      customChip!.props.onClick()
+    })
+
     const disableButtons = renderer.root.findAllByType('button')
       .filter((button) => button.props.title === 'Disable')
     // Built-ins are always installed by Kun and therefore do not expose a
@@ -250,10 +463,14 @@ describe('SubagentSettingsEditor', () => {
       }))
     })
 
-    const description = renderer.root.findAllByType('div')
-      .find((node) => node.children.includes('Investigates hard questions'))
-    const row = description?.parent?.parent
-    const trigger = row?.findAllByType('button')
+    const customChip = buttonWithText(renderer, 'Custom')
+    expect(customChip).toBeDefined()
+    await act(async () => {
+      customChip!.props.onClick()
+    })
+
+    const details = renderer.root.findByProps({ 'data-testid': 'subagent-details-panel' })
+    const trigger = details.findAllByType('button')
       .find((button) => String(button.props.className).includes('h-9 w-full'))
     expect(trigger).toBeDefined()
 

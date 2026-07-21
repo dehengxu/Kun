@@ -62,6 +62,7 @@ export type QueuedUserMessage = {
   guiDesignCanvas?: boolean
   /** True only for the product Design surface; Code whiteboards leave this unset. */
   guiDesignMode?: boolean
+  agentSurface?: 'code' | 'write' | 'design'
   guiDesignArtifact?: GuiDesignArtifactMessageContext
   writeContext?: WriteAssistantMessageContext
 }
@@ -108,6 +109,7 @@ export type SendMessageOverrides = {
   guiPlan?: GuiPlanMessageContext
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
+  agentSurface?: 'code' | 'write' | 'design'
   guiDesignArtifact?: GuiDesignArtifactMessageContext
   attachmentIds?: string[]
   attachments?: AttachmentReference[]

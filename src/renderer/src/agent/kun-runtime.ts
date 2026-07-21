@@ -298,6 +298,7 @@ export class KunRuntimeProvider implements AgentProvider {
       }
       guiDesignCanvas?: boolean
       guiDesignMode?: boolean
+      agentSurface?: 'code' | 'write' | 'design'
       guiDesignArtifact?: {
         kind: 'svg'
         artifactId: string
@@ -350,6 +351,9 @@ export class KunRuntimeProvider implements AgentProvider {
     }
     if (options?.guiDesignMode) {
       body.guiDesignMode = true
+    }
+    if (options?.agentSurface) {
+      body.agentSurface = options.agentSurface
     }
     if (options?.guiDesignArtifact) {
       body.guiDesignArtifact = options.guiDesignArtifact

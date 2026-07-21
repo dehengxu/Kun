@@ -30,6 +30,7 @@ export function createToolExecutionContext(
     ...(input.activePlanContext ? { guiPlan: input.activePlanContext } : {}),
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(input.guiDesignMode ? { guiDesignMode: true } : {}),
+    agentSurface: input.agentSurface ?? 'code',
     ...(input.guiDesignArtifact ? { guiDesignArtifact: input.guiDesignArtifact } : {}),
     ...(input.imContext ? { imContext: true } : {}),
     model: input.modelCapabilities,

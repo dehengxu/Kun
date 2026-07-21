@@ -440,6 +440,7 @@ export type CoreTurnJson = {
   workspaceCheckpointId?: string
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
+  agentSurface?: 'code' | 'write' | 'design'
   error?: string
 }
 

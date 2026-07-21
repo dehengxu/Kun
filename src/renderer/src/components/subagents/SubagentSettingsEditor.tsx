@@ -7,6 +7,7 @@ import type {
   KunRuntimeSettingsPatchV1,
   KunRuntimeSettingsV1,
   KunSubagentProfileV1,
+  KunSubagentSurfaceV1,
   KunSubagentsSettingsV1,
   ModelProviderModelProfileV1,
   ModelReasoningEffort
@@ -18,7 +19,10 @@ import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { confirmDialog } from '../../lib/confirm-dialog'
 import { useChatStore } from '../../store/chat-store'
 import { AgentKun } from './AgentKun'
-import { BUILTIN_AGENT_CATALOG } from '../../../../../kun/src/delegation/builtin-agent-catalog'
+import {
+  BUILTIN_AGENT_CATALOG,
+  type BuiltinAgentCategory
+} from '../../../../../kun/src/delegation/builtin-agent-catalog'
 
 type EditorVariant = 'panel' | 'settings'
 
@@ -90,12 +94,66 @@ const BUILTIN_AGENTS: KunSubagentProfileV1[] = BUILTIN_AGENT_CATALOG.map((agent)
   description: agent.description,
   mode: 'subagent',
   toolPolicy: agent.toolPolicy,
-  color: agent.color
+  color: agent.color,
+  surfaces: [...agent.surfaces]
 }))
 const BUILTIN_IDS = new Set(BUILTIN_AGENTS.map((agent) => agent.id))
+const BUILTIN_AGENT_BY_ID: ReadonlyMap<string, (typeof BUILTIN_AGENT_CATALOG)[number]> =
+  new Map(BUILTIN_AGENT_CATALOG.map((agent) => [agent.id, agent]))
 
-function newProfile(): KunSubagentProfileV1 {
-  return { id: crypto.randomUUID(), enabled: true, name: '', mode: 'subagent', toolPolicy: 'readOnly' }
+type AgentCategory = BuiltinAgentCategory | 'custom'
+type AgentCatalogFilter = AgentCategory | 'base'
+type AgentCategoryFilter = AgentCatalogFilter | 'all'
+type SurfaceTab = KunSubagentSurfaceV1
+
+const SURFACE_TABS: readonly SurfaceTab[] = ['shared', 'code', 'write', 'design']
+const SETTINGS_PAGE_SIZE = 12
+
+const AGENT_CATEGORY_ORDER: readonly AgentCategory[] = [
+  'development',
+  'review',
+  'quality',
+  'planning',
+  'operations',
+  'research',
+  'custom'
+]
+
+type CatalogAgent = {
+  profile: KunSubagentProfileV1
+  builtin: boolean
+  name: string
+  desc: string
+  category: AgentCategory
+  baseAgent: boolean
+  searchText: string
+}
+
+function newProfile(surface: SurfaceTab): KunSubagentProfileV1 {
+  return {
+    id: crypto.randomUUID(),
+    enabled: true,
+    name: '',
+    mode: 'subagent',
+    toolPolicy: 'readOnly',
+    surfaces: [surface]
+  }
+}
+
+function profileSurfaces(profile: KunSubagentProfileV1): KunSubagentSurfaceV1[] {
+  if (profile.surfaces !== undefined) {
+    return profile.surfaces.includes('shared') ? ['shared'] : [...new Set(profile.surfaces)]
+  }
+  const builtin = BUILTIN_AGENT_BY_ID.get(profile.id)
+  return builtin ? [...builtin.surfaces] : ['shared']
+}
+
+function profileAvailableOnSurface(
+  profile: KunSubagentProfileV1,
+  surface: Exclude<SurfaceTab, 'shared'>
+): boolean {
+  const surfaces = profileSurfaces(profile)
+  return surfaces.includes('shared') || surfaces.includes(surface)
 }
 
 // Reasoning-effort segment (mirrors the composer's reasoning picker). Labels
@@ -158,8 +216,18 @@ export function SubagentSettingsEditor({
   const { t } = useTranslation('common')
   const { t: tSettings } = useTranslation('settings')
   const composerModelGroups = useChatStore((s) => s.composerModelGroups)
+  const activeRoute = useChatStore((s) => s.route)
   const loadComposerModels = useChatStore((s) => s.loadComposerModels)
   const [dialog, setDialog] = useState<{ profile: KunSubagentProfileV1; isNew: boolean } | null>(null)
+  const [catalogQuery, setCatalogQuery] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState<AgentCategoryFilter>(variant === 'panel' ? 'base' : 'all')
+  const [selectedSurface, setSelectedSurface] = useState<SurfaceTab>('shared')
+  const [catalogPage, setCatalogPage] = useState(1)
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null)
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<AgentCategory>>(
+    () => new Set(AGENT_CATEGORY_ORDER.slice(1))
+  )
+  const [systemRolesOpen, setSystemRolesOpen] = useState(false)
   const subagents = kun.subagents ?? EMPTY_SUBAGENTS
   // Compaction always runs in model mode (the heuristic fold is only a silent
   // fallback when the model call fails), so there is no user-facing mode toggle.
@@ -283,100 +351,296 @@ export function SubagentSettingsEditor({
     // back by mergeBuiltinSubagentProfiles(). Keep those rows honestly enabled.
     const builtins = BUILTIN_AGENTS.map((builtin) => {
       const override = subagents.profiles.find((profile) => profile.id === builtin.id)
-      return override ? { ...override, enabled: true } : builtin
+      return override ? { ...builtin, ...override, enabled: true } : builtin
     })
     const custom = subagents.profiles.filter((p) => !BUILTIN_IDS.has(p.id))
     return [...builtins, ...custom]
   }, [subagents.profiles])
 
+  const extensionAgentIds = useMemo(() => new Set(
+    BUILTIN_AGENT_CATALOG
+      .filter((agent) => agent.family !== 'base')
+      .map((agent) => agent.id)
+  ), [])
+  const extensionAgentsEnabled = delegatable.some((profile) =>
+    extensionAgentIds.has(profile.id) && profileSurfaces(profile).length > 0
+  )
+  const setExtensionAgentsEnabled = useCallback((enabled: boolean): void => {
+    const profilesById = new Map(subagents.profiles.map((profile) => [profile.id, profile]))
+    for (const builtin of BUILTIN_AGENTS) {
+      if (!extensionAgentIds.has(builtin.id)) continue
+      const current = profilesById.get(builtin.id) ?? builtin
+      const activeSurfaces: KunSubagentSurfaceV1[] = [
+        ...(BUILTIN_AGENT_BY_ID.get(builtin.id)?.recommendedSurfaces ?? [])
+      ]
+      profilesById.set(builtin.id, {
+        ...current,
+        surfaces: enabled ? activeSurfaces : []
+      })
+    }
+    persistProfiles([...profilesById.values()])
+  }, [extensionAgentIds, persistProfiles, subagents.profiles])
+
+  const toggleSurface = useCallback((id: string, surface: SurfaceTab): void => {
+    const profile = delegatable.find((candidate) => candidate.id === id)
+    if (!profile || (id === 'general' && surface === 'shared')) return
+    const current = profileSurfaces(profile)
+    if (surface === 'shared') {
+      upsertProfile(id, { surfaces: current.includes('shared') ? [] : ['shared'] })
+      return
+    }
+    if (current.includes('shared')) return
+    const next = current.includes(surface)
+      ? current.filter((candidate) => candidate !== surface)
+      : [...current, surface]
+    upsertProfile(id, { surfaces: next })
+  }, [delegatable, upsertProfile])
+
+  const catalogAgents = useMemo<CatalogAgent[]>(() => delegatable.map((profile) => {
+    const builtin = isBuiltin(profile.id)
+    const metadata = BUILTIN_AGENT_BY_ID.get(profile.id)
+    const name = builtin
+      ? t(`subagentsPanel.role.${profile.id}.name`, profile.name || profile.id)
+      : profile.name || profile.id
+    const desc = builtin
+      ? t(`subagentsPanel.role.${profile.id}.desc`, profile.description ?? '')
+      : (profile.description ?? '')
+    const category: AgentCategory = metadata?.category ?? 'custom'
+    const baseAgent = metadata?.family === 'base'
+    const searchText = [
+      profile.id,
+      name,
+      desc,
+      metadata?.name,
+      metadata?.description,
+      ...(metadata?.routingTerms ?? [])
+    ].filter(Boolean).join(' ').toLocaleLowerCase()
+    return { profile, builtin, name, desc, category, baseAgent, searchText }
+  }).sort((left, right) => {
+    const categoryDelta = AGENT_CATEGORY_ORDER.indexOf(left.category) - AGENT_CATEGORY_ORDER.indexOf(right.category)
+    return categoryDelta || left.name.localeCompare(right.name)
+  }), [delegatable, t])
+
+  const panelSurface: Exclude<SurfaceTab, 'shared'> = activeRoute === 'write'
+    ? 'write'
+    : activeRoute === 'design'
+      ? 'design'
+      : 'code'
+
+  const normalizedQuery = catalogQuery.trim().toLocaleLowerCase()
+  const filteredCatalogAgents = useMemo(() => catalogAgents.filter((agent) => {
+    if (variant === 'panel' && !profileAvailableOnSurface(agent.profile, panelSurface)) return false
+    if (categoryFilter === 'base' && !agent.baseAgent) return false
+    if (categoryFilter !== 'all' && categoryFilter !== 'base' && agent.category !== categoryFilter) return false
+    return !normalizedQuery || agent.searchText.includes(normalizedQuery)
+  }), [catalogAgents, categoryFilter, normalizedQuery, panelSurface, variant])
+
+  const pageCount = Math.max(1, Math.ceil(filteredCatalogAgents.length / SETTINGS_PAGE_SIZE))
+  const visibleCatalogAgents = variant === 'settings'
+    ? filteredCatalogAgents.slice((catalogPage - 1) * SETTINGS_PAGE_SIZE, catalogPage * SETTINGS_PAGE_SIZE)
+    : filteredCatalogAgents
+
+  useEffect(() => {
+    setCatalogPage(1)
+  }, [catalogQuery, categoryFilter, selectedSurface])
+
+  useEffect(() => {
+    if (catalogPage > pageCount) setCatalogPage(pageCount)
+  }, [catalogPage, pageCount])
+
+  const groupedCatalogAgents = useMemo(() => AGENT_CATEGORY_ORDER
+    .map((category) => ({
+      category,
+      agents: visibleCatalogAgents.filter((agent) => agent.category === category)
+    }))
+    .filter((group) => group.agents.length > 0), [visibleCatalogAgents])
+
+  const categoryCounts = useMemo(() => new Map<AgentCatalogFilter, number>([
+    ['base', catalogAgents.filter((agent) => agent.baseAgent).length],
+    ...AGENT_CATEGORY_ORDER.map((category): [AgentCatalogFilter, number] => [
+      category,
+      catalogAgents.filter((agent) => agent.category === category).length
+    ])
+  ]), [catalogAgents])
+
+  const selectedCatalogAgent = visibleCatalogAgents.find((agent) => agent.profile.id === selectedProfileId)
+    ?? visibleCatalogAgents[0]
+    ?? null
+  const configuredCount = catalogAgents.filter(({ profile }) => Boolean(
+    profile.model || profile.providerId || profile.reasoningEffort
+  )).length
+
+  const toggleCategory = useCallback((category: AgentCategory): void => {
+    setCollapsedCategories((current) => {
+      const next = new Set(current)
+      if (next.has(category)) next.delete(category)
+      else next.add(category)
+      return next
+    })
+  }, [])
+
+  const selectCategory = useCallback((category: AgentCategoryFilter): void => {
+    setCategoryFilter(category)
+    if (category === 'all' || category === 'base') return
+    setCollapsedCategories((current) => {
+      if (!current.has(category)) return current
+      const next = new Set(current)
+      next.delete(category)
+      return next
+    })
+  }, [])
+
+  const selectCatalogAgent = useCallback((agent: CatalogAgent): void => {
+    setSelectedProfileId(agent.profile.id)
+    setCollapsedCategories((current) => {
+      if (!current.has(agent.category)) return current
+      const next = new Set(current)
+      next.delete(agent.category)
+      return next
+    })
+  }, [])
+
   if (variant === 'settings') {
     return (
-      <div className={`space-y-6 ${className ?? ''}`} data-testid="subagent-settings-editor">
-        <div className="rounded-2xl border border-accent/20 bg-accent-soft/55 px-5 py-4 text-[13px] leading-6 text-ds-muted">
+      <div className={`space-y-5 ${className ?? ''}`} data-testid="subagent-settings-editor">
+        <div className="rounded-2xl border border-accent/20 bg-accent-soft/55 px-5 py-3 text-[13px] leading-6 text-ds-muted">
           {tSettings('subagentsSettingsIntro')}
         </div>
 
-        <EditorSettingsCard
-          title={tSettings('subagentsRuntimePolicy')}
-          description={tSettings('subagentsRuntimePolicyDesc')}
-        >
-          <PolicySettingRow
-            title={tSettings('subagentsMaxParallel')}
-            description={tSettings('subagentsMaxParallelDesc')}
-          >
-            <BoundedNumberInput
-              value={subagents.maxParallel ?? 3}
-              min={1}
-              max={64}
-              onCommit={(maxParallel) => patchSubagents({ maxParallel })}
-            />
-          </PolicySettingRow>
-          <PolicySettingRow
-            title={tSettings('subagentsMaxChildRuns')}
-            description={tSettings('subagentsMaxChildRunsDesc')}
-          >
-            <BoundedNumberInput
-              value={subagents.maxChildRuns ?? 12}
-              min={1}
-              max={10_000}
-              onCommit={(maxChildRuns) => patchSubagents({ maxChildRuns })}
-            />
-          </PolicySettingRow>
-        </EditorSettingsCard>
+        <section className="overflow-hidden rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25">
+          <div className="flex flex-col gap-1 border-b border-ds-border-muted px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-[15px] font-semibold text-ds-ink">{tSettings('subagentsRuntimePolicy')}</h2>
+              <p className="mt-0.5 text-[12px] text-ds-muted">{tSettings('subagentsRuntimePolicyDesc')}</p>
+            </div>
+            <span className="mt-2 inline-flex w-fit rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-semibold text-accent sm:mt-0">
+              {t('subagentsPanel.policySummary', 'Queue and session limits')}
+            </span>
+          </div>
+          <div className="grid gap-px bg-ds-border-muted sm:grid-cols-2">
+            <CompactPolicySetting
+              title={tSettings('subagentsMaxParallel')}
+              description={tSettings('subagentsMaxParallelDesc')}
+            >
+              <BoundedNumberInput
+                value={subagents.maxParallel ?? 3}
+                min={1}
+                max={64}
+                onCommit={(maxParallel) => patchSubagents({ maxParallel })}
+              />
+            </CompactPolicySetting>
+            <CompactPolicySetting
+              title={tSettings('subagentsMaxChildRuns')}
+              description={tSettings('subagentsMaxChildRunsDesc')}
+            >
+              <BoundedNumberInput
+                value={subagents.maxChildRuns ?? 12}
+                min={1}
+                max={10_000}
+                onCommit={(maxChildRuns) => patchSubagents({ maxChildRuns })}
+              />
+            </CompactPolicySetting>
+          </div>
+        </section>
 
-        <EditorSettingsCard
-          title={tSettings('subagentsDelegatable')}
-          description={tSettings('subagentsDelegatableDesc')}
-          action={
+        <section className="overflow-visible rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25">
+          <div className="flex flex-col gap-3 border-b border-ds-border-muted px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-[16px] font-semibold text-ds-ink">{tSettings('subagentsDelegatable')}</h2>
+                <span className="rounded-full bg-ds-card-muted px-2 py-0.5 text-[10.5px] font-semibold text-ds-muted">
+                  {t('subagentsPanel.delegatableCount', '{{count}} delegatable roles', { count: catalogAgents.length })}
+                </span>
+              </div>
+              <p className="mt-1 text-[13px] leading-5 text-ds-muted">{tSettings('subagentsDelegatableDesc')}</p>
+            </div>
             <button
               type="button"
-              onClick={() => setDialog({ profile: newProfile(), isNew: true })}
+              onClick={() => setDialog({ profile: newProfile(selectedSurface), isNew: true })}
               className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-[12.5px] font-semibold text-white shadow-sm transition hover:bg-accent/90"
             >
               <Plus className="h-3.5 w-3.5" strokeWidth={2.4} />
               {t('subagentsPanel.newSubagent', 'New subagent')}
             </button>
-          }
-        >
-          {delegatable.map((profile) => {
-            const builtin = isBuiltin(profile.id)
-            const name = builtin
-              ? t(`subagentsPanel.role.${profile.id}.name`, profile.name || profile.id)
-              : profile.name || profile.id
-            const desc = builtin
-              ? t(`subagentsPanel.role.${profile.id}.desc`, profile.description ?? '')
-              : (profile.description ?? '')
-            return (
-              <Row
-                key={profile.id}
-                variant="settings"
-                roleId={profile.id}
-                disabled={!profile.enabled}
-                builtin={builtin}
-                name={name}
-                desc={desc}
-              >
-                <ModelSelect
-                  value={profile.model ?? ''}
-                  providerId={profile.providerId ?? ''}
-                  groups={composerModelGroups}
-                  stretch
-                  onChange={(model, providerId) => setProfileModel(profile.id, model, providerId)}
-                  reasoning={profile.reasoningEffort ?? 'off'}
-                  onReasoningChange={(effort) => setProfileReasoning(profile.id, effort)}
-                />
-                <RowActions
-                  enabled={profile.enabled}
-                  builtin={builtin}
+          </div>
+
+          <div className="sticky top-0 z-20 border-b border-ds-border-muted bg-ds-main/95 px-4 py-3 backdrop-blur-xl">
+            <SurfaceTabs value={selectedSurface} onChange={setSelectedSurface} t={t} />
+            <AgentCatalogToolbar
+              query={catalogQuery}
+              onQueryChange={setCatalogQuery}
+              selectedCategory={categoryFilter}
+              onCategoryChange={selectCategory}
+              counts={categoryCounts}
+              total={catalogAgents.length}
+              t={t}
+            />
+          </div>
+
+          <div className="grid min-h-[420px] lg:grid-cols-[minmax(0,1fr)_310px]">
+            <div className="min-w-0 border-b border-ds-border-muted px-4 py-3 lg:border-b-0 lg:border-r">
+              {groupedCatalogAgents.length > 0 ? groupedCatalogAgents.map(({ category, agents }) => {
+                const expanded = normalizedQuery.length > 0
+                  || categoryFilter !== 'all'
+                  || !collapsedCategories.has(category)
+                return (
+                  <AgentCategorySection
+                    key={category}
+                    category={category}
+                    count={agents.length}
+                    expanded={expanded}
+                    onToggle={() => toggleCategory(category)}
+                    t={t}
+                  >
+                    <div className="grid gap-2 pb-3 sm:grid-cols-2">
+                      {agents.map((agent) => (
+                        <CatalogAgentRow
+                          key={agent.profile.id}
+                          agent={agent}
+                          selected={selectedCatalogAgent?.profile.id === agent.profile.id}
+                          variant="settings"
+                          onSelect={() => selectCatalogAgent(agent)}
+                          t={t}
+                        />
+                      ))}
+                    </div>
+                  </AgentCategorySection>
+                )
+              }) : (
+                <EmptyCatalogState query={catalogQuery} t={t} />
+              )}
+              {filteredCatalogAgents.length > 0 ? (
+                <CatalogPagination
+                  page={catalogPage}
+                  pageCount={pageCount}
+                  total={filteredCatalogAgents.length}
+                  onPageChange={setCatalogPage}
                   t={t}
-                  onToggle={() => toggleEnabled(profile.id)}
-                  onEdit={() => setDialog({ profile: { ...profile }, isNew: false })}
-                  onDelete={() => void removeProfile(profile.id)}
                 />
-              </Row>
-            )
-          })}
-        </EditorSettingsCard>
+              ) : null}
+            </div>
+
+            <div className="min-w-0 bg-ds-main/30 p-4">
+              {selectedCatalogAgent ? (
+                <AgentDetailsPanel
+                  agent={selectedCatalogAgent}
+                  groups={composerModelGroups}
+                  onModelChange={(model, providerId) =>
+                    setProfileModel(selectedCatalogAgent.profile.id, model, providerId)}
+                  onReasoningChange={(effort) => setProfileReasoning(selectedCatalogAgent.profile.id, effort)}
+                  selectedSurface={selectedSurface}
+                  onToggleSurface={() => toggleSurface(selectedCatalogAgent.profile.id, selectedSurface)}
+                  onToggle={() => toggleEnabled(selectedCatalogAgent.profile.id)}
+                  onEdit={() => setDialog({ profile: { ...selectedCatalogAgent.profile }, isNew: false })}
+                  onDelete={() => void removeProfile(selectedCatalogAgent.profile.id)}
+                  t={t}
+                />
+              ) : (
+                <EmptyCatalogState query={catalogQuery} t={t} compact />
+              )}
+            </div>
+          </div>
+        </section>
 
         <EditorSettingsCard
           title={tSettings('subagentsAutomaticRoles')}
@@ -494,129 +758,191 @@ export function SubagentSettingsEditor({
   }
 
   return (
-    <div className={`flex flex-col bg-ds-sidebar ${className ?? ''}`}>
-      <div className="min-h-0 flex-1 overflow-y-auto py-1.5">
-        <GroupLabel>{t('subagentsPanel.delegatable', 'Delegatable · usable in chat')}</GroupLabel>
-        {delegatable.map((p) => {
-          const builtin = isBuiltin(p.id)
-          const name = builtin ? t(`subagentsPanel.role.${p.id}.name`, p.name || p.id) : p.name || p.id
-          const desc = builtin
-            ? t(`subagentsPanel.role.${p.id}.desc`, p.description ?? '')
-            : (p.description ?? '')
-          return (
-            <Row key={p.id} roleId={p.id} disabled={!p.enabled} builtin={builtin} name={name} desc={desc}>
-              <ModelSelect
-                value={p.model ?? ''}
-                providerId={p.providerId ?? ''}
-                groups={composerModelGroups}
-                onChange={(m, pid) => setProfileModel(p.id, m, pid)}
-                reasoning={p.reasoningEffort ?? 'off'}
-                onReasoningChange={(effort) => setProfileReasoning(p.id, effort)}
-              />
-              <RowActions
-                enabled={p.enabled}
-                builtin={builtin}
-                t={t}
-                onToggle={() => toggleEnabled(p.id)}
-                onEdit={() => setDialog({ profile: { ...p }, isNew: false })}
-                onDelete={() => void removeProfile(p.id)}
-              />
-            </Row>
-          )
-        })}
-
-        <GroupLabel>{t('subagentsPanel.system', 'System · internal')}</GroupLabel>
-
-        {/* Compaction: configurable model, defaults to the main conversation
-            model when left on "follow default". No mode toggle — compaction
-            always runs the model (heuristic fold is a silent fallback). */}
-        <Row
-          roleId="compaction"
-          name={t('subagentsPanel.role.compaction.name', 'Compaction')}
-          desc={t('subagentsPanel.role.compaction.desc', 'Configurable · defaults to main model')}
-        >
-          <ModelSelect
-            value={compactionSlot.model}
-            providerId={compactionSlot.providerId}
-            groups={composerModelGroups}
-            small
-            onChange={(m, pid) => void persistCompactionSlot(m, pid)}
-          />
-        </Row>
-
-        {/* Code review: configurable model. */}
-        <Row
-          roleId="code-review"
-          name={t('subagentsPanel.role.codeReview.name', 'Code review')}
-          desc={t('subagentsPanel.role.codeReview.desc', 'Isolated read-only run · configurable')}
-        >
-          <ModelSelect
-            value={codeReviewSlot.model}
-            providerId={codeReviewSlot.providerId}
-            groups={composerModelGroups}
-            onChange={(m, pid) => persistRoleSlot('codeReviewModel', 'codeReviewProviderId', m, pid)}
-            reasoning={codeReviewReasoning}
-            onReasoningChange={(effort) => persistRoleReasoning('codeReviewReasoningEffort', effort)}
-          />
-        </Row>
-
-        {/* Title: configurable model, defaults to small model. */}
-        <Row
-          roleId="title"
-          name={t('subagentsPanel.role.title.name', 'Title')}
-          desc={t('subagentsPanel.role.title.desc', 'LLM · defaults to small model')}
-        >
-          <ModelSelect
-            value={titleSlot.model}
-            providerId={titleSlot.providerId}
-            groups={composerModelGroups}
-            small
-            onChange={(m, pid) => persistRoleSlot('titleModel', 'titleProviderId', m, pid)}
-            reasoning={titleReasoning}
-            onReasoningChange={(effort) => persistRoleReasoning('titleReasoningEffort', effort)}
-          />
-        </Row>
-
-        {/* Summary: configurable model, defaults to small model. */}
-        <Row
-          roleId="summary"
-          name={t('subagentsPanel.role.summary.name', 'Summary')}
-          desc={t('subagentsPanel.role.summary.desc', 'LLM · defaults to small model')}
-        >
-          <ModelSelect
-            value={summarySlot.model}
-            providerId={summarySlot.providerId}
-            groups={composerModelGroups}
-            small
-            onChange={(m, pid) => persistRoleSlot('summaryModel', 'summaryProviderId', m, pid)}
-            reasoning={summaryReasoning}
-            onReasoningChange={(effort) => persistRoleReasoning('summaryReasoningEffort', effort)}
-          />
-        </Row>
-
-        <GroupLabel>{t('subagentsPanel.global', 'Global · shared')}</GroupLabel>
-
-        {/* Small model slot: Title & Summary default to this. */}
-        <Row
-          roleId="small-model"
-          name={t('subagentsPanel.smallModel.name', 'Small model')}
-          desc={t('subagentsPanel.smallModel.desc', 'Default for Title & Summary')}
-        >
-          <ModelSelect
-            value={smallModel.model}
-            providerId={smallModel.providerId}
-            groups={composerModelGroups}
-            small
-            onChange={(m, pid) => persistRoleSlot('smallModel', 'smallModelProviderId', m, pid)}
-          />
-        </Row>
+    <div className={`ds-no-drag flex h-full min-h-0 flex-col overflow-hidden bg-ds-sidebar ${className ?? ''}`}>
+      <div className="shrink-0 border-b border-ds-border-muted px-3 py-3">
+        <ExtensionAgentsControl
+          enabled={extensionAgentsEnabled}
+          count={extensionAgentIds.size}
+          onToggle={setExtensionAgentsEnabled}
+          t={t}
+        />
+        <div className="mb-2.5 flex items-center justify-between gap-3">
+          <span className="text-[12px] font-semibold text-ds-heading">
+            {t('subagentsPanel.delegatableCount', '{{count}} delegatable roles', { count: catalogAgents.length })}
+          </span>
+          <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10.5px] font-semibold text-accent">
+            {t('subagentsPanel.configuredCount', '{{count}} configured', { count: configuredCount })}
+          </span>
+        </div>
+        <AgentCatalogToolbar
+          query={catalogQuery}
+          onQueryChange={setCatalogQuery}
+          selectedCategory={categoryFilter}
+          onCategoryChange={selectCategory}
+          counts={categoryCounts}
+          total={catalogAgents.length}
+          t={t}
+          compact
+        />
       </div>
 
-      <div className="shrink-0 border-t border-ds-border px-3 py-3">
+      <div className="h-0 min-h-0 flex-1 touch-pan-y overscroll-contain overflow-y-auto overflow-x-hidden px-2 py-2 [scrollbar-gutter:stable]">
+        {groupedCatalogAgents.length > 0 ? groupedCatalogAgents.map(({ category, agents }) => {
+          const expanded = normalizedQuery.length > 0
+            || categoryFilter !== 'all'
+            || !collapsedCategories.has(category)
+          return (
+            <AgentCategorySection
+              key={category}
+              category={category}
+              count={agents.length}
+              expanded={expanded}
+              onToggle={() => toggleCategory(category)}
+              t={t}
+              compact
+            >
+              <div className="space-y-1 pb-2">
+                {agents.map((agent) => {
+                  const selected = selectedCatalogAgent?.profile.id === agent.profile.id
+                  return (
+                    <CatalogAgentRow
+                      key={agent.profile.id}
+                      agent={agent}
+                      selected={selected}
+                      variant="panel"
+                      onSelect={() => selectCatalogAgent(agent)}
+                      t={t}
+                    >
+                      {selected ? (
+                        <div className="flex items-center gap-2 border-t border-ds-border-muted px-3 py-2.5">
+                          <ModelSelect
+                            value={agent.profile.model ?? ''}
+                            providerId={agent.profile.providerId ?? ''}
+                            groups={composerModelGroups}
+                            stretch
+                            onChange={(model, providerId) => setProfileModel(agent.profile.id, model, providerId)}
+                            reasoning={agent.profile.reasoningEffort ?? 'off'}
+                            onReasoningChange={(effort) => setProfileReasoning(agent.profile.id, effort)}
+                          />
+                          <RowActions
+                            enabled={agent.profile.enabled}
+                            builtin={agent.builtin}
+                            t={t}
+                            onToggle={() => toggleEnabled(agent.profile.id)}
+                            onEdit={() => setDialog({ profile: { ...agent.profile }, isNew: false })}
+                            onDelete={() => void removeProfile(agent.profile.id)}
+                          />
+                        </div>
+                      ) : null}
+                    </CatalogAgentRow>
+                  )
+                })}
+              </div>
+            </AgentCategorySection>
+          )
+        }) : (
+          <EmptyCatalogState query={catalogQuery} t={t} />
+        )}
+
+        <div className="mt-2 border-t border-ds-border-muted pt-2">
+          <button
+            type="button"
+            aria-expanded={systemRolesOpen}
+            onClick={() => setSystemRolesOpen((open) => !open)}
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-heading"
+          >
+            <ChevronRight className={`h-3.5 w-3.5 transition ${systemRolesOpen ? 'rotate-90' : ''}`} />
+            <span>{t('subagentsPanel.system', 'System · internal')}</span>
+            <span className="ml-auto rounded-full bg-ds-card-muted px-1.5 py-0.5 text-[9.5px]">5</span>
+          </button>
+          {systemRolesOpen ? (
+            <div className="mt-1 space-y-0.5">
+              <Row
+                roleId="compaction"
+                name={t('subagentsPanel.role.compaction.name', 'Compaction')}
+                desc={t('subagentsPanel.role.compaction.desc', 'Configurable · defaults to main model')}
+              >
+                <ModelSelect
+                  value={compactionSlot.model}
+                  providerId={compactionSlot.providerId}
+                  groups={composerModelGroups}
+                  small
+                  onChange={(m, pid) => void persistCompactionSlot(m, pid)}
+                />
+              </Row>
+              <Row
+                roleId="code-review"
+                name={t('subagentsPanel.role.codeReview.name', 'Code review')}
+                desc={t('subagentsPanel.role.codeReview.desc', 'Isolated read-only run · configurable')}
+              >
+                <ModelSelect
+                  value={codeReviewSlot.model}
+                  providerId={codeReviewSlot.providerId}
+                  groups={composerModelGroups}
+                  onChange={(m, pid) => persistRoleSlot('codeReviewModel', 'codeReviewProviderId', m, pid)}
+                  reasoning={codeReviewReasoning}
+                  onReasoningChange={(effort) => persistRoleReasoning('codeReviewReasoningEffort', effort)}
+                />
+              </Row>
+              <Row
+                roleId="title"
+                name={t('subagentsPanel.role.title.name', 'Title')}
+                desc={t('subagentsPanel.role.title.desc', 'LLM · defaults to small model')}
+              >
+                <ModelSelect
+                  value={titleSlot.model}
+                  providerId={titleSlot.providerId}
+                  groups={composerModelGroups}
+                  small
+                  onChange={(m, pid) => persistRoleSlot('titleModel', 'titleProviderId', m, pid)}
+                  reasoning={titleReasoning}
+                  onReasoningChange={(effort) => persistRoleReasoning('titleReasoningEffort', effort)}
+                />
+              </Row>
+              <Row
+                roleId="summary"
+                name={t('subagentsPanel.role.summary.name', 'Summary')}
+                desc={t('subagentsPanel.role.summary.desc', 'LLM · defaults to small model')}
+              >
+                <ModelSelect
+                  value={summarySlot.model}
+                  providerId={summarySlot.providerId}
+                  groups={composerModelGroups}
+                  small
+                  onChange={(m, pid) => persistRoleSlot('summaryModel', 'summaryProviderId', m, pid)}
+                  reasoning={summaryReasoning}
+                  onReasoningChange={(effort) => persistRoleReasoning('summaryReasoningEffort', effort)}
+                />
+              </Row>
+              <Row
+                roleId="small-model"
+                name={t('subagentsPanel.smallModel.name', 'Small model')}
+                desc={t('subagentsPanel.smallModel.desc', 'Default for Title & Summary')}
+              >
+                <ModelSelect
+                  value={smallModel.model}
+                  providerId={smallModel.providerId}
+                  groups={composerModelGroups}
+                  small
+                  onChange={(m, pid) => persistRoleSlot('smallModel', 'smallModelProviderId', m, pid)}
+                />
+              </Row>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-3 border-t border-ds-border px-3 py-2.5">
+        <span className="min-w-0 flex-1 truncate text-[10.5px] text-ds-faint">
+          {t('subagentsPanel.showingCount', 'Showing {{visible}} of {{total}}', {
+            visible: filteredCatalogAgents.length,
+            total: catalogAgents.length
+          })}
+        </span>
         <button
           type="button"
-          onClick={() => setDialog({ profile: newProfile(), isNew: true })}
-          className="flex w-full items-center justify-center gap-2 rounded-[10px] bg-accent px-3 py-2.5 text-[12.5px] font-semibold text-white transition hover:bg-accent/90"
+          onClick={() => setDialog({ profile: newProfile(panelSurface), isNew: true })}
+          className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-[9px] bg-accent px-3 py-2 text-[11.5px] font-semibold text-white transition hover:bg-accent/90"
         >
           <Plus className="h-3.5 w-3.5" strokeWidth={2.4} />
           {t('subagentsPanel.newSubagent', 'New subagent')}
@@ -662,7 +988,7 @@ function EditorSettingsCard({
   )
 }
 
-function PolicySettingRow({
+function CompactPolicySetting({
   title,
   description,
   children
@@ -672,12 +998,554 @@ function PolicySettingRow({
   children: ReactNode
 }): ReactElement {
   return (
-    <div className="flex flex-col gap-3 px-3 py-4 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
+    <div className="flex items-center gap-4 bg-ds-card px-5 py-3.5">
       <div className="min-w-0 flex-1">
-        <div className="text-[14px] font-semibold text-ds-ink">{title}</div>
-        <p className="mt-0.5 text-[13px] leading-relaxed text-ds-muted">{description}</p>
+        <div className="text-[13px] font-semibold text-ds-ink">{title}</div>
+        <p className="mt-0.5 line-clamp-2 text-[11.5px] leading-4 text-ds-muted">{description}</p>
       </div>
-      <div className="flex w-full min-w-0 justify-end sm:max-w-[420px]">{children}</div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  )
+}
+
+const CATEGORY_FALLBACKS: Record<AgentCategory, string> = {
+  development: 'Development',
+  review: 'Review',
+  quality: 'Quality',
+  planning: 'Planning',
+  operations: 'Operations',
+  research: 'Research',
+  custom: 'Custom'
+}
+
+function agentCategoryLabel(t: TFunction<'common'>, category: AgentCategory): string {
+  return t(`subagentsPanel.category.${category}`, CATEGORY_FALLBACKS[category])
+}
+
+function surfaceLabel(t: TFunction<'common'>, surface: SurfaceTab): string {
+  const fallbacks: Record<SurfaceTab, string> = {
+    shared: 'Base',
+    code: 'Code',
+    write: 'Write',
+    design: 'Design'
+  }
+  return t(`subagentsPanel.surface.${surface}`, fallbacks[surface])
+}
+
+function SurfaceTabs({
+  value,
+  onChange,
+  t
+}: {
+  value: SurfaceTab
+  onChange: (surface: SurfaceTab) => void
+  t: TFunction<'common'>
+}): ReactElement {
+  return (
+    <div className="mb-3 grid grid-cols-4 gap-1 rounded-xl bg-ds-card-muted p-1" role="tablist">
+      {SURFACE_TABS.map((surface) => (
+        <button
+          key={surface}
+          type="button"
+          role="tab"
+          aria-selected={value === surface}
+          onClick={() => onChange(surface)}
+          className={`rounded-lg px-2 py-1.5 text-[11px] font-semibold transition ${
+            value === surface
+              ? 'bg-ds-card text-accent shadow-sm'
+              : 'text-ds-muted hover:text-ds-heading'
+          }`}
+        >
+          {surfaceLabel(t, surface)}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function CatalogPagination({
+  page,
+  pageCount,
+  total,
+  onPageChange,
+  t
+}: {
+  page: number
+  pageCount: number
+  total: number
+  onPageChange: (page: number) => void
+  t: TFunction<'common'>
+}): ReactElement {
+  return (
+    <nav className="mt-3 flex items-center justify-between gap-3 border-t border-ds-border-muted pt-3" aria-label={t('subagentsPanel.pagination', 'Agent pages')}>
+      <span className="text-[10.5px] text-ds-muted">
+        {t('subagentsPanel.pageSummary', 'Page {{page}} of {{pages}} · {{count}} agents', {
+          page,
+          pages: pageCount,
+          count: total
+        })}
+      </span>
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          disabled={page <= 1}
+          onClick={() => onPageChange(Math.max(1, page - 1))}
+          aria-label={t('subagentsPanel.previousPage', 'Previous page')}
+          className="rounded-lg border border-ds-border p-1.5 text-ds-muted transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+        </button>
+        <span className="min-w-12 text-center text-[11px] font-semibold text-ds-heading">{page}/{pageCount}</span>
+        <button
+          type="button"
+          disabled={page >= pageCount}
+          onClick={() => onPageChange(Math.min(pageCount, page + 1))}
+          aria-label={t('subagentsPanel.nextPage', 'Next page')}
+          className="rounded-lg border border-ds-border p-1.5 text-ds-muted transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <ChevronRight className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </nav>
+  )
+}
+
+function ExtensionAgentsControl({
+  enabled,
+  count,
+  onToggle,
+  t
+}: {
+  enabled: boolean
+  count: number
+  onToggle: (enabled: boolean) => void
+  t: TFunction<'common'>
+}): ReactElement {
+  return (
+    <section className="mb-3 rounded-xl border border-ds-border bg-ds-card px-3 py-2.5 shadow-sm shadow-black/5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[12px] font-semibold text-ds-heading">
+            {t('subagentsPanel.extensionAgents.title', 'Extension agents')}
+          </div>
+          <div className="mt-0.5 text-[10.5px] text-ds-muted">
+            {t('subagentsPanel.extensionAgents.description', 'Write and Design specialists · {{count}}', { count })}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className={`text-[10.5px] font-semibold ${enabled ? 'text-accent' : 'text-ds-faint'}`}>
+            {enabled
+              ? t('subagentsPanel.extensionAgents.enabled', 'Enabled')
+              : t('subagentsPanel.extensionAgents.disabled', 'Disabled')}
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            aria-label={t('subagentsPanel.extensionAgents.toggle', 'Toggle extension agents')}
+            onClick={() => onToggle(!enabled)}
+            className={`relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+              enabled ? 'bg-accent' : 'bg-ds-border'
+            }`}
+          >
+            <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+              enabled ? 'translate-x-4' : 'translate-x-0'
+            }`} />
+          </button>
+        </div>
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-3 border-t border-ds-border-muted pt-2">
+        <span className="text-[10px] text-ds-faint">
+          {t('subagentsPanel.extensionAgents.baseAlwaysAvailable', 'Base agents are always available')}
+        </span>
+        <button
+          type="button"
+          onClick={() => onToggle(!enabled)}
+          className="shrink-0 rounded-md px-1.5 py-1 text-[10px] font-semibold text-accent transition hover:bg-accent-soft"
+        >
+          <span>{enabled
+            ? t('subagentsPanel.extensionAgents.keepBaseOnly', 'Keep base agents only')
+            : t('subagentsPanel.extensionAgents.enableExtensions', 'Enable extension agents')}</span>
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function AgentCatalogToolbar({
+  query,
+  onQueryChange,
+  selectedCategory,
+  onCategoryChange,
+  counts,
+  total,
+  t,
+  compact = false
+}: {
+  query: string
+  onQueryChange: (value: string) => void
+  selectedCategory: AgentCategoryFilter
+  onCategoryChange: (category: AgentCategoryFilter) => void
+  counts: Map<AgentCatalogFilter, number>
+  total: number
+  t: TFunction<'common'>
+  compact?: boolean
+}): ReactElement {
+  const filters: AgentCategoryFilter[] = [
+    'all',
+    'base',
+    ...AGENT_CATEGORY_ORDER.filter((category) => (counts.get(category) ?? 0) > 0)
+  ]
+  return (
+    <div className="space-y-2.5">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ds-faint" />
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          aria-label={t('subagentsPanel.search', 'Search agents')}
+          placeholder={t('subagentsPanel.searchPlaceholder', 'Search names, capabilities, or scenarios')}
+          className={`w-full rounded-[10px] border border-ds-border bg-ds-card pl-9 pr-9 text-ds-heading outline-none transition placeholder:text-ds-faint focus:border-accent/45 focus:ring-2 focus:ring-accent/10 ${
+            compact ? 'h-9 text-[12px]' : 'h-10 text-[13px]'
+          }`}
+        />
+        {query ? (
+          <button
+            type="button"
+            onClick={() => onQueryChange('')}
+            aria-label={t('subagentsPanel.clearSearch', 'Clear search')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-ds-faint hover:bg-ds-subtle hover:text-ds-heading"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+      </div>
+      <div className="flex gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {filters.map((filter) => {
+          const active = selectedCategory === filter
+          const count = filter === 'all' ? total : (counts.get(filter) ?? 0)
+          const label = filter === 'all'
+            ? t('subagentsPanel.category.all', 'All')
+            : filter === 'base'
+              ? t('subagentsPanel.category.baseAgent', 'Base agents')
+              : agentCategoryLabel(t, filter)
+          return (
+            <button
+              key={filter}
+              type="button"
+              aria-pressed={active}
+              onClick={() => onCategoryChange(filter)}
+              className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[10.5px] font-semibold transition ${
+                active
+                  ? 'border-accent bg-accent text-white shadow-sm'
+                  : 'border-ds-border bg-ds-card text-ds-muted hover:border-accent/30 hover:text-ds-heading'
+              }`}
+            >
+              <span>{label}</span>
+              <span className={active ? 'text-white/80' : 'text-ds-faint'}>{count}</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function AgentCategorySection({
+  category,
+  count,
+  expanded,
+  onToggle,
+  t,
+  compact = false,
+  children
+}: {
+  category: AgentCategory
+  count: number
+  expanded: boolean
+  onToggle: () => void
+  t: TFunction<'common'>
+  compact?: boolean
+  children: ReactNode
+}): ReactElement {
+  const label = agentCategoryLabel(t, category)
+  return (
+    <section data-agent-category={category}>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-label={t('subagentsPanel.toggleCategory', 'Toggle {{category}} category', { category: label })}
+        onClick={onToggle}
+        className={`flex w-full items-center gap-2 rounded-lg text-left font-semibold text-ds-heading transition hover:bg-ds-hover ${
+          compact ? 'px-2 py-2 text-[11.5px]' : 'px-2 py-2.5 text-[12.5px]'
+        }`}
+      >
+        <ChevronRight className={`h-3.5 w-3.5 text-ds-faint transition ${expanded ? 'rotate-90' : ''}`} />
+        <span>{label}</span>
+        <span className="rounded-full bg-ds-card-muted px-1.5 py-0.5 text-[9.5px] font-semibold text-ds-muted">{count}</span>
+      </button>
+      {expanded ? children : null}
+    </section>
+  )
+}
+
+function CatalogAgentRow({
+  agent,
+  selected,
+  variant,
+  onSelect,
+  t,
+  children
+}: {
+  agent: CatalogAgent
+  selected: boolean
+  variant: EditorVariant
+  onSelect: () => void
+  t: TFunction<'common'>
+  children?: ReactNode
+}): ReactElement {
+  const { profile, builtin, name, desc } = agent
+  const settings = variant === 'settings'
+  const modelLabel = profile.model || t('agentsView.followDefault', 'Follow default')
+  return (
+    <div
+      data-agent-id={profile.id}
+      className={`overflow-visible rounded-xl border transition ${
+        selected
+          ? 'border-accent/70 bg-accent-soft/45 shadow-[0_0_0_1px_rgba(59,130,216,0.08)]'
+          : 'border-ds-border-muted bg-ds-card hover:border-accent/25 hover:bg-ds-hover/35'
+      } ${profile.enabled ? '' : 'opacity-60'}`}
+    >
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-pressed={selected}
+        className={`flex w-full min-w-0 items-center gap-2.5 text-left ${settings ? 'px-3 py-2.5' : 'px-2.5 py-2'}`}
+      >
+        <span
+          className={`flex shrink-0 items-center justify-center rounded-full ${settings ? 'h-10 w-10' : 'h-9 w-9'}`}
+          style={{
+            background: 'radial-gradient(circle at 50% 36%, #fff 0%, rgba(238,244,251,0.9) 78%)',
+            boxShadow: 'inset 0 0 0 1px rgba(188,214,245,0.7)'
+          }}
+        >
+          <AgentKun id={profile.id} disabled={!profile.enabled} className={settings ? 'h-8 w-8' : 'h-7 w-7'} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className={`truncate font-semibold text-ds-heading ${settings ? 'text-[12.5px]' : 'text-[12px]'}`}>{name}</span>
+            {builtin ? (
+              <span className="shrink-0 rounded-full bg-accent-soft px-1.5 py-px text-[8.5px] font-semibold text-accent">
+                {t('subagentsPanel.builtin', 'Built-in')}
+              </span>
+            ) : null}
+            {agent.baseAgent ? (
+              <span className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-px text-[8.5px] font-semibold text-emerald-600 dark:text-emerald-400">
+                {t('subagentsPanel.surface.shared', 'Base')}
+              </span>
+            ) : null}
+          </span>
+          <span className={`mt-0.5 block truncate text-ds-muted ${settings ? 'text-[10.5px]' : 'text-[10px]'}`}>{desc}</span>
+          {settings ? (
+            <span className="mt-1 inline-flex max-w-full rounded-md bg-ds-card-muted px-1.5 py-0.5 text-[9px] font-semibold text-ds-muted">
+              <span className="truncate">{modelLabel}</span>
+            </span>
+          ) : null}
+        </span>
+        {!settings ? (
+          <span
+            title={modelLabel}
+            className="max-w-[112px] shrink-0 truncate rounded-md bg-ds-card-muted px-2 py-1 text-[9.5px] font-semibold text-ds-muted"
+          >
+            {modelLabel}
+          </span>
+        ) : null}
+        <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-ds-faint transition ${selected && !settings ? 'rotate-90' : ''}`} />
+      </button>
+      {children}
+    </div>
+  )
+}
+
+function AgentDetailsPanel({
+  agent,
+  groups,
+  onModelChange,
+  onReasoningChange,
+  selectedSurface,
+  onToggleSurface,
+  onToggle,
+  onEdit,
+  onDelete,
+  t
+}: {
+  agent: CatalogAgent
+  groups: ModelProviderModelGroup[]
+  onModelChange: (model: string, providerId: string) => void
+  onReasoningChange: (effort: ModelReasoningEffort) => void
+  selectedSurface: SurfaceTab
+  onToggleSurface: () => void
+  onToggle: () => void
+  onEdit: () => void
+  onDelete: () => void
+  t: TFunction<'common'>
+}): ReactElement {
+  const { profile, builtin, name, desc, category } = agent
+  const surfaces = profileSurfaces(profile)
+  const inherited = selectedSurface !== 'shared' && surfaces.includes('shared')
+  const assigned = inherited || surfaces.includes(selectedSurface)
+  const locked = profile.id === 'general' || inherited
+  return (
+    <aside className="lg:sticky lg:top-4" data-testid="subagent-details-panel">
+      <div className="flex items-start gap-3">
+        <span
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full"
+          style={{
+            background: 'radial-gradient(circle at 50% 36%, #fff 0%, rgba(238,244,251,0.9) 78%)',
+            boxShadow: 'inset 0 0 0 1px rgba(188,214,245,0.7)'
+          }}
+        >
+          <AgentKun id={profile.id} disabled={!profile.enabled} className="h-10 w-10" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <h3 className="text-[14px] font-semibold text-ds-heading">{name}</h3>
+            {builtin ? (
+              <span className="rounded-full bg-accent-soft px-1.5 py-0.5 text-[9px] font-semibold text-accent">
+                {t('subagentsPanel.builtin', 'Built-in')}
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-1 text-[11.5px] leading-5 text-ds-muted">{desc}</p>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-4 border-t border-ds-border-muted pt-4">
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-ds-border-muted bg-ds-card px-3 py-2.5">
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold text-ds-heading">
+              {surfaceLabel(t, selectedSurface)}
+            </div>
+            <div className="mt-0.5 text-[10px] text-ds-muted">
+              {inherited
+                ? t('subagentsPanel.surfaceInherited', 'Inherited from Base')
+                : assigned
+                  ? t('subagentsPanel.surfaceAssigned', 'Available in this mode')
+                  : t('subagentsPanel.surfaceUnassigned', 'Not available in this mode')}
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={assigned}
+            disabled={locked}
+            onClick={onToggleSurface}
+            className={`relative h-6 w-11 shrink-0 rounded-full transition ${assigned ? 'bg-accent' : 'bg-ds-card-muted'} disabled:cursor-not-allowed disabled:opacity-60`}
+          >
+            <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition ${assigned ? 'translate-x-5' : ''}`} />
+          </button>
+        </div>
+        <div>
+          <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-ds-faint">
+            {t('agentsView.fModel', 'Model')}
+          </div>
+          <ModelSelect
+            value={profile.model ?? ''}
+            providerId={profile.providerId ?? ''}
+            groups={groups}
+            stretch
+            onChange={onModelChange}
+            reasoning={profile.reasoningEffort ?? 'off'}
+            onReasoningChange={onReasoningChange}
+          />
+        </div>
+
+        <div>
+          <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wide text-ds-faint">
+            {t('subagentsPanel.capabilities', 'Capabilities')}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <span className="rounded-md bg-ds-card-muted px-2 py-1 text-[10px] font-medium text-ds-muted">
+              {agentCategoryLabel(t, category)}
+            </span>
+            <span className="rounded-md bg-ds-card-muted px-2 py-1 text-[10px] font-medium text-ds-muted">
+              {profile.toolPolicy === 'readOnly'
+                ? t('agentsView.toolReadOnly', 'Read-only')
+                : t('agentsView.toolInherit', 'All tools')}
+            </span>
+            <span className="rounded-md bg-ds-card-muted px-2 py-1 text-[10px] font-medium text-ds-muted">
+              {profile.mode === 'primary'
+                ? t('agentsView.modePersona', 'Persona')
+                : profile.mode === 'all'
+                  ? t('agentsView.modeBoth', 'Both')
+                  : t('agentsView.modeDelegate', 'Delegate')}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 rounded-lg border border-ds-border-muted bg-ds-card px-3 py-2">
+          <span className={`h-2 w-2 rounded-full ${profile.enabled ? 'bg-emerald-500' : 'bg-ds-faint'}`} />
+          <span className="text-[11px] font-medium text-ds-muted">
+            {profile.enabled ? t('enable', 'Enabled') : t('disable', 'Disabled')}
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-5 flex items-center gap-2 border-t border-ds-border-muted pt-4">
+        {!builtin ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="rounded-lg border border-ds-border px-2.5 py-2 text-ds-muted transition hover:bg-ds-hover hover:text-ds-heading"
+            title={profile.enabled ? t('disable', 'Disable') : t('enable', 'Enable')}
+          >
+            <Power className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={onEdit}
+          className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[11.5px] font-semibold text-white transition hover:bg-accent/90"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+          {t('agentsView.edit', 'Edit')}
+        </button>
+        {!builtin ? (
+          <button
+            type="button"
+            onClick={onDelete}
+            className="rounded-lg border border-ds-border px-2.5 py-2 text-ds-muted transition hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/30"
+            title={t('agentsView.delete', 'Delete')}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+      </div>
+    </aside>
+  )
+}
+
+function EmptyCatalogState({
+  query,
+  t,
+  compact = false
+}: {
+  query: string
+  t: TFunction<'common'>
+  compact?: boolean
+}): ReactElement {
+  return (
+    <div className={`flex flex-col items-center justify-center text-center ${compact ? 'min-h-40' : 'min-h-56'}`}>
+      <Search className="h-7 w-7 text-ds-faint" strokeWidth={1.6} />
+      <div className="mt-3 text-[12.5px] font-semibold text-ds-heading">
+        {t('subagentsPanel.emptyTitle', 'No matching agents')}
+      </div>
+      <p className="mt-1 max-w-56 text-[11px] leading-5 text-ds-muted">
+        {query
+          ? t('subagentsPanel.emptySearch', 'Try another name, capability, or scenario.')
+          : t('subagentsPanel.emptyCategory', 'Choose another category to continue browsing.')}
+      </p>
     </div>
   )
 }
@@ -748,14 +1616,6 @@ export function SubagentPanelHeader({
       >
         <X className="h-4 w-4" strokeWidth={2} />
       </button>
-    </div>
-  )
-}
-
-function GroupLabel({ children }: { children: ReactNode }): ReactElement {
-  return (
-    <div className="px-[18px] pb-1.5 pt-3 text-[10.5px] font-semibold uppercase tracking-wide text-ds-faint">
-      {children}
     </div>
   )
 }

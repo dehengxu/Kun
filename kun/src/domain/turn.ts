@@ -18,6 +18,7 @@ export function createTurnRecord(input: {
   guiPlan?: GuiPlanContextJson
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
+  agentSurface?: 'code' | 'write' | 'design'
   guiDesignArtifact?: GuiDesignArtifactContextJson
   mode?: ThreadMode
   disableUserInput?: boolean
@@ -51,6 +52,7 @@ export function createTurnRecord(input: {
     ...(input.guiPlan ? { guiPlan: input.guiPlan } : {}),
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(input.guiDesignMode ? { guiDesignMode: true } : {}),
+    ...(input.agentSurface ? { agentSurface: input.agentSurface } : {}),
     ...(input.guiDesignArtifact ? { guiDesignArtifact: input.guiDesignArtifact } : {}),
     ...(input.mode ? { mode: input.mode } : {}),
     ...(input.disableUserInput ? { disableUserInput: true } : {}),

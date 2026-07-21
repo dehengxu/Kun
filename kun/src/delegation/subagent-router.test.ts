@@ -91,7 +91,10 @@ describe('subagent BM25 recall', () => {
       ['把这个大需求拆成可以并行的任务', 'planning-and-task-breakdown'],
       ['排查 Electron IPC 偶发超时但不要修改代码', 'debugging-and-error-recovery'],
       ['优化首页 LCP 和 bundle size', 'performance-optimization'],
-      [`${'背景资料与历史讨论'.repeat(80)} 最终任务：修复登录鉴权漏洞`, 'security-and-hardening']
+      [`${'背景资料与历史讨论'.repeat(80)} 最终任务：修复登录鉴权漏洞`, 'security-and-hardening'],
+      ['为这篇产品文章设计论证大纲和章节结构', 'write-outline-architect'],
+      ['核查稿件里的日期、数字和事实陈述', 'write-fact-checker'],
+      ['为产品设计完整的响应式页面和交互状态', 'design-screen-designer']
     ]
     for (const [query, expected] of cases) {
       const ids = recallSubagents(query, documents).map((hit) => hit.targetId)

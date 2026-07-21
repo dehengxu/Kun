@@ -346,6 +346,8 @@ export type ModelProviderSettingsPatchV1 = Partial<
   localGateway?: Partial<LocalModelGatewaySettingsV1>
 }
 
+export type KunSubagentSurfaceV1 = 'shared' | 'code' | 'write' | 'design'
+
 export type KunSubagentProfileV1 = {
   /** Stable key; becomes the Record key in kun SubagentsCapabilityConfig.profiles. */
   id: string
@@ -356,6 +358,8 @@ export type KunSubagentProfileV1 = {
   color?: string
   /** 'subagent' = delegate_task only; 'primary' = session persona only; 'all' = both. */
   mode: 'subagent' | 'primary' | 'all'
+  /** `shared` is inherited by Code, Write, and Design. Empty disables routing. */
+  surfaces?: KunSubagentSurfaceV1[]
   model?: string
   providerId?: string
   /** Appended to the base system prompt (augment, not replace). */

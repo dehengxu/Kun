@@ -566,6 +566,7 @@ export interface AgentProvider {
       }
       guiDesignCanvas?: boolean
       guiDesignMode?: boolean
+      agentSurface?: 'code' | 'write' | 'design'
       guiDesignArtifact?: {
         kind: 'svg'
         artifactId: string
