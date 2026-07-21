@@ -61,7 +61,8 @@ describe('probeModelProvider', () => {
         kind: 'grok-oauth',
         accessToken: 'access',
         refreshToken: 'refresh',
-        expiresAt: Date.now() + 60_000,
+        // Outside the 5-minute early-invalidation window so probe does not refresh.
+        expiresAt: Date.now() + 60 * 60_000,
         email: 'user@x.ai'
       }),
       endpointFormat: 'responses'

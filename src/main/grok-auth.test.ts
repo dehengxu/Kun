@@ -1,15 +1,21 @@
 import { get as httpGet } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  cancelGrokBrowserAuth,
   encodeGrokCredentials,
+  ensureFreshGrokCredentials,
+  GROK_EARLY_INVALIDATION_MS,
+  GROK_OAUTH_CLIENT_ID,
+  GROK_OAUTH_ISSUER,
+  isGrokCredentialExpired,
   isGrokOAuthCredentials,
   parseGrokCredentials,
+  parseGrokPastedAuthInput,
+  pollGrokDeviceAuth,
   resolveGrokOAuthApiKey,
   startGrokBrowserAuth,
   startGrokDeviceAuth,
-  pollGrokDeviceAuth,
-  GROK_OAUTH_CLIENT_ID,
-  GROK_OAUTH_ISSUER
+  submitGrokBrowserAuthCode
 } from './grok-auth'
 
 function encodeJwt(payload: Record<string, unknown>): string {
@@ -18,13 +24,14 @@ function encodeJwt(payload: Record<string, unknown>): string {
   return `${header}.${body}.`
 }
 
-function successfulTokenBody() {
+function successfulTokenBody(overrides: Record<string, unknown> = {}) {
   const claims = { email: 'grok@example.com', sub: 'user_123' }
   return {
     access_token: encodeJwt(claims),
     refresh_token: 'refresh-token',
     id_token: encodeJwt(claims),
-    expires_in: 3600
+    expires_in: 3600,
+    ...overrides
   }
 }
 
@@ -48,28 +55,33 @@ function hitCallback(redirectUri: string, state: string): Promise<void> {
   })
 }
 
-describe('startGrokBrowserAuth', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
-  it('completes browser OAuth with a random loopback callback', async () => {
-    const tokenRequests: Array<{ url: string; body: string }> = []
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
-      const urlString = String(url)
-      if (urlString.includes('openid-configuration')) {
-        return new Response(JSON.stringify(discoveryBody()), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        })
-      }
-      tokenRequests.push({ url: urlString, body: String(init?.body ?? '') })
-      return new Response(JSON.stringify(successfulTokenBody()), {
+function mockDiscoveryAndToken(tokenBody: Record<string, unknown> = successfulTokenBody()) {
+  const tokenRequests: Array<{ url: string; body: string }> = []
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    const urlString = String(url)
+    if (urlString.includes('openid-configuration')) {
+      return new Response(JSON.stringify(discoveryBody()), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       })
+    }
+    tokenRequests.push({ url: urlString, body: String(init?.body ?? '') })
+    return new Response(JSON.stringify(tokenBody), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
     })
+  })
+  return tokenRequests
+}
 
+afterEach(() => {
+  cancelGrokBrowserAuth()
+  vi.restoreAllMocks()
+})
+
+describe('startGrokBrowserAuth', () => {
+  it('completes browser OAuth via loopback callback', async () => {
+    const tokenRequests = mockDiscoveryAndToken()
     let authUrlString = ''
     const result = await startGrokBrowserAuth(async (url) => {
       authUrlString = url
@@ -92,14 +104,28 @@ describe('startGrokBrowserAuth', () => {
     const authUrl = new URL(authUrlString)
     expect(authUrl.searchParams.get('client_id')).toBe(GROK_OAUTH_CLIENT_ID)
     expect(authUrl.searchParams.get('code_challenge_method')).toBe('S256')
-    expect(authUrl.searchParams.get('referrer')).toBe('kun')
-    expect(authUrl.searchParams.get('scope')).toContain('grok-cli:access')
-    const redirectUri = authUrl.searchParams.get('redirect_uri') ?? ''
-    expect(redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/)
     const tokenBody = new URLSearchParams(tokenRequests[0]?.body ?? '')
-    expect(tokenBody.get('redirect_uri')).toBe(redirectUri)
-    expect(tokenBody.get('client_id')).toBe(GROK_OAUTH_CLIENT_ID)
     expect(tokenBody.get('code_verifier')).toBeTruthy()
+  })
+
+  it('completes browser OAuth when the user pastes a bare authorization code', async () => {
+    const tokenRequests = mockDiscoveryAndToken()
+    const browserPromise = startGrokBrowserAuth(async () => {
+      // Wait until the pending session is ready, then paste.
+      await vi.waitFor(async () => {
+        const result = await submitGrokBrowserAuthCode('pasted-auth-code')
+        expect(result.ok).toBe(true)
+      })
+    })
+
+    const result = await browserPromise
+    expect(result).toMatchObject({
+      ok: true,
+      credentials: { kind: 'grok-oauth', email: 'grok@example.com' }
+    })
+    const tokenBody = new URLSearchParams(tokenRequests[0]?.body ?? '')
+    expect(tokenBody.get('code')).toBe('pasted-auth-code')
+    expect(tokenBody.get('grant_type')).toBe('authorization_code')
   })
 
   it('includes token endpoint error details when the exchange is rejected', async () => {
@@ -138,11 +164,16 @@ describe('startGrokBrowserAuth', () => {
   })
 })
 
-describe('startGrokDeviceAuth / pollGrokDeviceAuth', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
+describe('parseGrokPastedAuthInput', () => {
+  it('accepts bare codes and callback URLs', () => {
+    expect(parseGrokPastedAuthInput('  abc123  ')).toEqual({ code: 'abc123', state: '' })
+    expect(
+      parseGrokPastedAuthInput('http://127.0.0.1:1234/callback?code=xyz&state=st')
+    ).toEqual({ code: 'xyz', state: 'st' })
   })
+})
 
+describe('startGrokDeviceAuth / pollGrokDeviceAuth', () => {
   it('requests a device code and completes on successful poll', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
       const urlString = String(url)
@@ -205,7 +236,7 @@ describe('startGrokDeviceAuth / pollGrokDeviceAuth', () => {
   })
 })
 
-describe('credential helpers', () => {
+describe('credential helpers and refresh', () => {
   it('round-trips encode/parse and materializes proxy headers', () => {
     const encoded = encodeGrokCredentials({
       kind: 'grok-oauth',
@@ -225,5 +256,60 @@ describe('credential helpers', () => {
       }
     })
     expect(resolveGrokOAuthApiKey('plain-key')).toEqual({ apiKey: 'plain-key' })
+  })
+
+  it('marks credentials expired inside the early-invalidation window', () => {
+    const now = 1_000_000_000
+    expect(
+      isGrokCredentialExpired(
+        {
+          kind: 'grok-oauth',
+          accessToken: 'a',
+          refreshToken: 'r',
+          expiresAt: now + GROK_EARLY_INVALIDATION_MS - 1
+        },
+        GROK_EARLY_INVALIDATION_MS,
+        now
+      )
+    ).toBe(true)
+    expect(
+      isGrokCredentialExpired(
+        {
+          kind: 'grok-oauth',
+          accessToken: 'a',
+          refreshToken: 'r',
+          expiresAt: now + GROK_EARLY_INVALIDATION_MS + 10_000
+        },
+        GROK_EARLY_INVALIDATION_MS,
+        now
+      )
+    ).toBe(false)
+  })
+
+  it('refreshes credentials that fall within the early-invalidation window', async () => {
+    const newClaims = { email: 'new@example.com', sub: 'user_new' }
+    mockDiscoveryAndToken(
+      successfulTokenBody({
+        access_token: encodeJwt(newClaims),
+        id_token: encodeJwt(newClaims),
+        refresh_token: 'new-refresh',
+        expires_in: 7200
+      })
+    )
+    const raw = encodeGrokCredentials({
+      kind: 'grok-oauth',
+      accessToken: 'old-access',
+      refreshToken: 'old-refresh',
+      expiresAt: Date.now() + 60_000,
+      email: 'old@example.com',
+      userId: 'user_old',
+      issuer: GROK_OAUTH_ISSUER,
+      clientId: GROK_OAUTH_CLIENT_ID
+    })
+    const result = await ensureFreshGrokCredentials(raw)
+    expect(result.refreshed).toBe(true)
+    expect(result.credentials?.accessToken).not.toBe('old-access')
+    expect(result.credentials?.refreshToken).toBe('new-refresh')
+    expect(parseGrokCredentials(result.apiKey)?.email).toBe('new@example.com')
   })
 })

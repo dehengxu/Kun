@@ -1580,5 +1580,8 @@
   "grokOpenBrowser": "Open in browser",
   "grokWaitingAuth": "Waiting for authorization...",
   "grokPreparingDeviceLogin": "Preparing device-code sign-in...",
-  "grokLoginPortBusyFallback": "Could not bind a local callback port, so device-code sign-in is ready instead."
+  "grokLoginPortBusyFallback": "Could not bind a local callback port, so device-code sign-in is ready instead.",
+  "grokPasteCodeHint": "If the browser shows a code (or a callback URL), paste it below to finish sign-in — same as Grok Build.",
+  "grokPasteCodePlaceholder": "Paste authorization code or callback URL",
+  "grokPasteCodeSubmit": "Submit code"
 }

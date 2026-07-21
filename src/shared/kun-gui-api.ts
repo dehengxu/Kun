@@ -389,6 +389,7 @@ export type GrokBrowserAuthErrorCode = 'port_in_use'
 export type GrokBrowserAuthResult =
   | { ok: true; credentials: GrokOAuthCredentials }
   | { ok: false; message: string; code?: GrokBrowserAuthErrorCode }
+export type GrokBrowserAuthCancelResult = { ok: true }
 export type ClawImTelegramConnectErrorCode = 'invalid_format' | 'rejected' | 'network' | 'unknown'
 export type ClawImTelegramConnectResult =
   | { ok: true; botId: number; botUsername: string; botFirstName: string }
@@ -564,6 +565,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   startGrokAuth: () => Promise<GrokAuthStartResult>
   pollGrokAuth: (deviceCode: string) => Promise<GrokAuthPollResult>
   startGrokBrowserAuth: () => Promise<GrokBrowserAuthResult>
+  /** Paste the authorization code (or callback URL) from accounts.x.ai. */
+  submitGrokBrowserAuthCode: (code: string) => Promise<GrokBrowserAuthResult>
+  cancelGrokBrowserAuth: () => Promise<GrokBrowserAuthCancelResult>
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
   workspaceDirectoryExists: (workspaceRoot: string) => Promise<boolean>
   pickLocalFiles: (defaultPath?: string) => Promise<LocalFilesPickResult>

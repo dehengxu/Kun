@@ -8,6 +8,11 @@ export const GROK_CLI_CHAT_PROXY_BASE_URL = 'https://cli-chat-proxy.grok.com/v1'
 export const GROK_TOKEN_AUTH_HEADER = 'xai-grok-cli'
 export const GROK_OAUTH_REFERRER = 'kun'
 
+/** Align with grok-build DEFAULT_EARLY_INVALIDATION_SECS. */
+export const GROK_EARLY_INVALIDATION_MS = 5 * 60 * 1000
+/** Align with grok-build TOKEN_TTL when IdP omits expires_in. */
+export const GROK_TOKEN_TTL_FALLBACK_MS = 30 * 24 * 60 * 60 * 1000
+
 const GROK_OAUTH_HOST = '127.0.0.1'
 const GROK_OAUTH_TIMEOUT_MS = 10 * 60 * 1000
 const GROK_OAUTH_SCOPES = [
@@ -53,6 +58,19 @@ type OidcDiscovery = {
   authorization_endpoint: string
   token_endpoint: string
 }
+
+type PendingBrowserSession = {
+  tokenEndpoint: string
+  redirectUri: string
+  codeVerifier: string
+  state: string
+  server: Server | null
+  settled: boolean
+  resolve: (result: GrokBrowserAuthResult) => void
+  timeout: ReturnType<typeof setTimeout>
+}
+
+let pendingBrowserSession: PendingBrowserSession | null = null
 
 class GrokBrowserAuthError extends Error {
   constructor(
@@ -195,19 +213,30 @@ function buildAuthorizeUrl(
   return `${authorizationEndpoint}${joiner}${params.toString()}`
 }
 
+function expiresAtFromTokens(tokens: Record<string, unknown>): number {
+  const expiresIn = Number(tokens.expires_in)
+  if (Number.isFinite(expiresIn) && expiresIn > 0) {
+    return Date.now() + expiresIn * 1000
+  }
+  return Date.now() + GROK_TOKEN_TTL_FALLBACK_MS
+}
+
 function credentialsFromTokens(
   tokens: Record<string, unknown>,
   issuer: string = GROK_OAUTH_ISSUER
 ): GrokOAuthCredentials | null {
   const accessToken = tokens.access_token as string | undefined
-  const refreshToken = tokens.refresh_token as string | undefined
-  const expiresIn = Number(tokens.expires_in) || 3600
-  if (!accessToken || !refreshToken) return null
+  // Device/browser login should always return a refresh_token (offline_access).
+  // Keep refresh optional only if IdP omits it — callers still get a session
+  // but ensureFresh will force re-login once access expires.
+  const refreshToken = (tokens.refresh_token as string | undefined) ?? ''
+  if (!accessToken) return null
+  if (!refreshToken) return null
   return {
     kind: 'grok-oauth',
     accessToken,
     refreshToken,
-    expiresAt: Date.now() + expiresIn * 1000,
+    expiresAt: expiresAtFromTokens(tokens),
     email: extractEmail(tokens.id_token as string | undefined, accessToken),
     userId: extractUserId(tokens.id_token as string | undefined, accessToken),
     issuer,
@@ -224,24 +253,78 @@ function renderGrokErrorHtml(message: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>Grok 订阅</title></head><body style="font-family:system-ui;padding:2rem;color:#b91c1c"><h1>登录失败</h1><p>${safe}</p></body></html>`
 }
 
+function closeServer(server: Server | null): void {
+  if (!server) return
+  try {
+    server.close(() => {})
+  } catch {
+    /* ignore */
+  }
+}
+
+function settleBrowserSession(result: GrokBrowserAuthResult): void {
+  const session = pendingBrowserSession
+  if (!session || session.settled) return
+  session.settled = true
+  clearTimeout(session.timeout)
+  closeServer(session.server)
+  pendingBrowserSession = null
+  session.resolve(result)
+}
+
 /**
- * Browser OAuth (authorization code + PKCE). Binds a random loopback port,
- * opens the browser, exchanges the callback code for tokens.
+ * Parse pasted input the same way grok-build does:
+ * - full callback URL with ?code=
+ * - bare authorization code
+ */
+export function parseGrokPastedAuthInput(input: string): { code: string; state: string } | { error: string } {
+  const trimmed = input.trim()
+  if (!trimmed) return { error: 'empty input' }
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const url = new URL(trimmed)
+      const code = url.searchParams.get('code')
+      if (code) {
+        return { code, state: url.searchParams.get('state') ?? '' }
+      }
+      const oauthError = url.searchParams.get('error')
+      if (oauthError) {
+        const desc = url.searchParams.get('error_description')
+        return { error: desc ? `${oauthError}: ${desc}` : oauthError }
+      }
+      return { error: 'URL has no code query parameter' }
+    } catch {
+      return { error: 'invalid URL' }
+    }
+  }
+  return { code: trimmed, state: '' }
+}
+
+async function exchangeAuthorizationCode(
+  session: Pick<PendingBrowserSession, 'tokenEndpoint' | 'redirectUri' | 'codeVerifier'>,
+  code: string
+): Promise<GrokOAuthCredentials> {
+  const tokens = await postForm(session.tokenEndpoint, {
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: session.redirectUri,
+    client_id: GROK_OAUTH_CLIENT_ID,
+    code_verifier: session.codeVerifier
+  })
+  const creds = credentialsFromTokens(tokens)
+  if (!creds) throw new Error('令牌交换返回的数据不完整')
+  return creds
+}
+
+/**
+ * Browser OAuth (authorization code + PKCE).
+ * Races loopback callback against manual paste (submitGrokBrowserAuthCode),
+ * matching grok-build's Path A + Path B design.
  */
 export async function startGrokBrowserAuth(
   openBrowser: (url: string) => void | Promise<void>
 ): Promise<GrokBrowserAuthResult> {
-  let server: Server | null = null
-  const cleanup = (): void => {
-    if (server) {
-      try {
-        server.close(() => {})
-      } catch {
-        /* ignore */
-      }
-      server = null
-    }
-  }
+  cancelGrokBrowserAuth()
 
   try {
     const discovery = await discoverOidc()
@@ -249,30 +332,32 @@ export async function startGrokBrowserAuth(
     const state = base64UrlEncode(randomBytes(32))
     const nonce = base64UrlEncode(randomBytes(16))
 
-    const credentials = await new Promise<GrokOAuthCredentials>((resolve, reject) => {
-      let settled = false
+    return await new Promise<GrokBrowserAuthResult>((resolve) => {
+      let activePort = 0
+      let server: Server | null = null
+
       const timeout = setTimeout(() => {
-        cleanup()
-        reject(new Error('授权超时，请重试'))
+        settleBrowserSession({ ok: false, message: '授权超时，请重试' })
       }, GROK_OAUTH_TIMEOUT_MS)
 
-      const settleReject = (error: Error): void => {
-        if (settled) return
-        settled = true
-        clearTimeout(timeout)
-        cleanup()
-        reject(error)
+      const sessionShell: PendingBrowserSession = {
+        tokenEndpoint: discovery.token_endpoint,
+        redirectUri: '',
+        codeVerifier: pkce.verifier,
+        state,
+        server: null,
+        settled: false,
+        resolve,
+        timeout
       }
-      const settleResolve = (creds: GrokOAuthCredentials): void => {
-        if (settled) return
-        settled = true
-        clearTimeout(timeout)
-        cleanup()
-        resolve(creds)
-      }
+      pendingBrowserSession = sessionShell
 
-      let activePort = 0
       server = createServer((req, res) => {
+        const current = pendingBrowserSession
+        if (!current || current.settled) {
+          res.writeHead(404).end('Not found')
+          return
+        }
         const url = new URL(req.url || '/', `http://127.0.0.1:${activePort}`)
         if (url.pathname !== '/callback') {
           res.writeHead(404).end('Not found')
@@ -284,32 +369,24 @@ export async function startGrokBrowserAuth(
         if (oauthError) {
           const message = url.searchParams.get('error_description') || oauthError
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(renderGrokErrorHtml(message))
-          settleReject(new Error(message))
+          settleBrowserSession({ ok: false, message })
           return
         }
         if (!code || returnedState !== state) {
           const message = !code ? '缺少授权码' : '状态校验失败（可能的 CSRF）'
           res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' }).end(renderGrokErrorHtml(message))
-          settleReject(new Error(message))
+          settleBrowserSession({ ok: false, message })
           return
         }
-        postForm(discovery.token_endpoint, {
-          grant_type: 'authorization_code',
-          code,
-          redirect_uri: grokOAuthRedirect(activePort),
-          client_id: GROK_OAUTH_CLIENT_ID,
-          code_verifier: pkce.verifier
-        })
-          .then((tokens) => {
-            const creds = credentialsFromTokens(tokens)
-            if (!creds) throw new Error('令牌交换返回的数据不完整')
+        void exchangeAuthorizationCode(current, code)
+          .then((creds) => {
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(GROK_BROWSER_SUCCESS_HTML)
-            settleResolve(creds)
+            settleBrowserSession({ ok: true, credentials: creds })
           })
           .catch((err: unknown) => {
             const message = err instanceof Error ? err.message : String(err)
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(renderGrokErrorHtml(message))
-            settleReject(new Error(message))
+            settleBrowserSession({ ok: false, message })
           })
       })
 
@@ -317,22 +394,27 @@ export async function startGrokBrowserAuth(
         server?.off('error', onListenError)
         const message =
           err.code === 'EADDRINUSE' ? '本地回调端口被占用，无法完成登录' : err.message
-        settleReject(
-          err.code === 'EADDRINUSE' ? new GrokBrowserAuthError(message, 'port_in_use') : new Error(message)
+        settleBrowserSession(
+          err.code === 'EADDRINUSE'
+            ? { ok: false, message, code: 'port_in_use' }
+            : { ok: false, message }
         )
       }
 
       server.once('error', onListenError)
-      // Port 0 = OS assigns a free loopback port (RFC 8252).
       server.listen(0, GROK_OAUTH_HOST, () => {
         server?.off('error', onListenError)
         const addr = server?.address()
         if (!addr || typeof addr === 'string') {
-          settleReject(new Error('无法绑定本地回调端口'))
+          settleBrowserSession({ ok: false, message: '无法绑定本地回调端口' })
           return
         }
         activePort = addr.port
         const redirectUri = grokOAuthRedirect(activePort)
+        if (pendingBrowserSession) {
+          pendingBrowserSession.redirectUri = redirectUri
+          pendingBrowserSession.server = server
+        }
         const authorizeUrl = buildAuthorizeUrl(
           discovery.authorization_endpoint,
           pkce.challenge,
@@ -341,19 +423,61 @@ export async function startGrokBrowserAuth(
           redirectUri
         )
         void Promise.resolve(openBrowser(authorizeUrl)).catch((err: unknown) => {
-          settleReject(err instanceof Error ? err : new Error(String(err)))
+          settleBrowserSession({
+            ok: false,
+            message: err instanceof Error ? err.message : String(err)
+          })
         })
       })
     })
-
-    return { ok: true, credentials }
   } catch (error) {
-    cleanup()
+    cancelGrokBrowserAuth()
     const message = error instanceof Error ? error.message : String(error)
     return error instanceof GrokBrowserAuthError
       ? { ok: false, message, code: error.code }
       : { ok: false, message }
   }
+}
+
+/**
+ * Path B: user pastes the authorization code (or callback URL) shown by
+ * accounts.x.ai when loopback delivery is unavailable.
+ */
+export async function submitGrokBrowserAuthCode(pasted: string): Promise<GrokBrowserAuthResult> {
+  const session = pendingBrowserSession
+  if (!session || session.settled) {
+    return { ok: false, message: '当前没有进行中的 Grok 登录，请重新点击登录' }
+  }
+  if (!session.redirectUri || !session.codeVerifier) {
+    return { ok: false, message: '登录会话尚未就绪，请稍候再试' }
+  }
+
+  const parsed = parseGrokPastedAuthInput(pasted)
+  if ('error' in parsed) {
+    return { ok: false, message: `无效的授权码: ${parsed.error}` }
+  }
+  if (parsed.state && parsed.state !== session.state) {
+    return { ok: false, message: '状态校验失败（可能的 CSRF），请重新登录' }
+  }
+
+  try {
+    const credentials = await exchangeAuthorizationCode(session, parsed.code)
+    settleBrowserSession({ ok: true, credentials })
+    return { ok: true, credentials }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    // Do not settle on paste exchange failure — user can retry paste or wait for loopback.
+    return { ok: false, message }
+  }
+}
+
+export function cancelGrokBrowserAuth(): void {
+  if (!pendingBrowserSession) return
+  settleBrowserSession({ ok: false, message: '已取消登录' })
+}
+
+export function isGrokBrowserAuthPending(): boolean {
+  return Boolean(pendingBrowserSession && !pendingBrowserSession.settled)
 }
 
 export async function startGrokDeviceAuth(): Promise<GrokAuthStartResult> {
@@ -492,6 +616,10 @@ export async function refreshGrokToken(
       refresh_token: credentials.refreshToken,
       client_id: credentials.clientId || GROK_OAUTH_CLIENT_ID
     })
+    // Refresh responses sometimes omit refresh_token — keep the previous one.
+    if (typeof tokens.refresh_token !== 'string' || !tokens.refresh_token) {
+      tokens.refresh_token = credentials.refreshToken
+    }
     const next = credentialsFromTokens(tokens, issuer)
     if (!next) return null
     return {
@@ -501,6 +629,47 @@ export async function refreshGrokToken(
     }
   } catch {
     return null
+  }
+}
+
+/** True when access token is past the early-invalidation window (default 5 min). */
+export function isGrokCredentialExpired(
+  credentials: GrokOAuthCredentials,
+  earlyInvalidationMs: number = GROK_EARLY_INVALIDATION_MS,
+  nowMs: number = Date.now()
+): boolean {
+  const expiresAt =
+    typeof credentials.expiresAt === 'number' && credentials.expiresAt > 0
+      ? credentials.expiresAt
+      : nowMs + GROK_TOKEN_TTL_FALLBACK_MS
+  return nowMs >= expiresAt - earlyInvalidationMs
+}
+
+/**
+ * Refresh when within the early-invalidation window. Returns updated encoded
+ * credentials when refreshed; otherwise the original raw string.
+ */
+export async function ensureFreshGrokCredentials(rawApiKey: string): Promise<{
+  apiKey: string
+  refreshed: boolean
+  credentials: GrokOAuthCredentials | null
+}> {
+  const key = rawApiKey.trim()
+  const credentials = parseGrokCredentials(key)
+  if (!credentials) {
+    return { apiKey: key, refreshed: false, credentials: null }
+  }
+  if (!isGrokCredentialExpired(credentials)) {
+    return { apiKey: key, refreshed: false, credentials }
+  }
+  const next = await refreshGrokToken(credentials)
+  if (!next) {
+    return { apiKey: key, refreshed: false, credentials }
+  }
+  return {
+    apiKey: encodeGrokCredentials(next),
+    refreshed: true,
+    credentials: next
   }
 }
 

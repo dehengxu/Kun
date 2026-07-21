@@ -154,7 +154,13 @@ import type { ScheduleRuntime } from '../schedule-runtime'
 import { reloadRenderer } from '../dev-renderer-cache'
 import { verifyTelegramBotToken } from '../telegram-runtime'
 import { startCodexDeviceAuth, pollCodexDeviceAuth, startCodexBrowserAuth } from '../codex-auth'
-import { startGrokDeviceAuth, pollGrokDeviceAuth, startGrokBrowserAuth } from '../grok-auth'
+import {
+  startGrokDeviceAuth,
+  pollGrokDeviceAuth,
+  startGrokBrowserAuth,
+  submitGrokBrowserAuthCode,
+  cancelGrokBrowserAuth
+} from '../grok-auth'
 import type { WorkflowRuntime } from '../workflow-runtime'
 import { checkWorkflowCode } from '../workflow-runtime'
 import {
@@ -1111,6 +1117,20 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     return startGrokBrowserAuth(async (url: string) => {
       await shell.openExternal(url)
     })
+  })
+
+  ipcMain.handle('grok:auth:browser:paste', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'grok:auth:browser:paste',
+      z.object({ code: z.string().min(1) }).strict(),
+      payload
+    )
+    return submitGrokBrowserAuthCode(request.code)
+  })
+
+  ipcMain.handle('grok:auth:browser:cancel', async () => {
+    cancelGrokBrowserAuth()
+    return { ok: true as const }
   })
 
   ipcMain.handle('workspace:pick-directory', async (_, defaultPath: unknown): Promise<WorkspacePickResult> => {

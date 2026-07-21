@@ -682,6 +682,8 @@ function GrokLoginSection({
   const [verifyUrl, setVerifyUrl] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState<InlineNotice | null>(null)
+  const [pasteCode, setPasteCode] = useState('')
+  const [pasteBusy, setPasteBusy] = useState(false)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loginRunRef = useRef(0)
   const identity = parseGrokIdentity(provider.apiKey)
@@ -704,6 +706,7 @@ function GrokLoginSection({
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current)
       loginRunRef.current += 1
+      void window.kunGui?.cancelGrokBrowserAuth?.()
     }
   }, [])
 
@@ -724,6 +727,7 @@ function GrokLoginSection({
     setPhase('device-starting')
     setError('')
     setNotice(fallbackNotice)
+    setPasteCode('')
     try {
       const result = await window.kunGui.startGrokAuth()
       if (!isCurrentLoginRun(runId)) return
@@ -795,11 +799,15 @@ function GrokLoginSection({
     setPhase('browser')
     setError('')
     setNotice(null)
+    setPasteCode('')
+    setPasteBusy(false)
     try {
+      // Blocks until loopback callback OR paste completion (Path A + B race).
       const result = await window.kunGui.startGrokBrowserAuth()
       if (!isCurrentLoginRun(runId)) return
       if (result.ok) {
         setNotice(null)
+        setPasteCode('')
         onCredentialChange(JSON.stringify(result.credentials))
         setPhase('idle')
       } else if (result.code === 'port_in_use') {
@@ -810,6 +818,9 @@ function GrokLoginSection({
             message: t('grokLoginPortBusyFallback')
           }
         })
+      } else if (result.message === '已取消登录') {
+        setPhase('idle')
+        setError('')
       } else {
         setPhase('error')
         setError(result.message)
@@ -819,25 +830,55 @@ function GrokLoginSection({
       setPhase('error')
       setError(err instanceof Error ? err.message : String(err))
       setNotice(null)
+    } finally {
+      setPasteBusy(false)
+    }
+  }
+
+  const submitPastedCode = async (): Promise<void> => {
+    const code = pasteCode.trim()
+    if (!code || pasteBusy) return
+    if (typeof window.kunGui?.submitGrokBrowserAuthCode !== 'function') {
+      setError('Grok 粘贴登录不可用，请重启应用')
+      return
+    }
+    setPasteBusy(true)
+    setError('')
+    try {
+      const result = await window.kunGui.submitGrokBrowserAuthCode(code)
+      // On success, startGrokBrowserAuth's promise also resolves and the browser
+      // phase handler will store credentials. On failure keep the paste form open.
+      if (!result.ok) {
+        setError(result.message)
+        setPasteBusy(false)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setPasteBusy(false)
     }
   }
 
   const cancelLogin = (): void => {
     loginRunRef.current += 1
     clearPoll()
+    void window.kunGui?.cancelGrokBrowserAuth?.()
     setPhase('idle')
     setError('')
     setNotice(null)
+    setPasteCode('')
+    setPasteBusy(false)
   }
 
   const disconnect = (): void => {
     loginRunRef.current += 1
     clearPoll()
+    void window.kunGui?.cancelGrokBrowserAuth?.()
     onCredentialChange('')
     setPhase('idle')
     setUserCode('')
     setVerifyUrl('')
     setNotice(null)
+    setPasteCode('')
   }
 
   const openVerifyUrl = (): void => {
@@ -875,6 +916,27 @@ function GrokLoginSection({
           <Loader2 className="h-3 w-3 animate-spin" />
           {t('grokWaitingAuth')}
         </div>
+        <div className="grid gap-1.5 rounded-xl border border-ds-border bg-ds-card p-3">
+          <p className="text-[12px] leading-5 text-ds-muted">{t('grokPasteCodeHint')}</p>
+          <textarea
+            className="min-h-[72px] w-full resize-y rounded-lg border border-ds-border bg-ds-main px-3 py-2 font-mono text-[12px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+            value={pasteCode}
+            spellCheck={false}
+            placeholder={t('grokPasteCodePlaceholder')}
+            onChange={(e) => setPasteCode(e.target.value)}
+            disabled={pasteBusy}
+          />
+          <button
+            type="button"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 py-2 text-[13px] font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={() => void submitPastedCode()}
+            disabled={pasteBusy || !pasteCode.trim()}
+          >
+            {pasteBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            {t('grokPasteCodeSubmit')}
+          </button>
+        </div>
+        {error ? <InlineNoticeView notice={{ tone: 'error', message: error }} /> : null}
         <button
           type="button"
           className="w-fit text-[12px] font-medium text-ds-muted hover:text-ds-ink"

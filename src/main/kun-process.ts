@@ -22,6 +22,7 @@ import {
   shouldRunKunServeAsElectronChild
 } from './resolve-kun-binary'
 import { resolveCodexOAuthApiKey } from './codex-auth'
+import { ensureFreshGrokCredentials } from './grok-auth'
 import {
   KunConfigSchema,
   type KunConfig,
@@ -324,10 +325,13 @@ async function startKunChildOnce(
     computerUseEnabled: runtime.computerUse?.enabled === true
   })
   const command = runAsElectron ? resolution.command : resolveNodeScriptCommand(resolution.command)
-  // When the active provider is Codex, runtime.apiKey holds JSON-encoded OAuth
+  // Grok subscription tokens are refreshed ~5 minutes early (see grok-auth).
+  // Refresh here so the child process is not started with a soon-to-expire bearer.
+  const runtimeApiKey = (await ensureFreshGrokCredentials(runtime.apiKey)).apiKey
+  // When the active provider is Codex/Grok, runtime.apiKey holds JSON-encoded OAuth
   // credentials; unwrap to the bare access token so the default client sends a
-  // valid Bearer (the Codex headers are written to serve.headers in config).
-  const defaultClientApiKey = resolveCodexOAuthApiKey(runtime.apiKey).apiKey
+  // valid Bearer (subscription headers are written via materialize / serve.headers).
+  const defaultClientApiKey = resolveCodexOAuthApiKey(runtimeApiKey).apiKey
   // When the runtime's own (default) provider is the Claude subscription, tell
   // the runtime so its dispatch routes default-provider turns (thread.providerId
   // absent or equal to it) to the embedded SDK instead of the HTTP default.

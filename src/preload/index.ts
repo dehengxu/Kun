@@ -120,6 +120,10 @@ const api = {
     ipcRenderer.invoke('grok:auth:poll', { deviceCode }),
   startGrokBrowserAuth: () =>
     ipcRenderer.invoke('grok:auth:browser'),
+  submitGrokBrowserAuthCode: (code) =>
+    ipcRenderer.invoke('grok:auth:browser:paste', { code }),
+  cancelGrokBrowserAuth: () =>
+    ipcRenderer.invoke('grok:auth:browser:cancel'),
   pickWorkspaceDirectory: (defaultPath) =>
     ipcRenderer.invoke('workspace:pick-directory', defaultPath),
   workspaceDirectoryExists: (workspaceRoot) =>

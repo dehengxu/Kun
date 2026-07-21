@@ -13,7 +13,11 @@ import {
 } from '../shared/model-provider-presets'
 import { fetchWithOptionalProxy } from './proxy-fetch'
 import { isCodexOAuthCredentials, parseCodexCredentials } from './codex-auth'
-import { isGrokOAuthCredentials, parseGrokCredentials } from './grok-auth'
+import {
+  ensureFreshGrokCredentials,
+  isGrokOAuthCredentials,
+  parseGrokCredentials
+} from './grok-auth'
 
 function isCodexBaseUrl(url: string): boolean {
   return url.includes('chatgpt.com/backend-api/codex')
@@ -89,7 +93,8 @@ export async function probeModelProvider(
     if (!isGrokOAuthCredentials(rawKey)) {
       return { ok: false, message: 'Grok 订阅凭据格式无效，请重新登录。' }
     }
-    const creds = parseGrokCredentials(rawKey)
+    const fresh = await ensureFreshGrokCredentials(rawKey)
+    const creds = fresh.credentials ?? parseGrokCredentials(fresh.apiKey)
     if (!creds) {
       return { ok: false, message: 'Grok 订阅凭据已损坏，请重新登录。' }
     }
