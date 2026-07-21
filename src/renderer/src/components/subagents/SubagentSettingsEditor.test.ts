@@ -33,7 +33,11 @@ vi.mock('react-i18next', () => ({
       'subagentsPanel.role.general.name': 'General',
       'subagentsPanel.role.explore.name': 'Explore',
       'subagentsPanel.role.design-reviewer.name': 'Design review',
-      'subagentsPanel.role.over-engineering-reviewer.name': 'Over-engineering review'
+      'subagentsPanel.role.over-engineering-reviewer.name': 'Over-engineering review',
+      'subagentsPanel.role.code-reviewer.name': 'Code reviewer',
+      'subagentsPanel.role.test-engineer.name': 'Test engineer',
+      'subagentsPanel.role.security-auditor.name': 'Security auditor',
+      'subagentsPanel.role.web-performance-auditor.name': 'Web performance auditor'
     }[key] ?? fallback ?? key)
   })
 }))
@@ -101,6 +105,10 @@ describe('SubagentSettingsEditor', () => {
     expect(text).toContain('Explore')
     expect(text).toContain('Design review')
     expect(text).toContain('Over-engineering review')
+    expect(text).toContain('Code reviewer')
+    expect(text).toContain('Test engineer')
+    expect(text).toContain('Security auditor')
+    expect(text).toContain('Web performance auditor')
     expect(text).toContain('Researcher')
     expect(text).toContain('Code review')
     expect(text).toContain('Plan mode')

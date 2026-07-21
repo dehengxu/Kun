@@ -71,6 +71,7 @@ export type TurnContextResolverDeps = {
   getMemoryStore?: () => Pick<MemoryStore, 'retrieve' | 'setLastInjected'> | undefined
   interactiveToolBridge: Pick<InteractiveToolBridge, 'awaitUserInput'>
   forcedAllowedToolNames?: readonly string[]
+  allowedProviderIds?: readonly string[]
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -160,6 +161,7 @@ export class TurnContextResolver {
       signal: input.signal
     }, {
       memoryEnabled: Boolean(memoryStore),
+      ...(this.deps.allowedProviderIds ? { allowedProviderIds: this.deps.allowedProviderIds } : {}),
       ...(this.deps.blockedProviderIds ? { blockedProviderIds: this.deps.blockedProviderIds } : {}),
       ...(this.deps.blockedToolNames ? { blockedToolNames: this.deps.blockedToolNames } : {}),
       ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {}),

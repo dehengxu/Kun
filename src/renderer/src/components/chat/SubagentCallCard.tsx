@@ -1,10 +1,12 @@
 import type { ReactElement } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { Check, ChevronDown, ChevronRight, ExternalLink, Hourglass, Loader2, TriangleAlert } from 'lucide-react'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { AgentKun } from '../subagents/AgentKun'
+import { BUILTIN_AGENT_CATALOG_BY_ID } from '../../../../../kun/src/delegation/builtin-agent-catalog'
 
 /**
  * "Kun Crew" — the subagent (`delegate_task`) visualization for the chat
@@ -25,6 +27,10 @@ const KNOWN_POSE_IDS = new Set([
   'explore',
   'design-reviewer',
   'over-engineering-reviewer',
+  'code-reviewer',
+  'test-engineer',
+  'security-auditor',
+  'web-performance-auditor',
   'code-review',
   'compaction',
   'title',
@@ -47,9 +53,11 @@ type DelegateDetail = {
   queuedMs?: number
   totalTokens?: number
   detached?: boolean
+  generated?: boolean
+  generatedAgentName?: string
 }
 
-function parseDelegateDetail(detail: string | undefined): DelegateDetail {
+export function parseDelegateDetail(detail: string | undefined): DelegateDetail {
   if (!detail || !detail.trim()) return {}
   let raw: unknown
   try {
@@ -60,6 +68,13 @@ function parseDelegateDetail(detail: string | undefined): DelegateDetail {
   if (!raw || typeof raw !== 'object') return {}
   const obj = raw as Record<string, unknown>
   const usage = obj.usage && typeof obj.usage === 'object' ? (obj.usage as Record<string, unknown>) : undefined
+  const routing = obj.routing && typeof obj.routing === 'object' ? (obj.routing as Record<string, unknown>) : undefined
+  const generatedAgent = obj.generatedAgent && typeof obj.generatedAgent === 'object'
+    ? (obj.generatedAgent as Record<string, unknown>)
+    : undefined
+  const routingAgent = routing?.agent && typeof routing.agent === 'object'
+    ? (routing.agent as Record<string, unknown>)
+    : undefined
   const str = (v: unknown): string | undefined =>
     typeof v === 'string' && v.trim() ? v.trim() : undefined
   const status = (v: unknown): DelegateDetail['status'] =>
@@ -79,7 +94,9 @@ function parseDelegateDetail(detail: string | undefined): DelegateDetail {
     durationMs: num(obj.durationMs),
     queuedMs: num(obj.queuedMs),
     totalTokens: usage ? num(usage.totalTokens) : undefined,
-    detached: obj.detached === true
+    detached: obj.detached === true,
+    generated: routing?.selectedKind === 'generated' || str(obj.profile)?.startsWith('generated:') === true,
+    generatedAgentName: str(generatedAgent?.name) ?? str(routingAgent?.name)
   }
 }
 
@@ -300,6 +317,14 @@ function BackgroundPill({ t }: { t: (k: string) => string }): ReactElement {
   )
 }
 
+function GeneratedPill({ t }: { t: TFunction<'common'> }): ReactElement {
+  return (
+    <span className="whitespace-nowrap rounded-full bg-violet-500/10 px-2 py-[2px] text-[10.5px] font-semibold text-violet-600 dark:text-violet-300">
+      {t('subagentGeneratedBadge', { defaultValue: 'Generated' })}
+    </span>
+  )
+}
+
 /** 2.5px liveness lane directly under the trigger row. */
 function LaneHairline({ status, animate }: { status: CardStatus; animate: boolean }): ReactElement | null {
   if (status === 'queued') return null
@@ -420,6 +445,7 @@ export function SubagentCallCard({
   )
   const status = resolveStatus(block, child, detail)
   const detached = child.detached === true || detail.detached === true
+  const generated = detail.generated === true || (child.childProfile?.startsWith('generated:') ?? false)
   const animate = !reducedMotion && onScreen && status === 'running'
 
   // Profile id: prefer the live `childProfile` from the runtime metadata (set on
@@ -435,6 +461,10 @@ export function SubagentCallCard({
   // → a custom profile's own name → a short name derived from the task → default.
   const taskText = block.kind === 'tool' ? splitTaskLine(block as ToolBlock) : undefined
   const roleName =
+    detail.generatedAgentName ||
+    (profileId && BUILTIN_AGENT_CATALOG_BY_ID[profileId]
+      ? t(`subagentsPanel.role.${profileId}.name`, BUILTIN_AGENT_CATALOG_BY_ID[profileId]!.name)
+      : undefined) ||
     (profileId && KNOWN_POSE_IDS.has(profileId)
       ? t(`subagentsPanel.role.${profileId}.name`, profileId)
       : undefined) ||
@@ -505,6 +535,7 @@ export function SubagentCallCard({
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
             <span className="truncate text-[14px] font-semibold text-ds-ink">{roleName}</span>
+            {generated ? <GeneratedPill t={t} /> : null}
             {detached ? <BackgroundPill t={t} /> : null}
             {!compact || !inGroup ? <StatusPill status={status} t={t} /> : null}
           </span>

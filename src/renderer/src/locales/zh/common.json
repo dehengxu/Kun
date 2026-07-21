@@ -3056,6 +3056,22 @@
         "name": "过度设计审查",
         "desc": "over-engineering-reviewer · 只读"
       },
+      "code-reviewer": {
+        "name": "代码审查专家",
+        "desc": "五维审查 · 只读"
+      },
+      "test-engineer": {
+        "name": "测试工程师",
+        "desc": "测试策略 · 可编写和运行测试"
+      },
+      "security-auditor": {
+        "name": "安全审计专家",
+        "desc": "威胁与 OWASP 风险 · 只读"
+      },
+      "web-performance-auditor": {
+        "name": "Web 性能审计专家",
+        "desc": "Core Web Vitals · 证据驱动"
+      },
       "compaction": {
         "name": "上下文压缩",
         "desc": "可配置 · 默认跟随主模型"

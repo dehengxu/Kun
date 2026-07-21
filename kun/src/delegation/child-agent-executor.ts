@@ -63,6 +63,10 @@ export type ChildAgentExecutorOptions = {
 
 export function createChildAgentExecutor(options: ChildAgentExecutorOptions): ChildRunExecutor {
   return async (input) => {
+    const blockedSkillIds = unique([
+      ...(input.security?.blockedSkillIds ?? []),
+      ...(input.blockedSkills ?? [])
+    ])
     const nowIso = options.nowIso ?? (() => new Date().toISOString())
     // Persist into the main runtime's stores + event bus when supplied, so the
     // child session is queryable and streams live; otherwise stay isolated in
@@ -108,29 +112,22 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ids,
       nowIso
     })
-    // Tool gating, most-specific first: an explicit allow-list wins; else a
-    // read-only policy restricts to investigation tools; else (inherit) the
-    // child sees the parent agent's FULL tool set — no forced allow-list, so
-    // it can edit/run shell exactly like the parent. The capability registry
-    // enforces an explicit list twice (dropped from the model's tool schema
-    // and rejected at execute), but `inherit` leaves it undefined so nothing
-    // is forced. The child is not an escalation: the per-run parent security
-    // snapshot below takes precedence over broader runtime defaults.
-    const forcedAllowedToolNames = input.allowedTools
-      ? [...input.allowedTools]
-      : input.toolPolicy === 'readOnly'
-        ? [...SUBAGENT_READ_ONLY_TOOL_NAMES]
-        : undefined
-    // GUI "custom" capability scope: deny-lists layered on top of inherit.
-    // Built-in tools block by name; MCP servers block at the provider level
-    // (`mcp:<serverId>`, drift-proof — new tools from a blocked server stay
-    // hidden); skills block by id. All three only REMOVE access, so they
-    // compose with the parent intersection and can never escalate the child.
-    const blockedToolNames = input.blockedTools?.length ? [...input.blockedTools] : undefined
-    const blockedProviderIds = input.blockedMcpServers?.length
-      ? input.blockedMcpServers.map((serverId) => `mcp:${serverId}`)
-      : undefined
-    const blockedSkillIds = input.blockedSkills?.length ? [...input.blockedSkills] : undefined
+    // Every allow-list is an upper bound. readOnly is host-defined and cannot
+    // be widened by a profile's allowedTools; the parent turn's allow-list is
+    // intersected last, so a child can only lose capabilities.
+    const forcedAllowedToolNames = intersectDefinedLists(
+      input.toolPolicy === 'readOnly' ? SUBAGENT_READ_ONLY_TOOL_NAMES : undefined,
+      input.allowedTools,
+      input.security?.allowedToolNames
+    )
+    const blockedToolNames = unique([
+      ...(input.security?.blockedToolNames ?? []),
+      ...(input.blockedTools ?? [])
+    ])
+    const blockedProviderIds = unique([
+      ...(input.security?.blockedProviderIds ?? []),
+      ...(input.blockedMcpServers ?? []).map((serverId) => `mcp:${serverId}`)
+    ])
     // A custom system prompt augments the base prefix (kun tool/safety
     // conventions stay) on a distinct fingerprint, so same-agent calls still
     // hit the prompt cache; cross-agent reuse is intentionally given up.
@@ -154,13 +151,14 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ids,
       nowIso,
       ...(forcedAllowedToolNames ? { forcedAllowedToolNames } : {}),
-      ...(blockedToolNames ? { blockedToolNames } : {}),
-      ...(blockedProviderIds ? { blockedProviderIds } : {}),
-      ...(blockedSkillIds ? { blockedSkillIds } : {}),
+      ...(input.security?.allowedProviderIds ? { allowedProviderIds: input.security.allowedProviderIds } : {}),
+      ...(blockedToolNames.length ? { blockedToolNames } : {}),
+      ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
+      ...(blockedSkillIds.length ? { blockedSkillIds } : {}),
       ...(options.modelCapabilities ? { modelCapabilities: options.modelCapabilities } : {}),
-      ...(options.skillRuntime ? { skillRuntime: options.skillRuntime } : {}),
+      ...(input.skillsEnabled !== false && options.skillRuntime ? { skillRuntime: options.skillRuntime } : {}),
       ...(options.instructionRuntime ? { instructionRuntime: options.instructionRuntime } : {}),
-      ...(options.memoryStore ? { memoryStore: options.memoryStore } : {}),
+      ...(options.memoryStore && input.security?.memoryEnabled !== false ? { memoryStore: options.memoryStore } : {}),
       ...(options.artifactStore ? { artifactStore: options.artifactStore } : {}),
       ...(options.contextCompaction ? { contextCompaction: options.contextCompaction } : {}),
       ...(options.tokenEconomy ? { tokenEconomy: options.tokenEconomy } : {}),
@@ -272,9 +270,9 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(evidence ? { evidence } : {}),
       usage: usage.forThread(thread.id),
       toolInvocations,
-      // The child loop was constructed with the main agent's immutable
-      // prefix; only the small delegation prompt is appended fresh.
-      prefixReused: true,
+      // A role system prompt changes the immutable prefix fingerprint. Only a
+      // child with no role prompt can report exact main-prefix reuse.
+      prefixReused: !input.systemPrompt?.trim(),
       inheritedHistoryItems: 0
     }
   }
@@ -288,12 +286,45 @@ function childToolEvidence(items: readonly TurnItem[], turnId: string): string[]
   return items
     .filter((item): item is Extract<TurnItem, { kind: 'tool_call' }> =>
       item.turnId === turnId && item.kind === 'tool_call')
+    .filter((item) => {
+      const result = results.get(item.callId)
+      return Boolean(result && !result.isError && result.status === 'completed')
+    })
     .slice(0, 32)
     .map((item) => {
-      const result = results.get(item.callId)
+      const result = results.get(item.callId)!
       const target = toolEvidenceTarget(item.arguments)
-      return `${item.toolName}${target ? ` ${target}` : ''}: ${result?.isError ? 'failed' : 'completed'}`
+      const digest = evidenceDigest(result.output)
+      return `${item.toolName}${target ? ` ${target}` : ''}: completed${digest ? ` — ${digest}` : ''}`
     })
+}
+
+function evidenceDigest(output: unknown): string {
+  const serialized = typeof output === 'string' ? output : safeJson(output)
+  return serialized.replace(/\s+/g, ' ').trim().slice(0, 500)
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function intersectDefinedLists(...lists: Array<readonly string[] | undefined>): string[] | undefined {
+  const defined = lists.filter((list): list is readonly string[] => Boolean(list))
+  if (!defined.length) return undefined
+  let result = unique(defined[0] ?? [])
+  for (const list of defined.slice(1)) {
+    const allowed = new Set(list)
+    result = result.filter((value) => allowed.has(value))
+  }
+  return result
+}
+
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values)]
 }
 
 function toolEvidenceTarget(args: Record<string, unknown>): string {

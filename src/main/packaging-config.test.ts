@@ -185,6 +185,15 @@ describe('electron-builder Kun packaging', () => {
     ]))
   })
 
+  it('ships third-party notices with packaged applications', () => {
+    expect(builderConfig.extraResources).toEqual(expect.arrayContaining([{
+      from: 'THIRD_PARTY_NOTICES.md',
+      to: 'THIRD_PARTY_NOTICES.md'
+    }]))
+    expect(readFileSync(join(process.cwd(), 'THIRD_PARTY_NOTICES.md'), 'utf8'))
+      .toContain('Copyright (c) 2025 Addy Osmani')
+  })
+
   it('validates the unpacked Kun runtime before release artifacts are created', () => {
     const root = tempRoot()
     const context = createMacPackContext(root)

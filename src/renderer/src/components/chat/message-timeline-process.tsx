@@ -55,7 +55,7 @@ export function isSubagentBlock(block: ChatBlock): boolean {
   const meta = block.meta
   if (meta?.child && typeof meta.child === 'object') return true
   const toolName = typeof meta?.toolName === 'string' ? meta.toolName.trim() : ''
-  return toolName === 'delegate_task'
+  return toolName === 'delegate_task' || toolName === 'generate_subagent'
 }
 
 function subagentParentTurnId(block: ChatBlock): string {
@@ -936,6 +936,7 @@ function builtInToolLabel(
     case 'background_shell':
       return t('toolBuiltinBackgroundShell', { defaultValue: 'Background shell' })
     case 'delegate_task':
+    case 'generate_subagent':
       // Routed to SubagentCallCard before the generic row; labeled here as a
       // defensive fallback so an ungrouped delegate block never reads as raw JSON.
       return t('toolBuiltinDelegate')

@@ -247,7 +247,20 @@ export type SubagentMode = z.infer<typeof SubagentMode>
  * to side-effect-free investigation tools — no bash/edit/write, and no
  * nested `delegate_task`.
  */
-export const SUBAGENT_READ_ONLY_TOOL_NAMES = ['read', 'grep', 'find', 'ls', 'repo_map'] as const
+/**
+ * Host-enforced upper bound for read-only subagents. Profile `allowedTools`
+ * may narrow this set but can never add mutation, command, delegation, memory,
+ * or arbitrary connector tools to it.
+ */
+export const SUBAGENT_READ_ONLY_TOOL_NAMES = [
+  'read',
+  'grep',
+  'find',
+  'ls',
+  'repo_map',
+  'web_fetch',
+  'web_search'
+] as const
 
 export const SubagentProfileConfig = z
   .object({
@@ -274,7 +287,7 @@ export const SubagentProfileConfig = z
      * explicitly (e.g. the built-in reviewers).
      */
     toolPolicy: SubagentToolPolicy.default('inherit'),
-    /** Exact tool allow-list; overrides toolPolicy when set (e.g. ['read','grep','bash']). */
+    /** Exact tool allow-list; narrows toolPolicy and the parent capability snapshot. */
     allowedTools: z.array(z.string().min(1)).min(1).optional(),
     /** Built-in tool names blocked for this profile (deny-list, layered on `inherit`; e.g. ['bash','write']). */
     blockedTools: z.array(z.string().min(1)).optional(),
@@ -282,6 +295,8 @@ export const SubagentProfileConfig = z
     blockedMcpServers: z.array(z.string().min(1)).optional(),
     /** Skill ids blocked for this profile (deny-list; default inherits every available skill). */
     blockedSkills: z.array(z.string().min(1)).optional(),
+    /** Disable skill discovery, auto-activation, and load_skill for this child. */
+    skillsEnabled: z.boolean().optional(),
     /**
      * Reasoning depth applied to this profile's child model requests. Default
      * 'off' (cheap); a profile opts into deeper thinking explicitly. Flows to
@@ -316,7 +331,7 @@ export const SubagentsCapabilityConfig = CapabilityToggleConfig.extend({
 })
   .strict()
   .superRefine((config, ctx) => {
-    if (config.defaultProfile && !(config.defaultProfile in config.profiles)) {
+    if (config.defaultProfile && !Object.prototype.hasOwnProperty.call(config.profiles, config.defaultProfile)) {
       ctx.addIssue({
         code: 'custom',
         path: ['defaultProfile'],

@@ -3056,6 +3056,22 @@
         "name": "オーバーエンジニアリングのレビュー",
         "desc": "オーバーエンジニアリングレビューアー · 読み取り専用"
       },
+      "code-reviewer": {
+        "name": "コードレビュー担当",
+        "desc": "5 観点レビュー · 読み取り専用"
+      },
+      "test-engineer": {
+        "name": "テストエンジニア",
+        "desc": "テスト戦略 · テストの作成と実行が可能"
+      },
+      "security-auditor": {
+        "name": "セキュリティ監査担当",
+        "desc": "脅威と OWASP リスク · 読み取り専用"
+      },
+      "web-performance-auditor": {
+        "name": "Web パフォーマンス監査担当",
+        "desc": "Core Web Vitals · 証拠ベース"
+      },
       "compaction": {
         "name": "圧縮",
         "desc": "構成可能、デフォルトはメインモデル"

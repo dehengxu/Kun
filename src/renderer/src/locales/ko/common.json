@@ -3056,6 +3056,22 @@
         "name": "과도한 엔지니어링 검토",
         "desc": "과도한 엔지니어링 검토자 · 읽기 전용"
       },
+      "code-reviewer": {
+        "name": "코드 리뷰어",
+        "desc": "5가지 관점 검토 · 읽기 전용"
+      },
+      "test-engineer": {
+        "name": "테스트 엔지니어",
+        "desc": "테스트 전략 · 테스트 작성 및 실행 가능"
+      },
+      "security-auditor": {
+        "name": "보안 감사자",
+        "desc": "위협 및 OWASP 위험 · 읽기 전용"
+      },
+      "web-performance-auditor": {
+        "name": "웹 성능 감사자",
+        "desc": "Core Web Vitals · 증거 기반"
+      },
       "compaction": {
         "name": "압축",
         "desc": "구성 가능 · 기본 모델은 기본 모델"

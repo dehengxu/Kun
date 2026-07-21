@@ -254,6 +254,20 @@ Kun 默认使用混合存储：`threads/{threadId}/messages.jsonl` 与 `events.j
 - `capabilities.memory` 在数据目录下持久化跨会话记忆，按作用域检索并注入上下文；也会公开 `memory_create`、`memory_update`、`memory_delete` 工具。
 - `capabilities.subagents` 通过 `maxParallel` 与 `maxChildRuns` 限制委派任务并发。
 
+Kun 内置 33 个固定、真正独立的 subagent profile：9 个原有通用/设计/专业角色，
+以及从 `addyosmani/agent-skills` 的 24 个工程工作流重新设计出的独立 agent。每个
+agent 都有自包含 system prompt，不通过 Skill id 加载，即使关闭 Skills 也能工作。
+其中 `interview-me` 改为向主代理返回高价值需求问题，`doubt-driven-development`
+改为执行一次 fresh-context 反证审查。
+
+主代理可以显式选择 `profile`、手写一次性 `custom_agent`，也可以全部省略。自动
+路径先对 agent profile 做 BM25 Top-5，再由小模型判断现有 agent 是否合适；若都
+不合适，独立生成器会从最多 3 个可信内置 agent 中总结设计模式，创建并立即执行
+一个临时角色。`generate_subagent` 工具也可显式走这条“设计并执行”路径。生成角色
+不会写入配置或可复用目录，但完整定义会保留在受权限保护的 child-run 审计快照中；
+它不能再次委派，也不能加载 Skill；router 与 generator usage 分开记录。
+许可证归属见 `../THIRD_PARTY_NOTICES.md`。
+
 在渲染端使用 `GET /v1/runtime/info` 获取运行时能力清单，使用
 `GET /v1/runtime/tools` 查看 provider 诊断。GUI 设置页会读取这两条接口。
 

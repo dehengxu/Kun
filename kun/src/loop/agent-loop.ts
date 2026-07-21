@@ -162,6 +162,8 @@ export type AgentLoopOptions = {
    * tools — enforced at both the schema (listTools) and execute layers.
    */
   forcedAllowedToolNames?: readonly string[]
+  /** Provider allow-list inherited from the parent turn for delegated loops. */
+  allowedProviderIds?: readonly string[]
   /**
    * Provider ids hard-blocked for this loop (e.g. a subagent profile's blocked
    * MCP servers, as `mcp:<serverId>`). Deny-list layered on top of inherit and
@@ -344,6 +346,7 @@ export class AgentLoop {
       getMemoryStore: () => opts.memoryStore,
       interactiveToolBridge: this.interactiveToolBridge,
       ...(opts.forcedAllowedToolNames ? { forcedAllowedToolNames: opts.forcedAllowedToolNames } : {}),
+      ...(opts.allowedProviderIds ? { allowedProviderIds: opts.allowedProviderIds } : {}),
       ...(opts.blockedProviderIds ? { blockedProviderIds: opts.blockedProviderIds } : {}),
       ...(opts.blockedToolNames ? { blockedToolNames: opts.blockedToolNames } : {}),
       ...(opts.blockedSkillIds ? { blockedSkillIds: opts.blockedSkillIds } : {}),
@@ -769,6 +772,7 @@ export class AgentLoop {
   private async dispatchToolCalls(input: ToolDispatchInput): Promise<ToolDispatchOutcome> {
     const context = createToolExecutionContext(input, {
       memoryEnabled: Boolean(this.opts.memoryStore),
+      ...(this.opts.allowedProviderIds ? { allowedProviderIds: this.opts.allowedProviderIds } : {}),
       ...(this.opts.blockedProviderIds ? { blockedProviderIds: this.opts.blockedProviderIds } : {}),
       ...(this.opts.blockedToolNames ? { blockedToolNames: this.opts.blockedToolNames } : {}),
       ...(this.opts.blockedSkillIds ? { blockedSkillIds: this.opts.blockedSkillIds } : {}),

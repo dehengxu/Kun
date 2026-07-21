@@ -1670,6 +1670,14 @@ describe('subagentProfilesForRuntime', () => {
           name: '',
           mode: 'subagent',
           toolPolicy: 'inherit'
+        },
+        {
+          id: 'security-auditor',
+          enabled: false,
+          name: '',
+          mode: 'subagent',
+          toolPolicy: 'readOnly',
+          model: 'security-model'
         }
       ]
     })
@@ -1681,6 +1689,10 @@ describe('subagentProfilesForRuntime', () => {
       blockedSkills: ['unsafe-skill']
     })
     expect(config.profiles['component-designer']).toBeDefined()
+    expect(config.profiles['security-auditor']).toMatchObject({
+      model: 'security-model',
+      toolPolicy: 'readOnly'
+    })
     expect(config.profiles['custom-disabled']).toBeUndefined()
   })
 })

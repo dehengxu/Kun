@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { CapabilityRegistry } from '../src/adapters/tool/capability-registry.js'
 import { createDesignCanvasTool } from '../src/adapters/tool/design-canvas-tool.js'
 import { LocalToolHost, buildDefaultLocalTools } from '../src/adapters/tool/local-tool-host.js'
+import { buildSkillToolProviders } from '../src/adapters/tool/skill-tool-provider.js'
 import { InMemoryEventBus } from '../src/adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../src/adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../src/adapters/in-memory-thread-store.js'
@@ -15,6 +16,7 @@ import { createChildAgentExecutor } from '../src/delegation/child-agent-executor
 import { InstructionRuntime } from '../src/instructions/instruction-runtime.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../src/ports/model-client.js'
 import { RuntimeEventRecorder } from '../src/services/runtime-event-recorder.js'
+import { SkillRuntime } from '../src/skills/skill-runtime.js'
 
 function model(chunks: ModelStreamChunk[], seen: ModelRequest[] = []): ModelClient {
   return {
@@ -133,6 +135,52 @@ describe('child agent executor', () => {
     }
   })
 
+  it('runs a standalone profile without skill discovery or prompt activation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-child-skill-isolation-'))
+    try {
+      const skillDir = join(root, 'skills', 'hidden-workflow')
+      await mkdir(skillDir, { recursive: true })
+      await writeFile(join(skillDir, 'skill.json'), JSON.stringify({
+        id: 'hidden-workflow',
+        name: 'Hidden Workflow',
+        triggers: { promptPatterns: ['activate hidden workflow'] }
+      }), 'utf8')
+      await writeFile(join(skillDir, 'SKILL.md'), 'HIDDEN SKILL INSTRUCTION', 'utf8')
+      const capabilities = KunCapabilitiesConfig.parse({
+        skills: { enabled: true, roots: [join(root, 'skills')], workspaceRoots: [], legacySkillMd: true }
+      })
+      const skillRuntime = await SkillRuntime.create(capabilities.skills)
+      const seen: ModelRequest[] = []
+      const executor = createChildAgentExecutor({
+        model: model([
+          { kind: 'assistant_text_delta', text: 'standalone result' },
+          { kind: 'completed', stopReason: 'stop' }
+        ], seen),
+        toolHost: new LocalToolHost({ registry: new CapabilityRegistry(buildSkillToolProviders(skillRuntime)) }),
+        prefix: createImmutablePrefix({ systemPrompt: 'child system' }),
+        defaultModel: 'child-test',
+        skillRuntime
+      })
+
+      await executor({
+        childId: 'child_standalone',
+        parentThreadId: 'thr_parent',
+        parentTurnId: 'turn_parent',
+        prompt: 'activate hidden workflow',
+        workspace: root,
+        skillsEnabled: false,
+        blockedTools: ['load_skill'],
+        toolPolicy: 'inherit',
+        signal: new AbortController().signal
+      })
+
+      expect(seen[0]?.contextInstructions?.join('\n') ?? '').not.toContain('HIDDEN SKILL INSTRUCTION')
+      expect(seen[0]?.tools?.map((tool) => tool.name) ?? []).not.toContain('load_skill')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('returns bounded tool evidence when the contract requests it', async () => {
     let step = 0
     const evidenceModel: ModelClient = {
@@ -180,7 +228,7 @@ describe('child agent executor', () => {
     })
 
     expect(result.summary).toBe('Inspection complete.')
-    expect(result.evidence).toEqual(['inspect src/index.ts: completed'])
+    expect(result.evidence).toEqual(['inspect src/index.ts: completed — {"ok":true}'])
   })
 
   it('fails the child run when the child loop cannot produce a completed turn', async () => {
@@ -405,18 +453,22 @@ describe('child agent executor', () => {
       prompt: 'Inspect only',
       toolPolicy: 'inherit',
       approvalPolicy: 'on-request',
-      sandboxMode: 'read-only',
+      sandboxMode: 'workspace-write',
+      security: {
+        sandboxRoot: '/tmp/project',
+        allowedToolNames: ['read'],
+        memoryEnabled: false
+      },
       signal: new AbortController().signal
     })
 
     const child = await threadStore.get('child_security_snapshot')
     expect(child).toMatchObject({
       approvalPolicy: 'on-request',
-      sandboxMode: 'read-only'
+      sandboxMode: 'workspace-write'
     })
     const toolNames = (seen[0]?.tools ?? []).map((tool) => tool.name)
-    expect(toolNames).not.toContain('bash')
-    expect(toolNames).not.toContain('write')
+    expect(toolNames).toEqual(['read'])
   })
 
   it('gives an inherit child the parent agent full tool set (no forced read-only allowlist)', async () => {
@@ -491,7 +543,7 @@ describe('child agent executor', () => {
     expect(toolNames).toContain('design_canvas')
   })
 
-  it('honors an explicit allowedTools list over the tool policy', async () => {
+  it('intersects allowedTools with the read-only policy instead of widening it', async () => {
     const seen: ModelRequest[] = []
     const registry = new CapabilityRegistry([{
       id: 'builtin',
@@ -518,7 +570,7 @@ describe('child agent executor', () => {
       prompt: 'Investigate',
       // readOnly would allow read/grep/find/ls; the explicit list narrows it.
       toolPolicy: 'readOnly',
-      allowedTools: ['read', 'grep'],
+      allowedTools: ['read', 'grep', 'bash'],
       signal: new AbortController().signal
     })
 
@@ -614,7 +666,7 @@ describe('child agent executor', () => {
       nowIso: () => '2026-06-03T00:00:00.000Z'
     })
 
-    await executor({
+    const result = await executor({
       childId: 'child_sys',
       parentThreadId: 'thr_parent',
       parentTurnId: 'turn_parent',
@@ -625,6 +677,7 @@ describe('child agent executor', () => {
     })
 
     expect(seen[0]?.systemPrompt).toBe('BASE PROMPT\n\nYou are a careful reviewer.')
+    expect(result.prefixReused).toBe(false)
   })
 
   it('persists the child as a hidden side thread on the shared stores when provided', async () => {

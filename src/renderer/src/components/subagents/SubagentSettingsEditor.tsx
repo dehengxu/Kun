@@ -18,6 +18,7 @@ import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { confirmDialog } from '../../lib/confirm-dialog'
 import { useChatStore } from '../../store/chat-store'
 import { AgentKun } from './AgentKun'
+import { BUILTIN_AGENT_CATALOG } from '../../../../../kun/src/delegation/builtin-agent-catalog'
 
 type EditorVariant = 'panel' | 'settings'
 
@@ -81,14 +82,17 @@ async function loadCapabilityCatalog(): Promise<CapabilityCatalog> {
   }
 }
 
-/** kun's REAL built-in delegatable subagents (mirror kun/src/delegation/builtin-profiles.ts). */
-const BUILTIN_IDS = new Set(['general', 'explore', 'design-reviewer', 'over-engineering-reviewer'])
-const BUILTIN_AGENTS: KunSubagentProfileV1[] = [
-  { id: 'general', enabled: true, name: '', mode: 'subagent', toolPolicy: 'inherit', color: '#3b82d8' },
-  { id: 'explore', enabled: true, name: '', mode: 'subagent', toolPolicy: 'readOnly', color: '#1d9e75' },
-  { id: 'design-reviewer', enabled: true, name: '', mode: 'subagent', toolPolicy: 'readOnly', color: '#7f77dd' },
-  { id: 'over-engineering-reviewer', enabled: true, name: '', mode: 'subagent', toolPolicy: 'readOnly', color: '#e8943a' }
-]
+/** Canonical runtime catalog; settings store only user overrides. */
+const BUILTIN_AGENTS: KunSubagentProfileV1[] = BUILTIN_AGENT_CATALOG.map((agent) => ({
+  id: agent.id,
+  enabled: true,
+  name: agent.name,
+  description: agent.description,
+  mode: 'subagent',
+  toolPolicy: agent.toolPolicy,
+  color: agent.color
+}))
+const BUILTIN_IDS = new Set(BUILTIN_AGENTS.map((agent) => agent.id))
 
 function newProfile(): KunSubagentProfileV1 {
   return { id: crypto.randomUUID(), enabled: true, name: '', mode: 'subagent', toolPolicy: 'readOnly' }

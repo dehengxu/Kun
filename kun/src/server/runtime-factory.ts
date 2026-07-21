@@ -115,6 +115,8 @@ import { resolveConfiguredHooks, type HooksConfig } from '../hooks/hook-config.j
 import { FileMemoryStore } from '../memory/memory-store.js'
 import { DelegationRuntime, FileDelegationStore } from '../delegation/delegation-runtime.js'
 import { createChildAgentExecutor } from '../delegation/child-agent-executor.js'
+import { SubagentRouter } from '../delegation/subagent-router.js'
+import { SubagentGenerator } from '../delegation/subagent-generator.js'
 import { BackgroundShellRuntime } from '../services/background-shell-runtime.js'
 import { stopBashSessionById, createBashLocalTool } from '../adapters/tool/builtin-bash-tool.js'
 import { createBackgroundShellTool } from '../adapters/tool/background-shell-tool.js'
@@ -405,6 +407,30 @@ export async function createKunServeRuntime(
     () => modelClient.routePools(),
     routeHealth
   )
+  const subagentRouter = new SubagentRouter({
+    modelClient,
+    roles: () => activeOptions.roles,
+    defaultModel: () => activeOptions.model,
+    recordUsage: async ({ threadId, turnId, model, usage }) => {
+      const cumulative = usageService.record(threadId, usage)
+      await events.record({
+        kind: 'usage',
+        threadId,
+        turnId,
+        model,
+        usage: cumulative
+      })
+    }
+  })
+  const subagentGenerator = new SubagentGenerator({
+    modelClient,
+    roles: () => activeOptions.roles,
+    defaultModel: () => activeOptions.model,
+    recordUsage: async ({ threadId, turnId, model, usage }) => {
+      const cumulative = usageService.record(threadId, usage)
+      await events.record({ kind: 'usage', threadId, turnId, model, usage: cumulative })
+    }
+  })
   const replaceRoutedModelClients = (): void => {
     const next = buildModelClientRouterInput(activeOptions, modelCapabilities, llmDebug)
     for (const [providerId, client] of extensionModelProviders.clientMap()) {
@@ -729,7 +755,7 @@ export async function createKunServeRuntime(
       available: true,
       tools: [taskGraphTool]
     },
-    ...buildDelegationToolProviders(delegationRuntime),
+    ...buildDelegationToolProviders(delegationRuntime, subagentRouter, subagentGenerator),
     ...buildComponentDesignToolProviders(delegationRuntime)
   ])
   let prepareExtensionContributions: ((context?: ToolHostContext) => Promise<void>) | undefined
@@ -1493,7 +1519,7 @@ export async function createKunServeRuntime(
 	        available: true,
 	        tools: [taskGraphTool]
 	      },
-	      ...buildDelegationToolProviders(delegationRuntime),
+	      ...buildDelegationToolProviders(delegationRuntime, subagentRouter, subagentGenerator),
 	      ...buildComponentDesignToolProviders(delegationRuntime)
 	    ])
 

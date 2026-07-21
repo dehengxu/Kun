@@ -3056,6 +3056,22 @@
         "name": "Over-engineering review",
         "desc": "over-engineering-reviewer · read-only"
       },
+      "code-reviewer": {
+        "name": "Code reviewer",
+        "desc": "Five-axis review · read-only"
+      },
+      "test-engineer": {
+        "name": "Test engineer",
+        "desc": "Test strategy · can write and run tests"
+      },
+      "security-auditor": {
+        "name": "Security auditor",
+        "desc": "Threats and OWASP risks · read-only"
+      },
+      "web-performance-auditor": {
+        "name": "Web performance auditor",
+        "desc": "Core Web Vitals · evidence-based"
+      },
       "compaction": {
         "name": "Compaction",
         "desc": "Configurable · defaults to main model"

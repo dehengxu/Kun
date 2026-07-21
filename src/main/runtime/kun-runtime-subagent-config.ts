@@ -1,15 +1,10 @@
 import type { KunSubagentsSettingsV1 } from '../../shared/app-settings'
 import { SubagentsCapabilityConfig } from '../../../kun/src/contracts/capabilities.js'
 import { appendManagedLogLine } from '../logger'
+import { BUILTIN_AGENT_CATALOG } from '../../../kun/src/delegation/builtin-agent-catalog.js'
 
 const VALID_PROFILE_REASONING = new Set(['auto', 'low', 'medium', 'high', 'max'])
-const BUILTIN_SUBAGENT_PROFILE_IDS = new Set([
-  'general',
-  'explore',
-  'component-designer',
-  'design-reviewer',
-  'over-engineering-reviewer'
-])
+const BUILTIN_SUBAGENT_PROFILE_IDS = new Set<string>(BUILTIN_AGENT_CATALOG.map((agent) => agent.id))
 
 export function subagentProfilesForRuntime(
   subagents: KunSubagentsSettingsV1

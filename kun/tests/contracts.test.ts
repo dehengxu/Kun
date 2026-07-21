@@ -738,6 +738,11 @@ describe('cli', () => {
     expect(() => KunCapabilitiesConfig.parse({
       subagents: { enabled: true, maxParallel: 1, maxChildRuns: 1, defaultProfile: 'ghost' }
     })).toThrow(/defaultProfile/)
+    for (const inheritedName of ['constructor', 'toString', '__proto__']) {
+      expect(KunCapabilitiesConfig.safeParse({
+        subagents: { enabled: true, maxParallel: 1, maxChildRuns: 1, defaultProfile: inheritedName }
+      }).success).toBe(false)
+    }
   })
 
   it('surfaces subagent profiles and policy in the runtime capability manifest', () => {

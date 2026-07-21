@@ -62,7 +62,7 @@ describe('component designer profile', () => {
       toolPolicy: 'inherit',
       allowedTools: ['read', 'grep', 'find', 'ls', 'write', 'edit']
     })
-    expect(config.profiles[COMPONENT_DESIGN_PROFILE_NAME]?.promptPreamble).toContain('data-kun-component-root')
+    expect(config.profiles[COMPONENT_DESIGN_PROFILE_NAME]?.systemPrompt).toContain('data-kun-component-root')
   })
 })
 
@@ -80,7 +80,11 @@ describe('design_component tool', () => {
         const relativePath = /Required output path: ([^\n]+)/.exec(prompt)?.[1]?.trim()
         if (!relativePath) throw new Error('missing output path')
         await writeFile(join(String(input.workspace), relativePath), validHtml())
-        ;(input.onStart as ((childId: string, profile?: string) => void) | undefined)?.(
+        await (input.onQueued as ((childId: string, profile?: string) => Promise<void> | void) | undefined)?.(
+          'child_component',
+          COMPONENT_DESIGN_PROFILE_NAME
+        )
+        await (input.onRunning as ((childId: string, profile?: string) => Promise<void> | void) | undefined)?.(
           'child_component',
           COMPONENT_DESIGN_PROFILE_NAME
         )
@@ -129,7 +133,8 @@ describe('design_component tool', () => {
       inheritedModel: 'test-model',
       inheritedProviderId: 'provider-test',
       approvalPolicy: 'auto',
-      sandboxMode: 'workspace-write'
+      sandboxMode: 'workspace-write',
+      security: expect.objectContaining({ memoryEnabled: false })
     })
     expect(String(prompts[0]?.workspace)).toMatch(/\.kun-design\/component-prototypes\/.+$/)
     expect(String(prompts[0]?.prompt)).toContain('Required output path: prototype.html')
