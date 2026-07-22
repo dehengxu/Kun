@@ -210,7 +210,8 @@ export function ProcessSectionRow({
   singleReasoningSection,
   workspaceRoot,
   viewportRef,
-  onOpenChildThread
+  onOpenChildThread,
+  allowThreadActions = true
 }: {
   section: ProcessSection
   processing: boolean
@@ -219,6 +220,7 @@ export function ProcessSectionRow({
   workspaceRoot: string
   viewportRef: RefObject<HTMLDivElement | null>
   onOpenChildThread?: OpenChildThreadHandler
+  allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null)
@@ -263,7 +265,14 @@ export function ProcessSectionRow({
   if (section.kind === 'execution' && section.blocks.length === 1) {
     const [block] = section.blocks
     if (block) {
-      return <ProcessEntryRow block={block} processing={processing} workspaceRoot={workspaceRoot} />
+      return (
+        <ProcessEntryRow
+          block={block}
+          processing={processing}
+          workspaceRoot={workspaceRoot}
+          allowThreadActions={allowThreadActions}
+        />
+      )
     }
   }
 
@@ -277,6 +286,7 @@ export function ProcessSectionRow({
               block={block}
               detail={getProcessDetail(block)}
               processing={processing}
+              allowThreadActions={allowThreadActions}
             />
           ))}
         </div>
@@ -341,7 +351,12 @@ export function ProcessSectionRow({
               />
             </div>
           ) : (
-            <ProcessStackRows blocks={section.blocks} processing={processing} workspaceRoot={workspaceRoot} />
+            <ProcessStackRows
+              blocks={section.blocks}
+              processing={processing}
+              workspaceRoot={workspaceRoot}
+              allowThreadActions={allowThreadActions}
+            />
           )
           ) : null}
         </div>
@@ -378,11 +393,13 @@ function processBlockHasError(block: ChatBlock): boolean {
 function ProcessStackRows({
   blocks,
   processing,
-  workspaceRoot
+  workspaceRoot,
+  allowThreadActions = true
 }: {
   blocks: ChatBlock[]
   processing: boolean
   workspaceRoot: string
+  allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const [openBlockId, setOpenBlockId] = useState<string | null>(null)
@@ -481,11 +498,21 @@ function ProcessStackRows({
             {open ? (
               detail.kind === 'assistant' ? (
                 <div className="ml-1 mt-1">
-                  <ProcessEntryDetail block={block} detail={detail} processing={processing} />
+                  <ProcessEntryDetail
+                    block={block}
+                    detail={detail}
+                    processing={processing}
+                    allowThreadActions={allowThreadActions}
+                  />
                 </div>
               ) : (
                 <div className="ds-work-timeline-detail ml-1">
-                  <ProcessEntryDetail block={block} detail={detail} processing={processing} />
+                  <ProcessEntryDetail
+                    block={block}
+                    detail={detail}
+                    processing={processing}
+                    allowThreadActions={allowThreadActions}
+                  />
                 </div>
               )
             ) : null}
@@ -500,11 +527,13 @@ function ProcessStackRows({
 function ProcessEntryRow({
   block,
   processing,
-  workspaceRoot
+  workspaceRoot,
+  allowThreadActions = true
 }: {
   block: ChatBlock
   processing: boolean
   workspaceRoot: string
+  allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
@@ -603,11 +632,21 @@ function ProcessEntryRow({
       {canExpand && open ? (
         detail.kind === 'assistant' ? (
           <div className="mt-1">
-            <ProcessEntryDetail block={block} detail={detail} processing={processing} />
+            <ProcessEntryDetail
+              block={block}
+              detail={detail}
+              processing={processing}
+              allowThreadActions={allowThreadActions}
+            />
           </div>
         ) : (
           <div className="ds-work-timeline-detail">
-            <ProcessEntryDetail block={block} detail={detail} processing={processing} />
+            <ProcessEntryDetail
+              block={block}
+              detail={detail}
+              processing={processing}
+              allowThreadActions={allowThreadActions}
+            />
           </div>
         )
       ) : null}
@@ -1193,11 +1232,13 @@ function getProcessDetail(block: ChatBlock, summaryText?: string): ProcessDetail
 function ProcessEntryDetail({
   block,
   detail,
-  processing
+  processing,
+  allowThreadActions = true
 }: {
   block: ChatBlock
   detail: ProcessDetail
   processing: boolean
+  allowThreadActions?: boolean
 }): ReactElement | null {
   if (detail.kind === 'reasoning') {
     const streamReason = block.id === 'live-reasoning' && processing
@@ -1245,13 +1286,13 @@ function ProcessEntryDetail({
     return <p className="whitespace-pre-wrap text-[13.5px] leading-6 text-ds-muted">{detail.text}</p>
   }
   if (detail.kind === 'approval' && block.kind === 'approval') {
-    return <MessageBubble block={block} nested />
+    return <MessageBubble block={block} nested allowThreadActions={allowThreadActions} />
   }
   if (detail.kind === 'user_input' && block.kind === 'user_input') {
-    return <MessageBubble block={block} nested />
+    return <MessageBubble block={block} nested allowThreadActions={allowThreadActions} />
   }
   if ((detail.kind === 'background_shell' || detail.kind === 'background_subagent') && block.kind === 'user') {
-    return <MessageBubble block={block} nested />
+    return <MessageBubble block={block} nested allowThreadActions={allowThreadActions} />
   }
   return null
 }

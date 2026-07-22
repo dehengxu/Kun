@@ -112,4 +112,31 @@ describe('CodeRightPanelTabs', () => {
     expect(tab.props['aria-label']).toBe('Agent Perspective')
     expect(textContent(tab)).toBe('Agent Perspective')
   })
+
+  it('places a new-branch action beside the active branch workspace tab', () => {
+    const onNewSideConversation = vi.fn()
+    let renderer: ReactTestRenderer
+    act(() => {
+      renderer = create(createElement(CodeRightPanelTabs, {
+        state: openCodeRightTab(emptyCodeRightTabsState(), BUILTIN_RIGHT_PANEL_IDS.sideConversations),
+        domIdPrefix: 'side-tabs',
+        titles: {
+          [BUILTIN_RIGHT_PANEL_IDS.sideConversations]: 'Branch conversation 1'
+        },
+        sideConversationCount: 2,
+        sideConversationRunningCount: 0,
+        extensionItems: [],
+        onActivate: vi.fn(),
+        onClose: vi.fn(),
+        onCollapse: vi.fn(),
+        onNewSideConversation
+      }))
+    })
+
+    const tab = renderer!.root.findByProps({ role: 'tab' })
+    expect(textContent(tab)).toBe('Branch conversation 1')
+    const add = renderer!.root.findByProps({ 'aria-label': 'New branch conversation' })
+    act(() => add.props.onClick())
+    expect(onNewSideConversation).toHaveBeenCalledTimes(1)
+  })
 })

@@ -893,23 +893,7 @@ export function MessageTimeline({
   )
 }
 
-function MessageTurn({
-  turn,
-  isProcessing,
-  liveReasoning,
-  live,
-  durationMs,
-  reasoningDurationMs,
-  devPreviewCard,
-  planActionsBusy,
-  onBuildPlan,
-  onOpenPlan,
-  onOpenChildThread,
-  onComponentPrototypePrompt,
-  filePreviewWorkspaceRoot,
-  viewportRef,
-  compactCards = false
-}: {
+export type ConversationTurnProps = {
   turn: Turn
   isProcessing: boolean
   liveReasoning: string
@@ -925,7 +909,31 @@ function MessageTurn({
   filePreviewWorkspaceRoot: string
   viewportRef: RefObject<HTMLDivElement | null>
   compactCards?: boolean
-}): ReactElement {
+  /** Main-thread actions must stay disabled for isolated side conversations. */
+  allowMainThreadActions?: boolean
+  /** Side conversations must not inherit the active main thread's goal spacing. */
+  showActiveGoal?: boolean
+}
+
+export function ConversationTurn({
+  turn,
+  isProcessing,
+  liveReasoning,
+  live,
+  durationMs,
+  reasoningDurationMs,
+  devPreviewCard,
+  planActionsBusy,
+  onBuildPlan,
+  onOpenPlan,
+  onOpenChildThread,
+  onComponentPrototypePrompt,
+  filePreviewWorkspaceRoot,
+  viewportRef,
+  compactCards = false,
+  allowMainThreadActions = true,
+  showActiveGoal = true
+}: ConversationTurnProps): ReactElement {
   const activeThreadGoal = useChatStore((s) => s.activeThreadGoal)
   const forkThreadFromTurn = useChatStore((s) => s.forkThreadFromTurn)
   const rollbackWorkspaceToCheckpoint = useChatStore((s) => s.rollbackWorkspaceToCheckpoint)
@@ -1018,12 +1026,12 @@ function MessageTurn({
     [...assistantContentBlocks].reverse().find((block) => block.turnId?.trim())?.turnId?.trim() ||
     ''
   const forkActionBlockId =
-    !isProcessing && forkTurnId
+    allowMainThreadActions && !isProcessing && forkTurnId
       ? assistantContentBlocks[assistantContentBlocks.length - 1]?.id
       : undefined
   const rollbackCheckpointId = turn.user?.meta?.workspaceCheckpointId?.trim() ?? ''
   const rollbackActionBlockId =
-    !isProcessing && rollbackCheckpointId
+    allowMainThreadActions && !isProcessing && rollbackCheckpointId
       ? assistantContentBlocks[assistantContentBlocks.length - 1]?.id
       : undefined
 
@@ -1036,7 +1044,7 @@ function MessageTurn({
     (runtimeErrorBlocks.length > 0 && typeof durationMs === 'number')
   const showLiveProgress = isProcessing && !onlyCompactionProcess
   const forkFromTurn = async (): Promise<void> => {
-    if (!forkTurnId || forking) return
+    if (!allowMainThreadActions || !forkTurnId || forking) return
     setForking(true)
     try {
       await forkThreadFromTurn(forkTurnId)
@@ -1046,7 +1054,7 @@ function MessageTurn({
   }
   const rollbackWorkspace = async (checkpointId: string): Promise<void> => {
     const targetCheckpointId = checkpointId.trim()
-    if (!targetCheckpointId || rollingBackCheckpointId) return
+    if (!allowMainThreadActions || !targetCheckpointId || rollingBackCheckpointId) return
     setRollingBackCheckpointId(targetCheckpointId)
     try {
       await rollbackWorkspaceToCheckpoint(targetCheckpointId)
@@ -1057,7 +1065,9 @@ function MessageTurn({
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      {turn.user ? <MessageBubble block={turn.user} /> : null}
+      {turn.user ? (
+        <MessageBubble block={turn.user} allowThreadActions={allowMainThreadActions} />
+      ) : null}
 
       {hasProcess ? (
         <div className="flex flex-col gap-1 pb-2">
@@ -1082,6 +1092,7 @@ function MessageTurn({
                   workspaceRoot={filePreviewWorkspaceRoot}
                   viewportRef={viewportRef}
                   onOpenChildThread={onOpenChildThread}
+                  allowThreadActions={allowMainThreadActions}
                 />
               ))}
             </div>
@@ -1102,6 +1113,7 @@ function MessageTurn({
         <MessageBubble
           key={block.id}
           block={block}
+          allowThreadActions={allowMainThreadActions}
           forkAction={
             block.id === forkActionBlockId
               ? {
@@ -1126,7 +1138,10 @@ function MessageTurn({
       ))}
 
       {showLiveAssistant ? (
-        <MessageBubble block={{ kind: 'assistant', id: 'live-assistant', text: liveContent }} />
+        <MessageBubble
+          block={{ kind: 'assistant', id: 'live-assistant', text: liveContent }}
+          allowThreadActions={allowMainThreadActions}
+        />
       ) : null}
 
       <GeneratedFilesPanel blocks={generatedFileBlocks} />
@@ -1141,7 +1156,9 @@ function MessageTurn({
         <TimelineRuntimeError key={block.id} block={block} />
       ))}
 
-      {showLiveProgress ? <LiveTurnProgressRow hasActiveGoal={Boolean(activeThreadGoal)} /> : null}
+      {showLiveProgress ? (
+        <LiveTurnProgressRow hasActiveGoal={showActiveGoal && Boolean(activeThreadGoal)} />
+      ) : null}
 
       {!isProcessing && devPreviewCard ? devPreviewCard : null}
 
@@ -1200,7 +1217,7 @@ function LiveTurnProgressRow({ hasActiveGoal }: { hasActiveGoal: boolean }): Rea
   )
 }
 
-const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
+const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
   sameTurnContent(prev.turn, next.turn) &&
   prev.isProcessing === next.isProcessing &&
   prev.liveReasoning === next.liveReasoning &&
@@ -1215,5 +1232,7 @@ const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
   prev.onComponentPrototypePrompt === next.onComponentPrototypePrompt &&
   prev.filePreviewWorkspaceRoot === next.filePreviewWorkspaceRoot &&
   prev.compactCards === next.compactCards &&
+  prev.allowMainThreadActions === next.allowMainThreadActions &&
+  prev.showActiveGoal === next.showActiveGoal &&
   prev.viewportRef === next.viewportRef
 ))

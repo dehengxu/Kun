@@ -991,7 +991,8 @@ export function Workbench(): ReactElement {
       extensionItems: extensionRightRailItems,
       extensionViews: extensionRightPanelItems,
       onActivate: activateRightPanelTab,
-      onClose: closeCodeRightTool
+      onClose: closeCodeRightTool,
+      onNewSideConversation: openSideConversationDraft
     },
     workspaceRoot: extensionWorkspaceRoot
   })

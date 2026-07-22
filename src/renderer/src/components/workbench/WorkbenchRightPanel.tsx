@@ -80,6 +80,7 @@ export type WorkbenchCodeRightWorkspaceProps = {
   extensionViews: readonly RegisteredContribution<'views.rightSidebar'>[]
   onActivate: (id: RightPanelContributionId) => void
   onClose: (id: RightPanelContributionId) => void
+  onNewSideConversation: () => void
 }
 
 export type WorkbenchRightPanelProps = {
@@ -333,6 +334,7 @@ function CodeRightPanelWorkspace({
           extensionItems={code.extensionItems}
           onActivate={code.onActivate}
           onClose={code.onClose}
+          onNewSideConversation={code.onNewSideConversation}
           onCollapse={onCollapse}
         />
         <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>

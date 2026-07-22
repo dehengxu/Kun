@@ -140,8 +140,10 @@ export function shouldSurfaceComposerUserInput(route: AppRoute, compact: boolean
 export type { DesignComposerContext } from '../../design/design-composer-context'
 
 type Props = {
-  variant?: 'default' | 'compact'
+  variant?: 'default' | 'compact' | 'side'
   workspaceRootOverride?: string
+  /** Use a non-active thread for compact side-conversation usage. */
+  activeThreadIdOverride?: string | null
   input: string
   setInput: (v: string) => void
   mode: 'plan' | 'agent'
@@ -273,6 +275,7 @@ export function shouldShowGoalFloater({
 export function FloatingComposer({
   variant = 'default',
   workspaceRootOverride,
+  activeThreadIdOverride,
   input,
   setInput,
   mode,
@@ -339,7 +342,10 @@ export function FloatingComposer({
   const { t, i18n } = useTranslation('common')
   const route = useChatStore((s) => s.route)
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
-  const activeThreadId = useChatStore((s) => s.activeThreadId)
+  const storeActiveThreadId = useChatStore((s) => s.activeThreadId)
+  const activeThreadId = activeThreadIdOverride === undefined
+    ? storeActiveThreadId
+    : activeThreadIdOverride
   const usageRefreshKey = useChatStore((s) => s.usageRefreshKey)
   const lastTurnUsage = useChatStore((s) => s.lastTurnUsage)
   const threads = useChatStore((s) => s.threads)
@@ -356,7 +362,8 @@ export function FloatingComposer({
   const blocks = useChatStore((s) => s.blocks)
   const resolveUserInput = useChatStore((s) => s.resolveUserInput)
   const reorderQueuedMessage = useChatStore((s) => s.reorderQueuedMessage)
-  const compact = variant === 'compact'
+  const compact = variant !== 'default'
+  const side = variant === 'side'
   // The pending ask-user request for the active thread, surfaced as a panel
   // docked above this composer. The main Chat and Design composers host it, as
   // does Write's only (compact) composer. Other compact side composers would
@@ -1408,7 +1415,7 @@ export function FloatingComposer({
         <div
           className={`ds-composer-shell ds-chat-composer ds-frosted ds-no-drag flex flex-col gap-1 px-3 pb-2 pt-2 transition ${
             draft.focused ? 'ds-chat-composer-focus' : ''
-          } ${compact ? 'rounded-[24px] px-3 py-2 shadow-none' : ''}`}
+          } ${compact ? `rounded-[24px] px-3 py-2 ${side ? 'shadow-[0_14px_38px_rgba(20,47,95,0.10)]' : 'shadow-none'}` : ''}`}
           onMouseDown={handleComposerShellMouseDown}
           onPaste={handleComposerPaste}
           onDragOver={handleComposerDragOver}
@@ -1648,7 +1655,9 @@ export function FloatingComposer({
             ) : null}
             <div
               className={`ds-composer-toolbar-actions flex min-w-0 items-center justify-end gap-1.5 ${
-                showToolbarStartControls || stretchModelPicker || dictation.status === 'recording' ? 'flex-1' : 'shrink-0'
+                showToolbarStartControls || stretchModelPicker || dictation.status === 'recording' || side
+                  ? 'flex-1'
+                  : 'shrink-0'
               }`}
             >
               {dictation.status === 'recording' ? (
@@ -1678,15 +1687,17 @@ export function FloatingComposer({
                 </>
               ) : (
                 <>
-                  <FloatingComposerContextCapacity
-                    compact={compact}
-                    route={route}
-                    activeThreadId={activeThreadId}
-                    lastTurnInputTokens={lastTurnInputTokens}
-                    contextWindowTokens={contextWindowTokens}
-                    runtimeToolCount={runtimeToolCount}
-                    runtimeSkillCount={runtimeSkillCount}
-                  />
+                  {side ? null : (
+                    <FloatingComposerContextCapacity
+                      compact={compact}
+                      route={route}
+                      activeThreadId={activeThreadId}
+                      lastTurnInputTokens={lastTurnInputTokens}
+                      contextWindowTokens={contextWindowTokens}
+                      runtimeToolCount={runtimeToolCount}
+                      runtimeSkillCount={runtimeSkillCount}
+                    />
+                  )}
                   {hideModelPicker ? null : (
                     <FloatingComposerModelPicker
                       compact={compact}
@@ -1704,10 +1715,10 @@ export function FloatingComposer({
                       onConfigureProviders={onConfigureProviders}
                     />
                   )}
-                  {hideModelPicker ? null : (
+                  {hideModelPicker || side ? null : (
                     <FloatingComposerAgentPicker compact={compact} disabled={!canCompose || busy} />
                   )}
-                  {showVoiceDictation ? (
+                  {!side && showVoiceDictation ? (
                     <button
                       type="button"
                       disabled={dictation.status === 'transcribing' || !canEditComposer}
@@ -1731,7 +1742,7 @@ export function FloatingComposer({
                       )}
                     </button>
                   ) : null}
-                  {promptOptimizationSettings?.enabled === true ? (
+                  {!side && promptOptimizationSettings?.enabled === true ? (
                     <button
                       type="button"
                       disabled={!canOptimizePrompt}

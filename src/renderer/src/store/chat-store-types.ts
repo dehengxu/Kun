@@ -176,6 +176,11 @@ export type SidePanelState = {
   activeSideId: string | null
 }
 
+export type SideConversationDraftOptions = {
+  model?: string
+  reasoningEffort?: string
+}
+
 export type ChatState = {
   route: AppRoute
   settingsReturnRoute: Exclude<AppRoute, 'settings'>
@@ -377,7 +382,10 @@ export type ChatState = {
    * while the active thread is running. Does not change `activeThreadId`.
    * If `seedText` is provided, immediately sends it as the first turn.
    */
-  spawnSideConversation: (seedText?: string) => Promise<string | null>
+  spawnSideConversation: (
+    seedText?: string,
+    options?: SideConversationDraftOptions
+  ) => Promise<string | null>
   /**
    * Open the side chat surface without creating an underlying side
    * thread. The first draft send will create the side thread.

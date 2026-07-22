@@ -3503,17 +3503,17 @@ body.ds-workbench-resizing webview {
     width: auto;
   }
 
-  .ds-composer-toolbar > div:first-child {
+  .ds-composer-toolbar-start {
     flex: 0 1 auto;
     max-width: 44%;
     min-width: 0;
   }
 
-  .ds-composer-toolbar > div:first-child::-webkit-scrollbar {
+  .ds-composer-toolbar-start::-webkit-scrollbar {
     display: none;
   }
 
-  .ds-composer-toolbar > div:last-child {
+  .ds-composer-toolbar-actions {
     flex: 1 1 0;
     min-width: 0;
     justify-content: flex-end;
@@ -3553,7 +3553,7 @@ body.ds-workbench-resizing webview {
 }
 
 @container (max-width: 420px) {
-  .ds-composer-toolbar > div:first-child {
+  .ds-composer-toolbar-start {
     max-width: 38%;
   }
 

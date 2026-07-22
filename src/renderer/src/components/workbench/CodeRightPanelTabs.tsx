@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useMemo,
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -13,6 +14,7 @@ import {
   Globe2,
   MessageCircleMore,
   PanelRightClose,
+  Plus,
   Puzzle,
   ScanSearch,
   Shapes,
@@ -42,6 +44,7 @@ type Props = {
   onActivate: (id: RightPanelContributionId) => void
   onClose: (id: RightPanelContributionId) => void
   onCollapse: () => void
+  onNewSideConversation?: () => void
 }
 
 type BuiltinTab = {
@@ -63,7 +66,8 @@ export function CodeRightPanelTabs({
   extensionItems,
   onActivate,
   onClose,
-  onCollapse
+  onCollapse,
+  onNewSideConversation
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const idPrefix = safeDomId(domIdPrefix)
@@ -162,8 +166,8 @@ export function CodeRightPanelTabs({
           const tabId = `${idPrefix}-tab-${safeDomId(id)}`
           const panelId = `${idPrefix}-panel-${safeDomId(id)}`
           return (
+            <Fragment key={id}>
             <div
-              key={id}
               className={`group flex h-8 min-w-[7rem] max-w-[15rem] shrink-0 items-center rounded-[9px] border transition ${
                 active
                   ? 'border-ds-border-strong bg-ds-card text-ds-ink shadow-sm'
@@ -192,7 +196,7 @@ export function CodeRightPanelTabs({
                   <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
                 ) : null}
                 <span className="min-w-0 flex-1 truncate">{meta.label}</span>
-                {id === BUILTIN_RIGHT_PANEL_IDS.sideConversations && sideConversationCount > 0 ? (
+                {id === BUILTIN_RIGHT_PANEL_IDS.sideConversations && !active && sideConversationCount > 0 ? (
                   <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] text-white">
                     {Math.min(sideConversationCount, 99)}
                   </span>
@@ -214,6 +218,18 @@ export function CodeRightPanelTabs({
                 <X className="h-3.5 w-3.5" strokeWidth={1.8} />
               </button>
             </div>
+            {id === BUILTIN_RIGHT_PANEL_IDS.sideConversations && active && onNewSideConversation ? (
+              <button
+                type="button"
+                onClick={onNewSideConversation}
+                aria-label={t('sidePanelNew')}
+                title={t('sidePanelNew')}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+              >
+                <Plus className="h-4 w-4" strokeWidth={1.8} />
+              </button>
+            ) : null}
+            </Fragment>
           )
         })}
       </div>

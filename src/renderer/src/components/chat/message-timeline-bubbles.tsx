@@ -220,9 +220,11 @@ function BackgroundSubagentNoticeBubble({
  * a fresh turn on the same thread (see chat-store `rewindAndResend`).
  */
 function UserMessageBubble({
-  block
+  block,
+  allowThreadActions = true
 }: {
   block: Extract<ChatBlock, { kind: 'user' }>
+  allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const busy = useChatStore((s) => s.busy)
@@ -247,7 +249,7 @@ function UserMessageBubble({
       ? block.meta.displayText.trim()
       : null
   const displayText = metaDisplayText ?? parsedWritePrompt?.userInput ?? parsedClawPrompt?.text ?? block.text
-  const canEdit = route === 'chat' || !metaDisplayText
+  const canEdit = allowThreadActions && (route === 'chat' || !metaDisplayText)
   const showClawInboundCard = route === 'claw' && parsedClawPrompt?.inbound === true
 
   useEffect(() => {
@@ -1525,10 +1527,12 @@ function AssistantExportButton({
 
 function UserInputBubble({
   block,
-  nested = false
+  nested = false,
+  allowThreadActions = true
 }: {
   block: Extract<ChatBlock, { kind: 'user_input' }>
   nested?: boolean
+  allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const resolveUserInput = useChatStore((s) => s.resolveUserInput)
@@ -1540,7 +1544,7 @@ function UserInputBubble({
   // is not live, so it renders as a read-only ended record rather than a live
   // prompt — and crucially never offers cancel, which would hit a dead gate and
   // raise "user input not found" (issue #606).
-  const pending = block.status === 'pending' && block.live === true
+  const pending = allowThreadActions && block.status === 'pending' && block.live === true
   const done = block.status !== 'pending'
 
   useEffect(() => {
@@ -1562,7 +1566,7 @@ function UserInputBubble({
         ? t('userInputCancelled')
         : block.status === 'error'
           ? t('userInputFailed')
-          : pending
+          : pending || (!allowThreadActions && block.status === 'pending')
             ? t('userInputPending')
             : t('userInputCancelled')
   const tone =
@@ -1781,7 +1785,8 @@ function MessageBubbleImpl({
   block,
   nested = false,
   forkAction,
-  rollbackAction
+  rollbackAction,
+  allowThreadActions = true
 }: {
   block: ChatBlock
   nested?: boolean
@@ -1793,6 +1798,7 @@ function MessageBubbleImpl({
     busy: boolean
     onRollback: () => void
   }
+  allowThreadActions?: boolean
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const resolveApproval = useChatStore((s) => s.resolveApproval)
@@ -1803,7 +1809,7 @@ function MessageBubbleImpl({
     return <BackgroundSubagentNoticeBubble block={block} nested={nested} />
   }
   if (block.kind === 'user') {
-    return <UserMessageBubble block={block} />
+    return <UserMessageBubble block={block} allowThreadActions={allowThreadActions} />
   }
   if (block.kind === 'assistant') {
     const streaming = block.id === 'live-assistant'
@@ -1866,11 +1872,17 @@ function MessageBubbleImpl({
     return <ToolEntry block={block} nested={nested} />
   }
   if (block.kind === 'user_input') {
-    return <UserInputBubble block={block} nested={nested} />
+    return (
+      <UserInputBubble
+        block={block}
+        nested={nested}
+        allowThreadActions={allowThreadActions}
+      />
+    )
   }
   if (block.kind === 'approval') {
     const submitting = block.status === 'submitting'
-    const done = block.status !== 'pending' && !submitting
+    const done = !allowThreadActions || (block.status !== 'pending' && !submitting)
     const statusLabel =
       block.status === 'allowed'
         ? t('approvalAllowed')
