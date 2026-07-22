@@ -53,8 +53,8 @@ export function buildDelegationToolProviders(
           properties: {
             label: { type: 'string', description: 'A distinct 2-4 word UI title for this child.' },
             prompt: { type: 'string', description: 'The task for the child agent.' },
-            model: { type: 'string', description: 'Child model override; requires providerId.' },
-            providerId: { type: 'string', description: 'Child provider override; requires model.' },
+            model: { type: 'string', description: 'Reusable-profile or routed child model override; requires providerId. Ignored with custom_agent because custom agents inherit the current turn model.' },
+            providerId: { type: 'string', description: 'Reusable-profile or routed child provider override; requires model. Ignored with custom_agent because custom agents inherit the current turn provider.' },
             profile: {
               type: 'string',
               description: 'Optional exact agent profile id. Omit profile and custom_agent for BM25 Top-5 agent recall plus an LLM fit decision.'
@@ -223,14 +223,14 @@ export function buildDelegationToolProviders(
 function customAgentSchema(): Record<string, unknown> {
   return {
     type: 'object',
-    description: 'One-run standalone role written by the parent. Mutually exclusive with profile; not added to settings/catalog, but retained in the child-run audit snapshot.',
+    description: 'One-run standalone role written by the parent. It always inherits the current turn model/provider/reasoning strength, is mutually exclusive with profile, and is retained only in the child-run audit snapshot.',
     properties: {
       name: { type: 'string' },
       description: { type: 'string' },
       system_prompt: { type: 'string', description: 'Self-contained expertise, scope, procedure, output, verification, and boundaries.' },
       tool_policy: { type: 'string', enum: ['readOnly', 'inherit'] },
       blocked_tools: { type: 'array', items: { type: 'string' } },
-      reasoning_effort: { type: 'string', enum: ['auto', 'off', 'low', 'medium', 'high', 'max'] }
+      reasoning_effort: { type: 'string', enum: ['auto', 'off', 'low', 'medium', 'high', 'max'], description: 'Ignored for execution because custom agents inherit the current turn reasoning strength.' }
     },
     required: ['name', 'description', 'system_prompt'],
     additionalProperties: false
@@ -244,6 +244,7 @@ function parseCommonArgs(args: Record<string, unknown>, context: ToolHostContext
   providerId?: string
   inheritedModel?: string
   inheritedProviderId?: string
+  inheritedReasoningEffort?: string
   label?: string
   detach: boolean
   returnFormat?: 'evidence'
@@ -259,6 +260,7 @@ function parseCommonArgs(args: Record<string, unknown>, context: ToolHostContext
     ...(model ? { model, providerId } : {}),
     ...(context.model?.id?.trim() ? { inheritedModel: context.model.id.trim() } : {}),
     ...(context.modelProviderId?.trim() ? { inheritedProviderId: context.modelProviderId.trim() } : {}),
+    ...(context.reasoningEffort?.trim() ? { inheritedReasoningEffort: context.reasoningEffort.trim() } : {}),
     ...(stringValue(args.label) ? { label: stringValue(args.label) } : {}),
     detach: args.detach === true,
     ...(args.returnFormat === 'evidence' ? { returnFormat: 'evidence' as const } : {})
@@ -296,31 +298,38 @@ async function runChild(
     },
     ...(common.inheritedModel ? { inheritedModel: common.inheritedModel } : {}),
     ...(common.inheritedProviderId ? { inheritedProviderId: common.inheritedProviderId } : {}),
+    ...(common.inheritedReasoningEffort ? { inheritedReasoningEffort: common.inheritedReasoningEffort } : {}),
     approvalPolicy: context.approvalPolicy,
     ...(context.sandboxMode ? { sandboxMode: context.sandboxMode } : {}),
     ...(context.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(common.detach ? { detach: true } : {}),
     ...(common.returnFormat ? { returnFormat: common.returnFormat } : {}),
-    onQueued: async (childId, profile) => {
+    onQueued: async (childId, profile, metadata) => {
       await onUpdate?.({
         output: {
           childId,
           status: 'queued',
           detached: common.detach,
           ...(profile ? { profile } : {}),
+          ...(metadata?.profileName ? { profileName: metadata.profileName } : {}),
+          ...(metadata?.model ? { model: metadata.model } : {}),
+          ...(metadata?.reasoningEffort ? { reasoningEffort: metadata.reasoningEffort } : {}),
           ...(generated ? { generatedAgent: generatedToolOutput(profile, generated) } : {})
         },
         isError: false
       })
     },
     ...(common.detach ? {} : {
-      onRunning: async (childId: string, profile?: string) => {
+      onRunning: async (childId, profile, metadata) => {
         await onUpdate?.({
           output: {
             childId,
             status: 'running',
             detached: false,
             ...(profile ? { profile } : {}),
+            ...(metadata?.profileName ? { profileName: metadata.profileName } : {}),
+            ...(metadata?.model ? { model: metadata.model } : {}),
+            ...(metadata?.reasoningEffort ? { reasoningEffort: metadata.reasoningEffort } : {}),
             ...(generated ? { generatedAgent: generatedToolOutput(profile, generated) } : {})
           },
           isError: false
@@ -340,6 +349,9 @@ async function runChild(
       usage: record.usage,
       returnFormat: record.returnFormat,
       ...(record.profile ? { profile: record.profile } : {}),
+      ...(record.profileSnapshot?.name ? { profileName: record.profileSnapshot.name } : {}),
+      ...(record.model ? { model: record.model } : {}),
+      ...(record.reasoningEffort ? { reasoningEffort: record.reasoningEffort } : {}),
       ...(record.routing ? { routing: routingToolOutput(record.routing) } : {}),
       ...(generated ? { generatedAgent: generatedToolOutput(record.profile, generated) } : {}),
       ...(record.toolPolicy ? { toolPolicy: record.toolPolicy } : {}),
@@ -477,6 +489,7 @@ function generatedToolOutput(profile: string | undefined, generated: SubagentGen
 function buildDelegateTaskDescription(runtime: DelegationRuntime, profileCount: number): string {
   return [
     'Run a standalone child agent and return its result. With no profile or custom_agent, BM25 recalls the Top-5 agent profiles and an LLM selects a fitting profile; if none fits, a separate generator designs and runs a one-run role.',
+    'A custom_agent always inherits the current turn model, provider, and reasoning strength; do not supply model, providerId, or reasoning_effort overrides with custom_agent.',
     'Issue multiple calls in one message for independent parallel work.',
     `${profileCount} agent profiles are searchable.`,
     `Children default to the "${runtime.defaultToolPolicy}" tool policy and can never recursively delegate.`

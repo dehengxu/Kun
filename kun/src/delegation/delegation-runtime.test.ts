@@ -163,6 +163,67 @@ describe('DelegationRuntime abort handling', () => {
 })
 
 describe('DelegationRuntime model provider selection', () => {
+  it('records and publishes the snapshotted profile name with the effective model', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-observability-'))
+    try {
+      const events = { record: vi.fn(async () => undefined) }
+      const lifecycle: unknown[] = []
+      const runtime = new DelegationRuntime({
+        config: SubagentsCapabilityConfig.parse({
+          enabled: true,
+          maxParallel: 1,
+          maxChildRuns: 10,
+          profiles: {
+            auditor: {
+              name: 'Security Auditor',
+              model: 'gpt-5.6-sol',
+              providerId: 'openai',
+              toolPolicy: 'readOnly'
+            }
+          }
+        }),
+        store: new FileDelegationStore(dir),
+        events: events as unknown as RuntimeEventRecorder,
+        executor: async () => ({ summary: 'done' })
+      })
+
+      await runtime.runChild({
+        parentThreadId: 'parent',
+        parentTurnId: 'turn',
+        profile: 'auditor',
+        prompt: 'audit the change',
+        onQueued: (_childId, _profile, metadata) => lifecycle.push(metadata),
+        onRunning: (_childId, _profile, metadata) => lifecycle.push(metadata),
+        signal: new AbortController().signal
+      })
+
+      expect(lifecycle).toEqual([
+        {
+          model: 'gpt-5.6-sol',
+          providerId: 'openai',
+          profile: 'auditor',
+          profileName: 'Security Auditor'
+        },
+        {
+          model: 'gpt-5.6-sol',
+          providerId: 'openai',
+          profile: 'auditor',
+          profileName: 'Security Auditor'
+        }
+      ])
+      expect(events.record).toHaveBeenCalledWith(expect.objectContaining({
+        child: expect.objectContaining({
+          childModel: 'gpt-5.6-sol',
+          childProviderId: 'openai',
+          childProfile: 'auditor',
+          childProfileName: 'Security Auditor'
+        })
+      }))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('uses a complete profile pair instead of mixing it with the parent pair', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-selection-'))
     try {
@@ -238,6 +299,104 @@ describe('DelegationRuntime model provider selection', () => {
         model: 'gpt-5.3-codex-spark',
         providerId: 'codex'
       })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('forces a custom inline profile to inherit the parent pair over conflicting overrides', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-custom-selection-'))
+    try {
+      let captured: Parameters<ChildRunExecutor>[0] | undefined
+      const runtime = new DelegationRuntime({
+        config: SubagentsCapabilityConfig.parse({
+          enabled: true,
+          maxParallel: 1,
+          maxChildRuns: 10
+        }),
+        store: new FileDelegationStore(dir),
+        executor: async (input) => {
+          captured = input
+          return { summary: 'done' }
+        }
+      })
+
+      const record = await runtime.runChild({
+        parentThreadId: 'parent',
+        parentTurnId: 'turn',
+        prompt: 'work',
+        model: 'deepseek-v4-flash',
+        providerId: 'deepseek',
+        inheritedModel: 'gpt-5.6-luna',
+        inheritedProviderId: 'openai',
+        inheritedReasoningEffort: 'high',
+        inlineProfile: {
+          id: 'custom:greeting-agent',
+          source: 'custom',
+          profile: {
+            name: 'Greeting Agent',
+            mode: 'subagent',
+            model: 'deepseek-v4-pro',
+            providerId: 'deepseek',
+            toolPolicy: 'readOnly',
+            reasoningEffort: 'low'
+          }
+        },
+        signal: new AbortController().signal
+      })
+
+      expect(captured).toMatchObject({
+        model: 'gpt-5.6-luna',
+        providerId: 'openai',
+        reasoningEffort: 'high'
+      })
+      expect(record).toMatchObject({
+        model: 'gpt-5.6-luna',
+        providerId: 'openai',
+        reasoningEffort: 'high',
+        profile: 'custom:greeting-agent'
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('uses automatic reasoning when a custom inline profile has no inherited effort metadata', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-custom-reasoning-'))
+    try {
+      let captured: Parameters<ChildRunExecutor>[0] | undefined
+      const runtime = new DelegationRuntime({
+        config: SubagentsCapabilityConfig.parse({
+          enabled: true,
+          maxParallel: 1,
+          maxChildRuns: 10
+        }),
+        store: new FileDelegationStore(dir),
+        executor: async (input) => {
+          captured = input
+          return { summary: 'done' }
+        }
+      })
+
+      const record = await runtime.runChild({
+        parentThreadId: 'parent',
+        parentTurnId: 'turn',
+        prompt: 'work',
+        inlineProfile: {
+          id: 'custom:auto-agent',
+          source: 'custom',
+          profile: {
+            name: 'Auto Agent',
+            mode: 'subagent',
+            toolPolicy: 'readOnly',
+            reasoningEffort: 'low'
+          }
+        },
+        signal: new AbortController().signal
+      })
+
+      expect(captured?.reasoningEffort).toBe('auto')
+      expect(record.reasoningEffort).toBe('auto')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

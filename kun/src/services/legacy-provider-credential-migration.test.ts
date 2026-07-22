@@ -133,6 +133,39 @@ describe('LegacyProviderCredentialMigrationService', () => {
     await accounts.upsertCoreProvider({ id: 'deepseek', displayName: 'DeepSeek' })
     expect((await migration.resolveApiKey('provider:deepseek'))?.apiKey).toBe('kept-secret')
   })
+
+  it('forgets settings-committed bindings so hydrate cannot resurrect a cleared key', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-legacy-credential-forget-'))
+    const accounts = new ExtensionProviderAccountStore({ dataDir })
+    const credentials = new ExtensionCredentialStore({ dataDir, profileId: 'default' })
+    const migration = new LegacyProviderCredentialMigrationService({ dataDir, accounts, credentials })
+    const [initial] = await migration.migrate([providerSource('provider:deepseek', 'forget-me')])
+    await migration.markSettingsCommitted([initial!.sourceId])
+    expect((await migration.resolveApiKey('provider:deepseek'))?.apiKey).toBe('forget-me')
+
+    await migration.forgetSources(['provider:deepseek'])
+    expect(await migration.resolveApiKey('provider:deepseek')).toBeNull()
+    expect(await migration.listBindings()).toEqual([])
+    expect(await accounts.getAccount(initial!.accountId)).toBeNull()
+  })
+
+  it('keeps a shared account when forgetting only one of two sources', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-legacy-credential-forget-shared-'))
+    const accounts = new ExtensionProviderAccountStore({ dataDir })
+    const credentials = new ExtensionCredentialStore({ dataDir, profileId: 'default' })
+    const migration = new LegacyProviderCredentialMigrationService({ dataDir, accounts, credentials })
+    const results = await migration.migrate([
+      providerSource('provider:one', 'shared-secret'),
+      providerSource('runtime:same', 'shared-secret')
+    ])
+    await migration.markSettingsCommitted(results.map((entry) => entry.sourceId))
+    expect(results[0]?.accountId).toBe(results[1]?.accountId)
+
+    await migration.forgetSources(['provider:one'])
+    expect(await migration.resolveApiKey('provider:one')).toBeNull()
+    expect((await migration.resolveApiKey('runtime:same'))?.apiKey).toBe('shared-secret')
+    expect(await accounts.getAccount(results[0]!.accountId)).not.toBeNull()
+  })
 })
 
 describe('materializeLegacyProviderCredential', () => {

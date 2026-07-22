@@ -164,7 +164,7 @@ export function parseSemanticRequest(record: ModelRequestTraceRecord): SemanticR
     model: stringValue(body.model) || record.model,
     prompts,
     skills: parseSkills(prompts),
-    tools: parseToolDefinitions(body.tools, record.toolCatalog),
+    tools: parseToolDefinitions(body, record.toolCatalog),
     messages,
     parameters: Object.entries(body)
       .filter(([key]) => !STRUCTURAL_KEYS.has(key))
@@ -193,11 +193,13 @@ function parsePrompts(body: Record<string, unknown>): SemanticPrompt[] {
   const prompts: SemanticPrompt[] = []
   pushPrompt(prompts, 'instructions', 'instructions', body.instructions)
   pushPrompt(prompts, 'system', 'system', body.system)
-  if (Array.isArray(body.messages)) {
-    body.messages.forEach((entry, index) => {
+  for (const key of ['messages', 'input'] as const) {
+    const entries = body[key]
+    if (!Array.isArray(entries)) continue
+    entries.forEach((entry, index) => {
       if (!isRecord(entry) || !['system', 'developer'].includes(stringValue(entry.role))) return
       const text = contentText(entry.content)
-      if (text) prompts.push({ id: `message-${index}`, source: 'message', text })
+      if (text) prompts.push({ id: `${key}-${index}`, source: 'message', text })
     })
   }
   return prompts
@@ -285,23 +287,32 @@ function collectToolResults(requests: readonly SemanticRequest[]): Map<string, S
 }
 
 function parseToolDefinitions(
-  value: unknown,
+  body: Record<string, unknown>,
   catalog: ModelRequestTraceRecord['toolCatalog']
 ): SemanticToolDefinition[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((entry) => {
-    if (!isRecord(entry)) return []
+  const definitions: unknown[] = Array.isArray(body.tools) ? [...body.tools] : []
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (!isRecord(item) || stringValue(item.type) !== 'additional_tools') continue
+      if (Array.isArray(item.tools)) definitions.push(...item.tools)
+    }
+  }
+
+  const tools = new Map<string, SemanticToolDefinition>()
+  for (const entry of definitions) {
+    if (!isRecord(entry)) continue
     const nested = isRecord(entry.function) ? entry.function : entry
     const name = stringValue(nested.name)
-    if (!name) return []
+    if (!name) continue
     const schema = nested.parameters ?? nested.input_schema ?? nested.inputSchema
-    return [{
+    tools.set(name, {
       name,
       description: stringValue(nested.description),
       provenance: resolveToolProvenance(name, catalog),
       ...(isRecord(schema) ? { inputSchema: schema } : {})
-    }]
-  })
+    })
+  }
+  return [...tools.values()]
 }
 
 function parseSkills(prompts: readonly SemanticPrompt[]): SemanticSkill[] {

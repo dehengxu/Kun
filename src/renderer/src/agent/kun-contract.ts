@@ -399,6 +399,7 @@ export type CoreChildRuntimeMetadataJson = {
   detached?: boolean
   childModel?: string
   childProfile?: string
+  childProfileName?: string
   childToolPolicy?: 'readOnly' | 'inherit'
   prefixReused?: boolean
   inheritedHistoryItems?: number

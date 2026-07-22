@@ -91,6 +91,8 @@ export type RuntimeChildMetadata = {
   childLabel?: string
   /** Subagent profile id (e.g. `general`, `explore`) resolved by the runtime. */
   childProfile?: string
+  /** Profile display name snapshotted for this child run. */
+  childProfileName?: string
   /** Model override the child ran under, when one was resolved. */
   childModel?: string
   /** Tool policy applied to the child run. */

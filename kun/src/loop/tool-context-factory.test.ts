@@ -11,6 +11,7 @@ function dispatchInput(signal: AbortSignal): ToolDispatchInput {
     workspace: '/workspace',
     threadMode: 'agent',
     modelProviderId: 'provider_1',
+    reasoningEffort: 'high',
     modelCapabilities: {
       id: 'model_1',
       inputModalities: ['text'],
@@ -54,6 +55,7 @@ describe('createToolExecutionContext', () => {
       turnId: 'turn_1',
       workspace: '/workspace',
       modelProviderId: 'provider_1',
+      reasoningEffort: 'high',
       activeSkillIds: ['skill_1'],
       memoryPolicy: { enabled: true },
       approvalPolicy: 'always',

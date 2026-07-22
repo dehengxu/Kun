@@ -38,6 +38,30 @@ function trace(
 }
 
 describe('Agent Perspective semantic projection', () => {
+  it('extracts the Chat Completions request shape used by custom endpoints too', () => {
+    const parsed = parseSemanticRequest(trace('1', {
+      model: 'chat-model',
+      messages: [
+        { role: 'system', content: 'Chat Completions system prompt.' },
+        { role: 'user', content: 'Inspect Chat Completions' }
+      ],
+      tools: [{
+        type: 'function',
+        function: {
+          name: 'write_file',
+          description: 'Write a file',
+          parameters: { type: 'object' }
+        }
+      }]
+    }, { endpointFormat: 'custom_endpoint' }))
+
+    expect(parsed).toMatchObject({
+      prompts: [{ source: 'message', text: 'Chat Completions system prompt.' }],
+      tools: [{ name: 'write_file', description: 'Write a file' }],
+      messages: [{ role: 'user', text: 'Inspect Chat Completions' }]
+    })
+  })
+
   it('extracts system prompts, skills, tool definitions, messages, and parameters', () => {
     const record = trace('1', {
       model: 'gpt-test',
@@ -68,6 +92,89 @@ describe('Agent Perspective semantic projection', () => {
       tools: [{ name: 'read_file', description: 'Read a file' }],
       messages: [{ role: 'user', text: 'Inspect the request' }],
       parameters: [{ name: 'stream', value: true }, { name: 'reasoning', value: { effort: 'high' } }]
+    })
+  })
+
+  it('extracts semantic sections from standard and Lite Responses requests', () => {
+    const standard = parseSemanticRequest(trace('1', {
+      model: 'gpt-responses',
+      input: [
+        {
+          role: 'system',
+          content: [{ type: 'input_text', text: 'Standard Responses system prompt.' }]
+        },
+        {
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Inspect standard Responses' }]
+        }
+      ],
+      tools: [{
+        type: 'function',
+        name: 'read_file',
+        description: 'Read a file',
+        parameters: { type: 'object' }
+      }]
+    }, { endpointFormat: 'responses' }))
+    expect(standard).toMatchObject({
+      prompts: [{ source: 'message', text: 'Standard Responses system prompt.' }],
+      tools: [{ name: 'read_file', description: 'Read a file' }],
+      messages: [{ role: 'user', text: 'Inspect standard Responses' }]
+    })
+
+    const lite = parseSemanticRequest(trace('2', {
+      model: 'gpt-5.6-sol',
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{
+            type: 'function',
+            name: 'bash',
+            description: 'Run a shell command',
+            parameters: { type: 'object', properties: { command: { type: 'string' } } }
+          }]
+        },
+        {
+          type: 'message',
+          role: 'developer',
+          content: [{
+            type: 'input_text',
+            text: [
+              'Kun system prompt.',
+              '### Available skills',
+              '- pdf (pdf-reader): Read PDFs. (file: /skills/pdf/SKILL.md)',
+              '### How to use skills',
+              'Read the skill first.',
+              '',
+              'Active Skill: pdf (pdf-reader)',
+              '',
+              'Activation: user mentioned pdf',
+              '',
+              'Description: Read PDFs with the active workflow.'
+            ].join('\n')
+          }]
+        },
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Inspect Responses Lite' }]
+        }
+      ],
+      store: false
+    }, {
+      endpointFormat: 'responses',
+      toolCatalog: [{ name: 'bash', providerKind: 'built-in', providerId: 'builtin' }]
+    }))
+    expect(lite).toMatchObject({
+      prompts: [{ source: 'message', text: expect.stringContaining('Kun system prompt.') }],
+      skills: [{ id: 'pdf-reader', name: 'pdf', active: true }],
+      tools: [{
+        name: 'bash',
+        description: 'Run a shell command',
+        provenance: { source: 'kun', inferred: false }
+      }],
+      messages: [{ role: 'user', text: 'Inspect Responses Lite' }],
+      parameters: [{ name: 'store', value: false }]
     })
   })
 

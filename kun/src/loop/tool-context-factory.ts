@@ -35,6 +35,7 @@ export function createToolExecutionContext(
     ...(input.imContext ? { imContext: true } : {}),
     model: input.modelCapabilities,
     ...(input.modelProviderId ? { modelProviderId: input.modelProviderId } : {}),
+    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     activeSkillIds: input.activeSkillIds,
     memoryPolicy: { enabled: deps.memoryEnabled },
     delegationPolicy: { enabled: false },

@@ -45,6 +45,13 @@ export class LegacyProviderSettingsMigrationCoordinator {
   ): Promise<PreparedLegacyProviderSettingsMigration> {
     const dataDir = resolveSettingsDataDir(settings)
     const { service } = await this.runtime(dataDir)
+    // Save path only: an empty apiKey means the caller intentionally cleared
+    // credentials (disconnect / revoke). Drop the secure binding so hydrate
+    // cannot resurrect the previous secret. Load path keeps empty plaintext
+    // + existing bindings so restart still restores logged-in sessions.
+    if (options.replaceCommitted === true) {
+      await service.forgetSources(collectClearedLegacyCredentialSourceIds(settings))
+    }
     const sources = collectLegacyCredentialSources(settings)
     const migrations = await service.migrate(sources, {
       replaceCommitted: options.replaceCommitted === true
@@ -114,6 +121,17 @@ function collectLegacyCredentialSources(settings: AppSettingsV1) {
     })
   }
   return sources
+}
+
+/** Source ids whose plaintext is empty and should be forgotten on save. */
+function collectClearedLegacyCredentialSourceIds(settings: AppSettingsV1): string[] {
+  const providerSettings = getModelProviderSettings(settings)
+  const runtime = getKunRuntimeSettings(settings)
+  const sourceIds = providerSettings.providers
+    .filter((provider) => !provider.apiKey.trim())
+    .map((provider) => legacyProviderCredentialSourceId(provider.id))
+  if (!runtime.apiKey.trim()) sourceIds.push(LEGACY_RUNTIME_OVERRIDE_SOURCE_ID)
+  return sourceIds
 }
 
 function stripMigratedPlaintext(

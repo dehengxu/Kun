@@ -237,6 +237,18 @@ export class LegacyProviderCredentialMigrationService {
     }
   }
 
+  /**
+   * Permanently drop migration markers for sources whose plaintext was
+   * intentionally cleared (for example OAuth disconnect). Unlike
+   * {@link rollbackPending}, this works for both `secure-committed` and
+   * `settings-committed` phases so a later hydrate cannot resurrect the key.
+   */
+  async forgetSources(sourceIds: readonly string[]): Promise<void> {
+    for (const sourceId of [...new Set(sourceIds.map((value) => value.trim()).filter(Boolean))]) {
+      await this.forgetOne(sourceId)
+    }
+  }
+
   private async migrateOne(
     source: LegacyProviderCredentialSource,
     apiKey: string,
@@ -370,6 +382,39 @@ export class LegacyProviderCredentialMigrationService {
         ...(marker.modelId ? { modelId: marker.modelId } : {})
       }, marker.accountId).catch(() => undefined)
       throw error
+    }
+  }
+
+  private async forgetOne(sourceId: string): Promise<void> {
+    const document = await this.markers.read(emptyDocument)
+    const entry = document.entries[sourceId]
+    if (!entry) return
+    const account = await this.options.accounts.getAccount(entry.accountId)
+    const accountId = entry.accountId
+    const credentialRefs = new Set<string>()
+    if (account?.credentialRef) credentialRefs.add(account.credentialRef)
+    if (entry.rollback?.credentialRef) credentialRefs.add(entry.rollback.credentialRef)
+
+    await this.options.accounts.clearBinding(bindingScope(sourceId), entry.providerId).catch(() => undefined)
+    await this.markers.update(emptyDocument, (current) => {
+      if (!current.entries[sourceId]) return current
+      const entries = { ...current.entries }
+      delete entries[sourceId]
+      return { ...current, revision: current.revision + 1, entries }
+    })
+
+    const remaining = await this.markers.read(emptyDocument)
+    const stillReferenced = Object.values(remaining.entries).some((candidate) =>
+      candidate.accountId === accountId || candidate.rollback?.accountId === accountId
+    )
+    if (stillReferenced) return
+
+    const principal = corePrincipal(entry.providerId)
+    if (account) {
+      await this.options.accounts.deleteAccount(principal, accountId).catch(() => undefined)
+    }
+    for (const credentialRef of credentialRefs) {
+      await this.options.credentials.delete(credentialRef).catch(() => undefined)
     }
   }
 

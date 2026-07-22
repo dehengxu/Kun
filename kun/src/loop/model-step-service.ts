@@ -663,6 +663,7 @@ export class ModelStepService {
       turn,
       prepared,
       ...(providerId ? { modelProviderId: providerId } : {}),
+      modelReasoningEffort: modelRoute.reasoningEffort ?? turn.reasoningEffort ?? 'auto',
       toolProviderMetadata,
       toolKinds,
       toolProviderKinds,

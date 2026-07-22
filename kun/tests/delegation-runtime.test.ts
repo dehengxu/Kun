@@ -361,15 +361,25 @@ describe('DelegationRuntime', () => {
     expect(seen.at(-1)?.toolPolicy).toBe('readOnly')
   })
 
-  it('lets the parent create an ephemeral custom subagent without invoking the router', async () => {
-    const seen: Array<{ systemPrompt?: string; blockedTools?: string[]; toolPolicy: string }> = []
+  it('lets the parent create an ephemeral custom subagent that inherits the active turn model', async () => {
+    const seen: Array<{
+      systemPrompt?: string
+      blockedTools?: string[]
+      toolPolicy: string
+      model?: string
+      providerId?: string
+      reasoningEffort?: string
+    }> = []
     const runtime = createRuntime({
       profiles: { general: { description: 'General worker', toolPolicy: 'inherit' } },
       executor: async (input) => {
         seen.push({
           systemPrompt: input.systemPrompt,
           blockedTools: input.blockedTools,
-          toolPolicy: input.toolPolicy
+          toolPolicy: input.toolPolicy,
+          model: input.model,
+          providerId: input.providerId,
+          reasoningEffort: input.reasoningEffort
         })
         return { summary: 'investigated' }
       }
@@ -386,18 +396,30 @@ describe('DelegationRuntime', () => {
       toolName: 'delegate_task',
       arguments: {
         prompt: 'Trace the IPC failure',
+        model: 'deepseek-v4-flash',
+        providerId: 'deepseek',
         custom_agent: {
           name: 'IPC Investigator',
           description: 'Diagnoses Electron IPC boundaries.',
           system_prompt: 'Trace renderer, preload, and main. Cite concrete evidence.',
           tool_policy: 'readOnly',
-          blocked_tools: ['bash']
+          blocked_tools: ['bash'],
+          reasoning_effort: 'low'
         }
       }
     }, {
       threadId: 'thr_custom',
       turnId: 'turn_custom',
       workspace: dir,
+      model: {
+        id: 'gpt-5.6-luna',
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        messageParts: ['text']
+      },
+      modelProviderId: 'openai',
+      reasoningEffort: 'high',
       approvalPolicy: 'on-request',
       sandboxMode: 'read-only',
       abortSignal: new AbortController().signal,
@@ -410,10 +432,16 @@ describe('DelegationRuntime', () => {
     expect(seen).toEqual([{
       systemPrompt: 'Trace renderer, preload, and main. Cite concrete evidence.',
       blockedTools: ['delegate_task', 'generate_subagent', 'load_skill', 'bash'],
-      toolPolicy: 'readOnly'
+      toolPolicy: 'readOnly',
+      model: 'gpt-5.6-luna',
+      providerId: 'openai',
+      reasoningEffort: 'high'
     }])
     expect((await runtime.diagnostics('thr_custom')).childRuns[0]).toMatchObject({
       profile: 'custom:ipc-investigator',
+      model: 'gpt-5.6-luna',
+      providerId: 'openai',
+      reasoningEffort: 'high',
       approvalPolicy: 'on-request',
       sandboxMode: 'read-only',
       routing: { method: 'explicit-custom', selectedKind: 'custom' }

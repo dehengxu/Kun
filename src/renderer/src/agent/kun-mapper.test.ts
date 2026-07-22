@@ -297,6 +297,9 @@ describe('create_plan tool mapping', () => {
       parentTurnId: 'turn_1',
       childId: 'child_1',
       childLabel: 'child',
+      childProfile: 'security-auditor',
+      childProfileName: 'Security Auditor',
+      childModel: 'gpt-5.6-sol',
       childStatus: 'completed' as const,
       childSeq: 1,
       detached: true
@@ -317,7 +320,10 @@ describe('create_plan tool mapping', () => {
         child: {
           childId: 'child_1',
           childStatus: 'running',
-          detached: true
+          detached: true,
+          childProfile: 'security-auditor',
+          childProfileName: 'Security Auditor',
+          childModel: 'gpt-5.6-sol'
         }
       }
     })
@@ -357,7 +363,10 @@ describe('create_plan tool mapping', () => {
         child: {
           childId: 'child_1',
           childStatus: 'failed',
-          detached: true
+          detached: true,
+          childProfile: 'security-auditor',
+          childProfileName: 'Security Auditor',
+          childModel: 'gpt-5.6-sol'
         }
       }
     })

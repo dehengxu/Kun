@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import {
+  ModelReasoningEffort,
   SubagentProfileConfig,
   SubagentToolPolicy,
   type SubagentMode,
@@ -114,6 +115,8 @@ export const ChildRunRecord = z.object({
   model: z.string().optional(),
   /** Resolved provider id the child routed through, when one was selected. */
   providerId: z.string().optional(),
+  /** Effective reasoning strength used by the child model request. */
+  reasoningEffort: ModelReasoningEffort.optional(),
   /** Resolved subagent profile name, when one was selected. */
   profile: z.string().optional(),
   /** Legacy read compatibility; new child runs never write skillId. */
@@ -161,6 +164,14 @@ export const ChildRunRecord = z.object({
   updatedAt: z.string()
 }).strict()
 export type ChildRunRecord = z.infer<typeof ChildRunRecord>
+
+export type ChildRunLifecycleMetadata = {
+  model?: string
+  providerId?: string
+  reasoningEffort?: string
+  profile?: string
+  profileName?: string
+}
 
 export type ChildRunExecutor = (input: {
   childId: string
@@ -319,6 +330,8 @@ export class DelegationRuntime {
     inheritedModel?: string
     /** Parent turn/thread provider id inherited by delegate_task when no profile overrides it. */
     inheritedProviderId?: string
+    /** Effective parent-turn reasoning strength inherited by custom one-run agents. */
+    inheritedReasoningEffort?: string
     /** Effective parent policy captured by the delegating tool call. */
     approvalPolicy?: ApprovalPolicy
     sandboxMode?: SandboxMode
@@ -352,10 +365,10 @@ export class DelegationRuntime {
      * can offer "open session" mid-run. Carries the resolved profile id so the
      * caller can keep showing the subagent type while it runs.
      */
-    onStart?: (childId: string, profile?: string) => void
+    onStart?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => void
     /** Queued and running are distinct states; callbacks are awaited in order. */
-    onQueued?: (childId: string, profile?: string) => Promise<void> | void
-    onRunning?: (childId: string, profile?: string) => Promise<void> | void
+    onQueued?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
+    onRunning?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
     signal: AbortSignal
   }): Promise<ChildRunRecord> {
     const config = this.options.config
@@ -412,11 +425,16 @@ export class DelegationRuntime {
     const toolPolicy = input.toolPolicyCeiling === 'readOnly'
       ? 'readOnly'
       : profile?.toolPolicy ?? config.defaultToolPolicy
+    // A parent-authored one-run role follows the user's effective session
+    // model, provider, and reasoning selection. The parent model may still
+    // emit conflicting custom-agent fields, but it must not silently change
+    // how the child runs. Reusable profiles keep their existing precedence.
+    const customAgentInheritsSessionSelection = profileSource === 'custom'
     const selection = resolveChildModelSelection({
-      explicitModel: input.model,
-      explicitProviderId: input.providerId,
-      profileModel: profile?.model,
-      profileProviderId: profile?.providerId,
+      explicitModel: customAgentInheritsSessionSelection ? undefined : input.model,
+      explicitProviderId: customAgentInheritsSessionSelection ? undefined : input.providerId,
+      profileModel: customAgentInheritsSessionSelection ? undefined : profile?.model,
+      profileProviderId: customAgentInheritsSessionSelection ? undefined : profile?.providerId,
       inheritedModel: input.inheritedModel,
       inheritedProviderId: input.inheritedProviderId
     })
@@ -435,7 +453,9 @@ export class DelegationRuntime {
     const resolvedBlockedSkills = profile?.blockedSkills
     const resolvedSkillsEnabled = profile?.skillsEnabled ?? true
     const promptPreamble = profile?.promptPreamble
-    const resolvedReasoningEffort = profile?.reasoningEffort
+    const resolvedReasoningEffort = customAgentInheritsSessionSelection
+      ? normalizeInheritedReasoningEffort(input.inheritedReasoningEffort)
+      : profile?.reasoningEffort
     const returnFormat = input.returnFormat ?? 'summary'
 
     // Reserve against the per-thread child-count limit before persisting anything.
@@ -456,6 +476,7 @@ export class DelegationRuntime {
       workspace,
       model: resolvedModel,
       providerId: resolvedProviderId,
+      reasoningEffort: resolvedReasoningEffort,
       profile: profileName,
       ...(input.routing ? { routing: ChildRoutingMetadata.parse(input.routing) } : {}),
       ...(profile ? { profileSnapshot: profile } : {}),
@@ -476,9 +497,9 @@ export class DelegationRuntime {
     await this.recordChildEvent(record)
     // Surface allocation as queued. Running is emitted only after a scheduler
     // slot has actually been acquired.
-    await notifyLifecycle(input.onQueued, record.id, profileName)
+    await notifyLifecycle(input.onQueued, record)
     try {
-      input.onStart?.(record.id, profileName)
+      input.onStart?.(record.id, profileName, childLifecycleMetadata(record))
     } catch {
       // UI observers cannot prevent or strand an already-persisted child.
     }
@@ -568,7 +589,7 @@ export class DelegationRuntime {
     record = ChildRunRecord.parse({ ...record, status: 'running', startedAt, queuedMs, updatedAt: startedAt })
     await this.options.store.upsert(record)
     await this.recordChildEvent(record)
-    await notifyLifecycle(input.onRunning, record.id, profileName)
+    await notifyLifecycle(input.onRunning, record)
     try {
       const executor: ChildRunExecutor = this.options.executor ?? defaultExecutor
       const result = await executeWithParentSignal(input.signal, (signal) => executor({
@@ -662,7 +683,7 @@ export class DelegationRuntime {
     returnFormat: ChildReturnFormat
     workspace: string | undefined
     security: ChildSecuritySnapshot | undefined
-    onRunning: ((childId: string, profile?: string) => Promise<void> | void) | undefined
+    onRunning: ((childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void) | undefined
     label: string | undefined
     parentThreadId: string
     parentTurnId: string
@@ -689,7 +710,7 @@ export class DelegationRuntime {
     record = ChildRunRecord.parse({ ...record, status: 'running', startedAt, queuedMs, updatedAt: startedAt })
     await this.options.store.upsert(record)
     await this.recordChildEvent(record)
-    await notifyLifecycle(args.onRunning, record.id, args.profileName)
+    await notifyLifecycle(args.onRunning, record)
     try {
       const executor: ChildRunExecutor = this.options.executor ?? defaultExecutor
       const result = await executeWithParentSignal(args.signal, (signal) => executor({
@@ -990,6 +1011,7 @@ export class DelegationRuntime {
         ...(record.model ? { childModel: record.model } : {}),
         ...(record.providerId ? { childProviderId: record.providerId } : {}),
         ...(record.profile ? { childProfile: record.profile } : {}),
+        ...(record.profileSnapshot?.name ? { childProfileName: record.profileSnapshot.name } : {}),
         ...(record.toolPolicy ? { childToolPolicy: record.toolPolicy } : {}),
         ...(record.prefixReused !== undefined ? { prefixReused: record.prefixReused } : {}),
         ...(record.inheritedHistoryItems !== undefined ? { inheritedHistoryItems: record.inheritedHistoryItems } : {}),
@@ -1164,16 +1186,30 @@ function fingerprintProfile(profile: SubagentProfileConfig): string {
 }
 
 async function notifyLifecycle(
-  callback: ((childId: string, profile?: string) => Promise<void> | void) | undefined,
-  childId: string,
-  profile?: string
+  callback: ((childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void) | undefined,
+  record: ChildRunRecord
 ): Promise<void> {
   try {
-    await callback?.(childId, profile)
+    await callback?.(record.id, record.profile, childLifecycleMetadata(record))
   } catch {
     // Lifecycle updates are observational; persisted child state remains the
     // authority and a renderer disconnect must not consume a scheduler slot.
   }
+}
+
+function childLifecycleMetadata(record: ChildRunRecord): ChildRunLifecycleMetadata {
+  return {
+    ...(record.model ? { model: record.model } : {}),
+    ...(record.providerId ? { providerId: record.providerId } : {}),
+    ...(record.reasoningEffort ? { reasoningEffort: record.reasoningEffort } : {}),
+    ...(record.profile ? { profile: record.profile } : {}),
+    ...(record.profileSnapshot?.name ? { profileName: record.profileSnapshot.name } : {})
+  }
+}
+
+function normalizeInheritedReasoningEffort(value: string | undefined): z.infer<typeof ModelReasoningEffort> {
+  const parsed = ModelReasoningEffort.safeParse(value?.trim().toLowerCase())
+  return parsed.success ? parsed.data : 'auto'
 }
 
 function formatDetachedChildDisplayText(record: ChildRunRecord): string {
