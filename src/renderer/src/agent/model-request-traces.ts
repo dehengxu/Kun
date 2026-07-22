@@ -39,6 +39,7 @@ export type ModelRequestTraceRecord = {
   turnId: string
   provider: string
   model: string
+  transport?: 'http' | 'cli' | 'sdk'
   endpointFormat: string
   attempt: number
   attemptReason: 'initial' | 'transport_retry' | 'stream_options_fallback'
@@ -49,7 +50,7 @@ export type ModelRequestTraceRecord = {
   timeToHeadersMs?: number
   durationMs?: number
   request: {
-    method: 'POST'
+    method: 'POST' | 'CLI' | 'SDK'
     url: string
     urlRedacted: boolean
     headers: ModelRequestTraceHeaders
@@ -141,8 +142,11 @@ function parseRecord(value: unknown, label: string): ModelRequestTraceRecord {
   const status = oneOf(input.status, `${label}.status`, [
     'pending', 'completed', 'transport_error', 'capture_error'
   ] as const)
+  const transport = input.transport === undefined
+    ? undefined
+    : oneOf(input.transport, `${label}.transport`, ['http', 'cli', 'sdk'] as const)
   const request = object(input.request, `${label}.request`)
-  if (request.method !== 'POST') throw new Error(`${label}.request.method is invalid`)
+  const method = oneOf(request.method, `${label}.request.method`, ['POST', 'CLI', 'SDK'] as const)
   const parsed: ModelRequestTraceRecord = {
     schemaVersion: TRACE_SCHEMA_VERSION,
     id: text(input.id, `${label}.id`, 256),
@@ -151,13 +155,14 @@ function parseRecord(value: unknown, label: string): ModelRequestTraceRecord {
     turnId: text(input.turnId, `${label}.turnId`, 512),
     provider: text(input.provider, `${label}.provider`, 512),
     model: text(input.model, `${label}.model`, 1_024),
+    ...(transport ? { transport } : {}),
     endpointFormat: text(input.endpointFormat, `${label}.endpointFormat`, 128),
     attempt: integer(input.attempt, `${label}.attempt`, 1),
     attemptReason,
     status,
     startedAt: text(input.startedAt, `${label}.startedAt`, 128),
     request: {
-      method: 'POST',
+      method,
       url: text(request.url, `${label}.request.url`, 16_384),
       urlRedacted: bool(request.urlRedacted, `${label}.request.urlRedacted`),
       headers: parseHeaders(request.headers, `${label}.request.headers`),

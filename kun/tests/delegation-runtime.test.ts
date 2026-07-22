@@ -449,7 +449,15 @@ describe('DelegationRuntime', () => {
   })
 
   it('generates and immediately runs a standalone one-run agent when no profile fits', async () => {
-    const seen: Array<{ profile?: string; systemPrompt?: string; skillsEnabled?: boolean; blockedTools?: string[] }> = []
+    const seen: Array<{
+      profile?: string
+      systemPrompt?: string
+      skillsEnabled?: boolean
+      blockedTools?: string[]
+      model?: string
+      providerId?: string
+      reasoningEffort?: string
+    }> = []
     const updates: TurnItem[] = []
     const runtime = createRuntime({
       profiles: { general: { description: 'General worker', toolPolicy: 'inherit' } },
@@ -458,7 +466,10 @@ describe('DelegationRuntime', () => {
           profile: input.profile,
           systemPrompt: input.systemPrompt,
           skillsEnabled: input.skillsEnabled,
-          blockedTools: input.blockedTools
+          blockedTools: input.blockedTools,
+          model: input.model,
+          providerId: input.providerId,
+          reasoningEffort: input.reasoningEffort
         })
         return { summary: 'generated investigation complete' }
       }
@@ -476,7 +487,6 @@ describe('DelegationRuntime', () => {
       systemPrompt: 'You are an Electron IPC investigator. Trace each boundary, cite evidence, verify claims, return a structured report, and never delegate.',
       toolPolicy: 'readOnly',
       blockedTools: ['delegate_task'],
-      reasoningEffort: 'high',
       reason: 'Specializes the general investigation pattern for Electron IPC.'
     }))
     const host = new LocalToolHost({
@@ -494,27 +504,49 @@ describe('DelegationRuntime', () => {
       threadId: 'thr_generated',
       turnId: 'turn_generated',
       workspace: dir,
+      model: {
+        id: 'gpt-5.6-luna',
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        messageParts: ['text']
+      },
+      modelProviderId: 'openai',
+      reasoningEffort: 'high',
       approvalPolicy: 'auto',
       abortSignal: new AbortController().signal,
       awaitApproval: async () => 'allow'
-    }, (item) => updates.push(item))
+    }, (item) => {
+      updates.push(item)
+    })
 
     expect(result.item).toMatchObject({ kind: 'tool_result', isError: false })
     expect(result.item).toMatchObject({
       output: { generatedAgent: { name: 'Electron IPC Investigator' } }
     })
-    expect(updates.map((update) => (update.output as { status?: string }).status)).toEqual(['queued', 'running'])
+    expect(updates.map((update) =>
+      update.kind === 'tool_result'
+        ? (update.output as { status?: string }).status
+        : undefined
+    )).toEqual(['queued', 'running'])
     expect(updates.every((update) =>
+      update.kind === 'tool_result' &&
       (update.output as { generatedAgent?: { name?: string } }).generatedAgent?.name === 'Electron IPC Investigator'
     )).toBe(true)
     expect(seen).toEqual([expect.objectContaining({
       profile: expect.stringMatching(/^generated:electron-ipc-investigator:/),
       systemPrompt: expect.stringContaining('Electron IPC investigator'),
       skillsEnabled: false,
-      blockedTools: ['delegate_task', 'generate_subagent', 'load_skill']
+      blockedTools: ['delegate_task', 'generate_subagent', 'load_skill'],
+      model: 'gpt-5.6-luna',
+      providerId: 'openai',
+      reasoningEffort: 'high'
     })])
     expect((await runtime.diagnostics('thr_generated')).childRuns[0]).toMatchObject({
       profile: expect.stringMatching(/^generated:electron-ipc-investigator:/),
+      model: 'gpt-5.6-luna',
+      providerId: 'openai',
+      reasoningEffort: 'high',
       routing: {
         method: 'bm25-llm-generated',
         selectedKind: 'generated',
@@ -625,7 +657,7 @@ describe('DelegationRuntime', () => {
     expect(tool?.description).not.toContain('Senior code reviewer')
   })
 
-  it('keeps workspace profiles out of automatic routing and clamps explicit snapshots', async () => {
+  it('includes workspace overlays in automatic routing and honors inherit snapshots', async () => {
     const runtime = createRuntime({
       profiles: {
         reviewer: { description: 'Configured reviewer', toolPolicy: 'readOnly' },
@@ -646,23 +678,62 @@ describe('DelegationRuntime', () => {
       '---',
       'Review API contracts in this workspace.'
     ].join('\n'), 'utf8')
+    await writeFile(join(agentDir, 'workspace-only.md'), [
+      '---',
+      'id: workspace-only',
+      'name: Workspace Only',
+      'description: Unique workspace routing keyword for API contracts',
+      'toolPolicy: readOnly',
+      '---',
+      'Workspace-only role body.'
+    ].join('\n'), 'utf8')
 
     const documents = await runtime.listRoutingProfiles(dir)
-    expect(documents).toEqual([expect.objectContaining({ id: 'reviewer', source: 'configured' })])
+    expect(documents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'reviewer',
+        source: 'workspace',
+        profile: expect.objectContaining({
+          name: 'Workspace Reviewer',
+          description: 'Workspace-specific API contract review',
+          toolPolicy: 'inherit',
+          allowedTools: ['read', 'bash']
+        })
+      }),
+      expect.objectContaining({ id: 'workspace-only', source: 'workspace' })
+    ]))
+    expect(documents.find((item) => item.id === 'primary')).toBeUndefined()
     await expect(runtime.resolveProfileSnapshot('reviewer', dir)).resolves.toEqual(expect.objectContaining({
       id: 'reviewer',
       source: 'workspace',
       profile: expect.objectContaining({
         name: 'Workspace Reviewer',
         description: 'Workspace-specific API contract review',
-        toolPolicy: 'readOnly',
-        allowedTools: ['read'],
+        toolPolicy: 'inherit',
+        allowedTools: ['read', 'bash'],
         skillsEnabled: false
       })
     }))
     const workspaceProfile = await runtime.resolveProfileSnapshot('reviewer', dir)
     expect(workspaceProfile?.profile.model).toBeUndefined()
     expect(workspaceProfile?.profile.providerId).toBeUndefined()
+
+    await expect(runtime.listWorkspaceProfiles(dir)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'workspace-only',
+        source: 'workspace',
+        name: 'Workspace Only',
+        description: 'Unique workspace routing keyword for API contracts',
+        toolPolicy: 'readOnly'
+      }),
+      expect.objectContaining({
+        id: 'reviewer',
+        source: 'workspace',
+        name: 'Workspace Reviewer',
+        toolPolicy: 'inherit',
+        allowedTools: ['read', 'bash']
+      })
+    ]))
   })
 
   it('inherits the parent model providerId through delegate_task', async () => {
@@ -685,6 +756,13 @@ describe('DelegationRuntime', () => {
       threadId: 'thr_provider',
       turnId: 'turn_provider',
       workspace: '/tmp/ws',
+      model: {
+        id: 'opencode-model',
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        messageParts: ['text']
+      },
       modelProviderId: 'opencode-go',
       approvalPolicy: 'auto',
       abortSignal: new AbortController().signal,
@@ -696,8 +774,14 @@ describe('DelegationRuntime', () => {
     expect((await runtime.diagnostics('thr_provider')).childRuns[0]?.providerId).toBe('opencode-go')
   })
 
-  it('rejects a user-facing delegate_task model override without its provider pair', async () => {
-    const runtime = createRuntime()
+  it('ignores a stale user-facing delegate_task model override', async () => {
+    const seen: Array<{ model?: string; providerId?: string }> = []
+    const runtime = createRuntime({
+      executor: async (input) => {
+        seen.push({ model: input.model, providerId: input.providerId })
+        return { summary: 'done' }
+      }
+    })
     const host = new LocalToolHost({
       registry: new CapabilityRegistry(buildDelegationToolProviders(runtime))
     })
@@ -724,13 +808,12 @@ describe('DelegationRuntime', () => {
       awaitApproval: async () => 'allow'
     })
 
-    expect(result.item).toMatchObject({ kind: 'tool_result', isError: true })
-    if (result.item.kind === 'tool_result') {
-      expect(result.item.output).toMatchObject({
-        error: 'model and providerId overrides must be supplied together'
-      })
-    }
-    expect((await runtime.diagnostics('thr_partial_model')).childRuns).toEqual([])
+    expect(result.item).toMatchObject({ kind: 'tool_result', isError: false })
+    expect(seen).toEqual([{ model: 'deepseek-v4-pro', providerId: 'deepseek' }])
+    expect((await runtime.diagnostics('thr_partial_model')).childRuns[0]).toMatchObject({
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek'
+    })
   })
 
   it('preserves the delegating turn approval and sandbox policies', async () => {
@@ -773,7 +856,13 @@ describe('DelegationRuntime', () => {
     const seen: Array<string | undefined> = []
     const runtime = createRuntime({
       defaultProfile: 'reviewer',
-      profiles: { reviewer: { providerId: 'profile-provider', toolPolicy: 'readOnly' } },
+      profiles: {
+        reviewer: {
+          model: 'profile-model',
+          providerId: 'profile-provider',
+          toolPolicy: 'readOnly'
+        }
+      },
       executor: async (input) => {
         seen.push(input.providerId)
         return { summary: 'done' }
@@ -971,13 +1060,19 @@ describe('DelegationRuntime', () => {
     })
   })
 
-  it('routes a child through an explicit providerId, overriding the profile, and surfaces it on the event', async () => {
+  it('routes a child through an explicit model/provider pair, overriding the profile, and surfaces it on the event', async () => {
     const sessionStore = new InMemorySessionStore()
     const seen: Array<{ providerId?: string }> = []
     const runtime = createRuntime({
       sessionStore,
       defaultProfile: 'reviewer',
-      profiles: { reviewer: { providerId: 'minimax', toolPolicy: 'readOnly' } },
+      profiles: {
+        reviewer: {
+          model: 'minimax-model',
+          providerId: 'minimax',
+          toolPolicy: 'readOnly'
+        }
+      },
       executor: async (input) => {
         seen.push({ providerId: input.providerId })
         return { summary: 'ok' }
@@ -988,6 +1083,7 @@ describe('DelegationRuntime', () => {
       parentThreadId: 'thr_1',
       parentTurnId: 'turn_1',
       prompt: 'go',
+      model: 'anthropic-model',
       providerId: 'anthropic',
       signal: new AbortController().signal
     })
@@ -1167,6 +1263,7 @@ describe('DelegationRuntime', () => {
       label: 'research',
       prompt: 'first',
       model: 'deepseek-v4-flash',
+      providerId: 'deepseek',
       signal: new AbortController().signal
     })
     await runtime.runChild({
@@ -1175,6 +1272,7 @@ describe('DelegationRuntime', () => {
       label: 'research',
       prompt: 'second',
       model: 'deepseek-v4-flash',
+      providerId: 'deepseek',
       signal: new AbortController().signal
     })
 

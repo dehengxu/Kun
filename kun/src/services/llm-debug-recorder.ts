@@ -84,12 +84,28 @@ export type LlmHttpAttemptMeta = {
   secretValues?: readonly string[]
 }
 
+export type LlmCliInvocationMeta = {
+  endpointFormat: string
+  target: string
+  bodyText: string
+}
+
+export type LlmSdkInvocationMeta = {
+  endpointFormat: string
+  target: string
+  bodyText: string
+  secretValues?: readonly string[]
+}
+
 /** Narrow sink used by model clients to retain bounded debug data. */
 export interface LlmDebugSink {
   start(meta: LlmDebugRoundMeta): LlmDebugRound
   beginHttpAttempt(round: LlmDebugRound, meta: LlmHttpAttemptMeta): ModelRequestTraceRecord
+  beginCliInvocation(round: LlmDebugRound, meta: LlmCliInvocationMeta): ModelRequestTraceRecord
+  beginSdkInvocation?(round: LlmDebugRound, meta: LlmSdkInvocationMeta): ModelRequestTraceRecord
   captureHttpResponse(round: LlmDebugRound, record: ModelRequestTraceRecord, response: Response): void
   captureHttpError(record: ModelRequestTraceRecord, error: unknown): void
+  captureTransportError(record: ModelRequestTraceRecord, error: unknown): void
   captureChunk(round: LlmDebugRound, chunk: ModelStreamChunk): void
   finish(round: LlmDebugRound): Promise<void>
 }
@@ -188,8 +204,62 @@ export class LlmDebugRecorder implements LlmDebugSink {
   }
 
   beginHttpAttempt(round: LlmDebugRound, meta: LlmHttpAttemptMeta): ModelRequestTraceRecord {
+    return this.beginAttempt(round, {
+      transport: 'http',
+      method: 'POST',
+      endpointFormat: meta.endpointFormat,
+      attempt: meta.attempt,
+      reason: meta.reason,
+      target: meta.url,
+      headers: meta.headers,
+      bodyText: meta.bodyText,
+      ...(meta.secretValues ? { secretValues: meta.secretValues } : {})
+    })
+  }
+
+  beginCliInvocation(round: LlmDebugRound, meta: LlmCliInvocationMeta): ModelRequestTraceRecord {
+    return this.beginAttempt(round, {
+      transport: 'cli',
+      method: 'CLI',
+      endpointFormat: meta.endpointFormat,
+      attempt: 1,
+      reason: 'initial',
+      target: meta.target,
+      headers: {},
+      bodyText: meta.bodyText
+    })
+  }
+
+  beginSdkInvocation(round: LlmDebugRound, meta: LlmSdkInvocationMeta): ModelRequestTraceRecord {
+    return this.beginAttempt(round, {
+      transport: 'sdk',
+      method: 'SDK',
+      endpointFormat: meta.endpointFormat,
+      attempt: 1,
+      reason: 'initial',
+      target: meta.target,
+      headers: {},
+      bodyText: meta.bodyText,
+      ...(meta.secretValues ? { secretValues: meta.secretValues } : {})
+    })
+  }
+
+  private beginAttempt(
+    round: LlmDebugRound,
+    meta: {
+      transport: 'http' | 'cli' | 'sdk'
+      method: 'POST' | 'CLI' | 'SDK'
+      endpointFormat: string
+      attempt: number
+      reason: LlmHttpAttemptReason
+      target: string
+      headers: Record<string, string>
+      bodyText: string
+      secretValues?: readonly string[]
+    }
+  ): ModelRequestTraceRecord {
     const state = this.stateFor(round)
-    const sanitizedUrl = sanitizeModelTraceUrl(meta.url)
+    const sanitizedUrl = sanitizeModelTraceUrl(meta.target)
     const body = boundedModelTraceText(meta.bodyText, this.limits.maxRequestBodyBytes)
     const record: ModelRequestTraceRecord = {
       schemaVersion: MODEL_REQUEST_TRACE_SCHEMA_VERSION,
@@ -199,6 +269,7 @@ export class LlmDebugRecorder implements LlmDebugSink {
       turnId: round.turnId,
       provider: round.provider,
       model: round.model,
+      transport: meta.transport,
       endpointFormat: meta.endpointFormat,
       attempt: meta.attempt,
       attemptReason: meta.reason,
@@ -208,7 +279,7 @@ export class LlmDebugRecorder implements LlmDebugSink {
         ? { toolCatalog: state.toolCatalog.map((tool) => ({ ...tool })) }
         : {}),
       request: {
-        method: 'POST',
+        method: meta.method,
         url: sanitizedUrl.value,
         urlRedacted: sanitizedUrl.redacted,
         headers: sanitizeModelTraceHeaders(meta.headers, meta.secretValues),
@@ -248,6 +319,10 @@ export class LlmDebugRecorder implements LlmDebugSink {
   }
 
   captureHttpError(record: ModelRequestTraceRecord, error: unknown): void {
+    this.captureTransportError(record, error)
+  }
+
+  captureTransportError(record: ModelRequestTraceRecord, error: unknown): void {
     record.status = 'transport_error'
     record.error = safeError(error)
     finishRecord(record)

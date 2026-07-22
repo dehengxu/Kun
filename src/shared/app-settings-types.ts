@@ -256,9 +256,14 @@ export type ModelProviderProfileV1 = {
   /**
    * Transport kind. `agent-sdk` delegates whole turns to the embedded Claude
    * Agent SDK (Claude Pro/Max subscription); `apiKey` then carries the
-   * CLAUDE_CODE_OAUTH_TOKEN (empty => host Claude Code login). Absent = http.
+   * CLAUDE_CODE_OAUTH_TOKEN (empty => host Claude Code login).
+   * `antigravity-cli` delegates whole turns to Google's official Antigravity
+   * CLI, which uses the user's Gemini subscription login. The retired
+   * `gemini-code-assist` value is accepted only for settings migration.
+   * `cursor-sdk` delegates whole turns to the official Cursor SDK and requires
+   * a Cursor API key in `apiKey`.
    */
-  kind?: 'http' | 'agent-sdk'
+  kind?: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist'
   models: string[]
   modelProfiles: Record<string, ModelProviderModelProfileV1>
   image?: ModelProviderImageCapabilityV1

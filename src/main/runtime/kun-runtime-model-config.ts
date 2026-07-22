@@ -61,8 +61,11 @@ export function providersConfigForRuntime(
   for (const provider of getModelProviderSettings(settings).providers as ModelProviderProfileV1[]) {
     const id = provider.id?.trim()
     const baseUrl = provider.baseUrl?.trim()
-    const isAgentSdk = provider.kind === 'agent-sdk'
-    if (!id || (!baseUrl && !isAgentSdk)) continue
+    const isDelegated =
+      provider.kind === 'agent-sdk' ||
+      provider.kind === 'antigravity-cli' ||
+      provider.kind === 'cursor-sdk'
+    if (!id || (!baseUrl && !isDelegated)) continue
     out[id] = {
       // Provider secrets live in the protected account store. The runtime
       // resolves this opaque source binding after reading config.json.

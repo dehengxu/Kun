@@ -41,6 +41,11 @@ vi.mock('react-i18next', () => ({
       composerReasoningHigh: 'High',
       composerReasoningMax: 'Ultra',
       'subagentsPanel.mixedModels': 'Mixed models',
+      'subagentsPanel.mixedConfiguration': 'Multiple configurations',
+      'subagentsPanel.categoryConfiguration': 'Category default configuration',
+      'subagentsPanel.categoryConfigurationDesc': 'Apply the same defaults to every agent in this category',
+      'subagentsPanel.resetCategoryConfiguration': 'Reset defaults',
+      'subagentsPanel.effectiveModel': 'Effective model',
       'subagentsPanel.mixedReasoning': 'Mixed reasoning',
       'subagentsPanel.reasoning': 'Reasoning',
       'subagentsPanel.batchModelAria': 'Set the same model for all {{count}} agents in {{category}}',
@@ -593,6 +598,126 @@ describe('SubagentSettingsEditor', () => {
     expect(profiles.length).toBeGreaterThan(2)
     expect(profiles.every((profile) =>
       profile.model === 'model-a' && profile.providerId === 'provider-a')).toBe(true)
+  })
+
+  it('keeps category controls inside the expanded section and shows a passive collapsed summary', async () => {
+    const kun = {
+      ...defaultKunRuntimeSettings(),
+      subagents: {
+        enabled: true,
+        profiles: [
+          {
+            id: 'general',
+            enabled: true,
+            name: 'General',
+            mode: 'subagent' as const,
+            toolPolicy: 'inherit' as const,
+            model: 'model-a',
+            providerId: 'provider-a',
+            reasoningEffort: 'low' as const
+          },
+          {
+            id: 'component-designer',
+            enabled: true,
+            name: 'Component Designer',
+            mode: 'subagent' as const,
+            toolPolicy: 'inherit' as const,
+            reasoningEffort: 'high' as const
+          }
+        ]
+      }
+    }
+    let renderer!: ReactTestRenderer
+
+    await act(async () => {
+      renderer = create(createElement(SubagentSettingsEditor, {
+        kun,
+        onPatch: vi.fn(),
+        variant: 'settings'
+      }))
+    })
+
+    const developmentSection = renderer.root.findByProps({ 'data-agent-category': 'development' })
+    expect(developmentSection.findAllByProps({
+      'data-testid': 'subagent-category-configuration'
+    })).toHaveLength(1)
+    expect(developmentSection.findAllByType('span').some((span) =>
+      span.children.includes('Multiple configurations'))).toBe(false)
+
+    await act(async () => {
+      developmentSection.findAllByType('button')[0]!.props.onClick()
+    })
+
+    expect(developmentSection.findAllByType('span').some((span) =>
+      span.children.includes('Multiple configurations'))).toBe(true)
+    expect(developmentSection.findAllByProps({
+      'data-testid': 'subagent-category-configuration'
+    })).toHaveLength(0)
+  })
+
+  it('resets model, provider, and reasoning overrides for a category in one update', async () => {
+    const onPatch = vi.fn<(patch: KunRuntimeSettingsPatchV1) => void>()
+    const kun = {
+      ...defaultKunRuntimeSettings(),
+      subagents: {
+        enabled: true,
+        profiles: [
+          {
+            id: 'design-reviewer',
+            enabled: true,
+            name: 'Design Reviewer',
+            mode: 'subagent' as const,
+            toolPolicy: 'readOnly' as const,
+            model: 'model-a',
+            providerId: 'provider-a',
+            reasoningEffort: 'low' as const
+          },
+          {
+            id: 'code-reviewer',
+            enabled: true,
+            name: 'Code Reviewer',
+            mode: 'subagent' as const,
+            toolPolicy: 'readOnly' as const,
+            model: 'model-a',
+            providerId: 'provider-a',
+            reasoningEffort: 'high' as const
+          }
+        ]
+      }
+    }
+    let renderer!: ReactTestRenderer
+
+    await act(async () => {
+      renderer = create(createElement(SubagentSettingsEditor, {
+        kun,
+        onPatch,
+        variant: 'settings'
+      }))
+    })
+
+    const reviewChip = buttonWithText(renderer, 'Review')
+    expect(reviewChip).toBeDefined()
+    await act(async () => {
+      reviewChip!.props.onClick()
+    })
+
+    const reviewSection = renderer.root.findByProps({ 'data-agent-category': 'review' })
+    const reset = reviewSection.findAllByType('button').find((button) =>
+      button.children.length === 1 && button.children[0] === 'Reset defaults')
+    expect(reset).toBeDefined()
+
+    await act(async () => {
+      reset!.props.onClick()
+    })
+
+    const patch = onPatch.mock.calls.at(-1)?.[0] as KunRuntimeSettingsPatchV1
+    for (const id of ['design-reviewer', 'code-reviewer']) {
+      expect(patch.subagents?.profiles?.find((profile) => profile.id === id)).toMatchObject({
+        model: undefined,
+        providerId: undefined,
+        reasoningEffort: undefined
+      })
+    }
   })
 
   it('batch-clears category models back to follow-default', async () => {

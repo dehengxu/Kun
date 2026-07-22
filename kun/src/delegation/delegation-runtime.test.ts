@@ -402,46 +402,52 @@ describe('DelegationRuntime model provider selection', () => {
     }
   })
 
-  it('preserves internal partial overrides while filling the other field from inheritance', async () => {
+  it('rejects partial model/provider sources before allocating a child run', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-selection-'))
     try {
-      const seen: Array<{ model?: string; providerId?: string }> = []
-      const executor = vi.fn(async (input: Parameters<ChildRunExecutor>[0]) => {
-        seen.push({ model: input.model, providerId: input.providerId })
-        return { summary: 'done' }
-      })
+      expect(() => SubagentsCapabilityConfig.parse({
+        enabled: true,
+        maxParallel: 1,
+        maxChildRuns: 10,
+        profiles: { partial: { model: 'deepseek-v4-pro' } }
+      })).toThrow(/model and providerId must be configured together/)
+
+      const executor = vi.fn(async () => ({ summary: 'done' }))
       const runtime = new DelegationRuntime({
         config: SubagentsCapabilityConfig.parse({
           enabled: true,
           maxParallel: 1,
           maxChildRuns: 10,
-          profiles: { partial: { model: 'deepseek-v4-pro' } }
+          profiles: {}
         }),
         store: new FileDelegationStore(dir),
         executor
       })
 
-      await runtime.runChild({
+      await expect(runtime.runChild({
         parentThreadId: 'parent',
         parentTurnId: 'turn',
-        profile: 'partial',
         prompt: 'work',
-        inheritedProviderId: 'codex',
-        signal: new AbortController().signal
-      })
-
-      await runtime.runChild({
-        parentThreadId: 'parent',
-        parentTurnId: 'turn',
         model: 'gpt-5.3-codex-spark',
+        inheritedModel: 'deepseek-v4-pro',
+        inheritedProviderId: 'deepseek',
+        signal: new AbortController().signal
+      })).rejects.toThrow(
+        /explicit child override must configure model and providerId together; missing providerId/
+      )
+
+      await expect(runtime.runChild({
+        parentThreadId: 'parent',
+        parentTurnId: 'turn',
         prompt: 'work',
         inheritedProviderId: 'codex',
         signal: new AbortController().signal
-      })
-      expect(seen).toEqual([
-        { model: 'deepseek-v4-pro', providerId: 'codex' },
-        { model: 'gpt-5.3-codex-spark', providerId: 'codex' }
-      ])
+      })).rejects.toThrow(
+        /inherited parent selection must configure model and providerId together; missing model/
+      )
+
+      expect(executor).not.toHaveBeenCalled()
+      expect((await runtime.diagnostics('parent')).childRuns).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

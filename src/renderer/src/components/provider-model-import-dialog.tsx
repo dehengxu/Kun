@@ -38,6 +38,7 @@ export function ProviderModelImportDialog({
   providerModelIds,
   catalogResult,
   providerError,
+  authoritative = false,
   t,
   onCancel,
   onConfirm
@@ -46,6 +47,7 @@ export function ProviderModelImportDialog({
   providerModelIds: readonly string[]
   catalogResult: ModelsDevCatalogResult
   providerError?: string
+  authoritative?: boolean
   t: Translate
   onCancel: () => void
   onConfirm: (result: ProviderModelImportResult) => void
@@ -59,7 +61,7 @@ export function ProviderModelImportDialog({
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
   const [hideExisting, setHideExisting] = useState(true)
   const [selected, setSelected] = useState<Set<string>>(
-    () => defaultSelectedProviderModelImportKeys(entries)
+    () => defaultSelectedProviderModelImportKeys(entries, authoritative)
   )
 
   const normalizedQuery = query.trim().toLowerCase()

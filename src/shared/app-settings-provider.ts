@@ -71,6 +71,7 @@ import {
   CHATGPT_SUBSCRIPTION_MODEL_IDS,
   CHATGPT_SUBSCRIPTION_NAME,
   CHATGPT_SUBSCRIPTION_PROVIDER_ID,
+  GEMINI_SUBSCRIPTION_MODEL_IDS,
   TOKEN_PLAN_PROVIDER_ID_SUFFIX,
   modelProviderPresetProfile,
   modelProviderTokenPlanProfile,
@@ -1106,7 +1107,14 @@ function normalizeModelProviderProfile(
   const presetSource = normalizeModelProviderPresetSource(input, id)
   const rawName = typeof input?.name === 'string' && input.name.trim() ? input.name.trim() : id
   const baseUrl = normalizeModelProviderBaseUrl(input?.baseUrl)
-  const rawModels = normalizeProviderModels(input?.models)
+  const savedModels = normalizeProviderModels(input?.models)
+  // Existing builds persisted the retired Code Assist model list. Replace it
+  // once during transport migration so 3.5/3.6 are visible immediately; later
+  // Antigravity CLI syncs remain authoritative.
+  const rawModels =
+    presetSource?.presetId === 'gemini-subscription' && input?.kind === 'gemini-code-assist'
+      ? [...GEMINI_SUBSCRIPTION_MODEL_IDS]
+      : savedModels
   const { name, models } = migrateChatGptSubscriptionProfile(id, rawName, rawModels)
   const modelProfiles = withPresetModelProfiles(
     { id, presetSource },
@@ -1122,11 +1130,22 @@ function normalizeModelProviderProfile(
     id,
     name,
     ...(presetSource ? { presetSource } : {}),
-    apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : '',
+    apiKey:
+      input?.kind === 'antigravity-cli' || input?.kind === 'gemini-code-assist'
+        ? ''
+        : typeof input?.apiKey === 'string'
+          ? input.apiKey.trim()
+          : '',
     baseUrl,
     endpointFormat: normalizeModelEndpointFormat(input?.endpointFormat),
     retry: normalizeModelRequestRetrySettings(input?.retry),
-    ...(input?.kind === 'agent-sdk' ? { kind: 'agent-sdk' as const } : {}),
+    ...(input?.kind === 'agent-sdk'
+      ? { kind: 'agent-sdk' as const }
+      : input?.kind === 'cursor-sdk'
+        ? { kind: 'cursor-sdk' as const }
+      : input?.kind === 'antigravity-cli' || input?.kind === 'gemini-code-assist'
+        ? { kind: 'antigravity-cli' as const }
+        : {}),
     models,
     modelProfiles,
     ...(image ? { image } : {}),

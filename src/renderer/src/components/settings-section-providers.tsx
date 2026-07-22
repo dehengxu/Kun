@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -183,6 +184,16 @@ function isAgentSdkProvider(provider: ModelProviderProfileV1): boolean {
   return provider.kind === 'agent-sdk'
 }
 
+function isCursorSubscriptionProvider(provider: ModelProviderProfileV1): boolean {
+  return provider.kind === 'cursor-sdk'
+}
+
+function isDelegatedEndpointProvider(provider: ModelProviderProfileV1): boolean {
+  return isAgentSdkProvider(provider)
+    || isGeminiSubscriptionProvider(provider)
+    || isCursorSubscriptionProvider(provider)
+}
+
 function isSubscriptionProvider(
   provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>
 ): boolean {
@@ -319,12 +330,16 @@ function isGrokSubscriptionProvider(provider: Pick<ModelProviderProfileV1, 'id' 
   return resolveModelProviderPresetSource(provider)?.preset.id === 'grok-subscription'
 }
 
+function isGeminiSubscriptionProvider(provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>): boolean {
+  return resolveModelProviderPresetSource(provider)?.preset.id === 'gemini-subscription'
+}
+
 function isOAuthSubscriptionProvider(provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>): boolean {
-  return isCodexProvider(provider) || isGrokSubscriptionProvider(provider)
+  return isCodexProvider(provider) || isGrokSubscriptionProvider(provider) || isGeminiSubscriptionProvider(provider)
 }
 
 function providerRequiresApiKey(provider: ModelProviderProfileV1): boolean {
-  if (isAgentSdkProvider(provider)) return false
+  if (isAgentSdkProvider(provider) || isGeminiSubscriptionProvider(provider)) return false
   if (provider.id === DEFAULT_MODEL_PROVIDER_ID || isOAuthSubscriptionProvider(provider)) return true
   return providerPresetRequiresApiKey(provider)
 }
@@ -821,6 +836,164 @@ function GrokLoginSection({
   )
 }
 
+type GeminiCliState = 'checking' | 'missing' | 'downloading' | 'ready' | 'syncing'
+
+function GeminiSubscriptionSection({
+  onModelsChange,
+  t
+}: {
+  onModelsChange: (models: string[]) => void
+  t: (key: string, params?: Record<string, unknown>) => string
+}): ReactElement {
+  const [state, setState] = useState<GeminiCliState>('checking')
+  const [progress, setProgress] = useState<{ received: number; total: number } | null>(null)
+  const [notice, setNotice] = useState<InlineNotice | null>(null)
+
+  const applyDownload = useCallback((
+    download: { status: string; receivedBytes: number; totalBytes: number; message?: string } | null | undefined
+  ): boolean => {
+    if (!download) return false
+    if (download.status === 'downloading') {
+      setState('downloading')
+      setProgress({ received: download.receivedBytes, total: download.totalBytes })
+      return true
+    }
+    if (download.status === 'done') {
+      setState('ready')
+      setProgress(null)
+      return true
+    }
+    if (download.status === 'error') {
+      setState('missing')
+      setProgress(null)
+      setNotice({ tone: 'error', message: download.message ?? t('geminiCliInstallFailed') })
+      return true
+    }
+    return false
+  }, [t])
+
+  const refreshStatus = useCallback(async (): Promise<void> => {
+    try {
+      const status = await window.kunGui.geminiSubscriptionCliStatus()
+      if (status.installed) {
+        setState('ready')
+        setProgress(null)
+      } else if (!applyDownload(status.download)) {
+        setState('missing')
+      }
+    } catch (error) {
+      setState('missing')
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : t('geminiCliInstallFailed')
+      })
+    }
+  }, [applyDownload, t])
+
+  useEffect(() => {
+    void refreshStatus()
+    return window.kunGui.onGeminiSubscriptionCliProgress((download) => {
+      applyDownload(download)
+      if (download.status === 'done') void refreshStatus()
+    })
+  }, [applyDownload, refreshStatus])
+
+  const install = async (): Promise<void> => {
+    setNotice(null)
+    setState('downloading')
+    setProgress({ received: 0, total: 0 })
+    try {
+      applyDownload(await window.kunGui.geminiSubscriptionCliInstall())
+    } catch (error) {
+      setState('missing')
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : t('geminiCliInstallFailed')
+      })
+    }
+  }
+
+  const syncModels = async (): Promise<void> => {
+    setState('syncing')
+    setNotice(null)
+    try {
+      const models = await window.kunGui.geminiSubscriptionModels()
+      onModelsChange(models)
+      setNotice({
+        tone: 'success',
+        message: t('geminiModelsSynced', { count: models.length })
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : t('geminiModelsSyncFailed')
+      })
+    } finally {
+      setState('ready')
+    }
+  }
+
+  const percent = progress && progress.total > 0
+    ? Math.min(100, Math.round((progress.received / progress.total) * 100))
+    : 0
+  const busy = state === 'checking' || state === 'downloading' || state === 'syncing'
+
+  return (
+    <div className="grid gap-3">
+      <p className="rounded-lg border border-ds-border bg-ds-main/30 px-3 py-2 text-[12px] leading-5 text-ds-muted">
+        {t('geminiSubscriptionNote')}
+      </p>
+      <div className="flex items-center gap-2 text-[13px] text-ds-ink">
+        {busy ? (
+          <Loader2 className="h-4 w-4 animate-spin text-ds-muted" strokeWidth={1.9} />
+        ) : state === 'ready' ? (
+          <CheckCircle2 className="h-4 w-4 text-emerald-500" strokeWidth={1.9} />
+        ) : (
+          <AlertCircle className="h-4 w-4 text-amber-500" strokeWidth={1.9} />
+        )}
+        <span>{state === 'ready' || state === 'syncing'
+          ? t('geminiCliReady')
+          : state === 'downloading'
+            ? t('geminiCliDownloading')
+            : state === 'checking'
+              ? t('geminiCliChecking')
+              : t('geminiCliMissing')}</span>
+      </div>
+      {state === 'downloading' ? (
+        <div className="grid gap-1">
+          <div className="h-1.5 overflow-hidden rounded-full bg-ds-hover">
+            <div className="h-full bg-accent transition-all" style={{ width: `${percent}%` }} />
+          </div>
+          <span className="text-[11px] text-ds-faint">
+            {progress?.total ? `${percent}%` : t('geminiCliDownloading')}
+          </span>
+        </div>
+      ) : null}
+      {state === 'missing' ? (
+        <button
+          type="button"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-[14px] font-semibold text-white shadow-sm transition hover:bg-accent/90"
+          onClick={() => void install()}
+        >
+          <Download className="h-4 w-4" strokeWidth={1.9} />
+          {t('geminiCliInstall')}
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-ds-border bg-ds-card px-4 py-2 text-[13px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:opacity-60"
+          onClick={() => void syncModels()}
+          disabled={busy}
+        >
+          {state === 'syncing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          {t('geminiSyncModels')}
+        </button>
+      )}
+      {notice ? <InlineNoticeView notice={notice} /> : null}
+    </div>
+  )
+}
+
 const fieldLabelClass = 'grid gap-1.5 text-[12px] font-semibold text-ds-muted'
 const textInputClass =
   'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
@@ -1144,6 +1317,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     }
   }, [addMenuOpen])
   const [probeStates, setProbeStates] = useState<Record<string, ProbeState>>({})
+  const [cursorAccounts, setCursorAccounts] = useState<Record<string, {
+    fingerprint: string
+    label: string
+    apiKeyName: string
+  }>>({})
   // Pending import dialog: when /v1/models returns hundreds of entries we want
   // the user to choose which ones to keep instead of dropping the whole list
   // into settings and forcing them to delete unwanted models one-by-one (#397).
@@ -1153,6 +1331,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         providerModelIds: string[]
         catalogResult: ModelsDevCatalogResult
         providerError?: string
+        authoritative?: boolean
       }
     | null
   >(null)
@@ -1610,6 +1789,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     catalogResult: ModelsDevCatalogResult
     providerError?: string
     latencyMs?: number
+    authoritative?: boolean
   }): void => {
     const catalogOnlyIds = input.catalogResult.status === 'ok' && input.catalogResult.matchMode === 'catalog'
       ? input.catalogResult.models.map((model) => model.id)
@@ -1649,13 +1829,116 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       providerId: input.target.id,
       providerModelIds: input.providerModelIds,
       catalogResult: input.catalogResult,
-      ...(input.providerError ? { providerError: input.providerError } : {})
+      ...(input.providerError ? { providerError: input.providerError } : {}),
+      ...(input.authoritative ? { authoritative: true } : {})
     })
   }
 
   const runProbe = async (target: ModelProviderProfileV1, mode: 'test' | 'fetch'): Promise<void> => {
-    if (typeof window.kunGui?.probeModelProvider !== 'function') return
     const fingerprint = providerConnectionFingerprint(target)
+    if (isCursorSubscriptionProvider(target)) {
+      if (!target.apiKey.trim()) {
+        setProbeStates((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            mode,
+            status: 'error',
+            message: t('modelProviderPresetMissingKeyForProbe')
+          }
+        }))
+        return
+      }
+      setProbeStates((previous) => ({
+        ...previous,
+        [target.id]: { fingerprint, mode, status: 'busy' }
+      }))
+      try {
+        const discovery = await window.kunGui.cursorSubscriptionDiscover(target.apiKey)
+        const accountName = [
+          discovery.account.userFirstName,
+          discovery.account.userLastName
+        ].filter(Boolean).join(' ')
+        setCursorAccounts((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            label: discovery.account.userEmail || accountName || discovery.account.apiKeyName,
+            apiKeyName: discovery.account.apiKeyName
+          }
+        }))
+        if (mode === 'fetch') {
+          openModelImport({
+            target,
+            fingerprint,
+            providerModelIds: discovery.models,
+            catalogResult: await fetchModelsDevCatalogFor(target),
+            providerError: discovery.models.length === 0
+              ? t('providerModelImportProviderReturnedEmpty')
+              : undefined,
+            latencyMs: 0,
+            authoritative: true
+          })
+          return
+        }
+        setProbeStates((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            mode,
+            status: 'ok',
+            latencyMs: 0,
+            total: discovery.models.length
+          }
+        }))
+      } catch (error) {
+        setProbeStates((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            mode,
+            status: 'error',
+            message: error instanceof Error ? error.message : String(error)
+          }
+        }))
+      }
+      return
+    }
+    // The official Antigravity CLI owns subscription auth and model discovery.
+    if (isGeminiSubscriptionProvider(target)) {
+      setProbeStates((previous) => ({
+        ...previous,
+        [target.id]: { fingerprint, mode, status: 'busy' }
+      }))
+      const [providerResult, catalogResult] = await Promise.all([
+        window.kunGui.geminiSubscriptionModels()
+          .then((modelIds) => ({ modelIds, error: undefined as string | undefined }))
+          .catch((error: unknown) => ({
+            modelIds: [] as string[],
+            error: error instanceof Error ? error.message : String(error)
+          })),
+        fetchModelsDevCatalogFor(target)
+      ])
+      if (mode === 'fetch') {
+        openModelImport({
+          target,
+          fingerprint,
+          providerModelIds: providerResult.modelIds,
+          catalogResult,
+          providerError: providerResult.error,
+          latencyMs: 0,
+          authoritative: true
+        })
+        return
+      }
+      setProbeStates((previous) => ({
+        ...previous,
+        [target.id]: providerResult.error
+          ? { fingerprint, mode, status: 'error', message: providerResult.error }
+          : { fingerprint, mode, status: 'ok', latencyMs: 0, total: providerResult.modelIds.length }
+      }))
+      return
+    }
     // Subscription (agent-sdk) providers have no HTTP /models endpoint — the turn
     // is delegated to the Claude Agent SDK. "Test" reports login readiness instead
     // of probing api.anthropic.com, which would 401 on the x-api-key header.
@@ -1714,6 +1997,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       }))
       return
     }
+    if (typeof window.kunGui?.probeModelProvider !== 'function') return
     setProbeStates((previous) => ({
       ...previous,
       [target.id]: { fingerprint, mode, status: 'busy' }
@@ -1769,8 +2053,14 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     }))
   }
 
-  const importPickedModels = (target: ModelProviderProfileV1, picked: ProviderModelImportResult): void => {
-    const nextChatModels = mergeProviderModelIds(target.models, picked.chat)
+  const importPickedModels = (
+    target: ModelProviderProfileV1,
+    picked: ProviderModelImportResult,
+    authoritative = false
+  ): void => {
+    const nextChatModels = authoritative
+      ? [...picked.chat]
+      : mergeProviderModelIds(target.models, picked.chat)
     const nextImageModels = target.image
       ? mergeProviderModelIds(target.image.models, picked.image)
       : picked.image
@@ -1798,7 +2088,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       + addedModelCount(target.textToSpeech?.models ?? [], nextTextToSpeechModels)
       + addedModelCount(target.music?.models ?? [], nextMusicModels)
       + addedModelCount(target.video?.models ?? [], nextVideoModels)
-    if (added > 0 || nextModelProfiles !== target.modelProfiles) {
+    if (authoritative || added > 0 || nextModelProfiles !== target.modelProfiles) {
       patchProviderProfile(target, (item) => ({
         ...item,
         models: nextChatModels,
@@ -1883,6 +2173,14 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     !activeProvider.apiKey.trim()
   )
   const activeProbeBlocked = activeBaseUrlInvalid || activeMissingCredential
+  const activeCursorAccount = activeProvider
+    ? cursorAccounts[activeProvider.id]
+    : undefined
+  const activeCursorAccountFresh = Boolean(
+    activeProvider
+    && activeCursorAccount
+    && activeCursorAccount.fingerprint === providerConnectionFingerprint(activeProvider)
+  )
   const activeTokenPlanRegions = activeProvider
     ? tokenPlanPresetForProfile(activeProvider)?.tokenPlan?.regions ?? []
     : []
@@ -2214,6 +2512,38 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       onCredentialChange={(apiKey) => updateModelProvider(activeProvider.id, { apiKey })}
                       t={t}
                     />
+                  ) : isGeminiSubscriptionProvider(activeProvider) ? (
+                    <GeminiSubscriptionSection
+                      onModelsChange={(models) => updateModelProvider(activeProvider.id, { models })}
+                      t={t}
+                    />
+                  ) : isCursorSubscriptionProvider(activeProvider) ? (
+                    <div className="grid gap-3">
+                      <p className="rounded-lg border border-ds-border bg-ds-main/30 px-3 py-2 text-[12px] leading-5 text-ds-muted">
+                        {t('cursorSubscriptionNote')}
+                      </p>
+                      <label className={fieldLabelClass}>
+                        {t('modelProviderApiKey')}
+                        <SecretInput
+                          value={activeProvider.apiKey}
+                          onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
+                          visible={showApiKey}
+                          onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
+                          placeholder={t('modelProviderApiKeyPlaceholder')}
+                          autoComplete="off"
+                          showLabel={t('showSecret')}
+                          hideLabel={t('hideSecret')}
+                        />
+                      </label>
+                      {activeCursorAccountFresh && activeCursorAccount ? (
+                        <p className="text-[12px] leading-5 text-ds-muted">
+                          {t('cursorSubscriptionAccount', {
+                            account: activeCursorAccount.label,
+                            keyName: activeCursorAccount.apiKeyName
+                          })}
+                        </p>
+                      ) : null}
+                    </div>
                   ) : isGrokSubscriptionProvider(activeProvider) ? (
                     <GrokLoginSection
                       provider={activeProvider}
@@ -2302,7 +2632,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     <select
                       className={selectControlClass}
                       value={activeProvider.endpointFormat}
-                      disabled={isOAuthSubscriptionProvider(activeProvider) || isAgentSdkProvider(activeProvider)}
+                      disabled={isOAuthSubscriptionProvider(activeProvider) || isDelegatedEndpointProvider(activeProvider)}
                       onChange={(e) => updateModelProvider(activeProvider.id, {
                         endpointFormat: e.target.value as ModelEndpointFormat
                       })}
@@ -2317,6 +2647,14 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                   {isCodexProvider(activeProvider) ? (
                     <p className="text-[12px] leading-5 text-ds-muted">
                       {t('codexEndpointLocked')}
+                    </p>
+                  ) : isGeminiSubscriptionProvider(activeProvider) ? (
+                    <p className="text-[12px] leading-5 text-ds-muted">
+                      {t('geminiEndpointLocked')}
+                    </p>
+                  ) : isCursorSubscriptionProvider(activeProvider) ? (
+                    <p className="text-[12px] leading-5 text-ds-muted">
+                      {t('cursorEndpointLocked')}
                     </p>
                   ) : isGrokSubscriptionProvider(activeProvider) ? (
                     <p className="text-[12px] leading-5 text-ds-muted">
@@ -3032,10 +3370,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         providerModelIds={pendingImport.providerModelIds}
         catalogResult={pendingImport.catalogResult}
         providerError={pendingImport.providerError}
+        authoritative={pendingImport.authoritative}
         t={t}
         onCancel={() => setPendingImport(null)}
         onConfirm={(picked) => {
-          importPickedModels(pendingImportProvider, picked)
+          importPickedModels(pendingImportProvider, picked, pendingImport.authoritative)
           setPendingImport(null)
         }}
       />

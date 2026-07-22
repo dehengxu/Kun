@@ -4,7 +4,8 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   SUBAGENT_READ_ONLY_TOOL_NAMES,
   SubagentProfileConfig,
-  type SubagentMode
+  type SubagentMode,
+  type SubagentToolPolicy
 } from '../contracts/capabilities.js'
 
 /**
@@ -19,17 +20,21 @@ import {
  *     name: Code Reviewer
  *     description: One-line "when to use"
  *     mode: subagent          # subagent | primary | all
- *     toolPolicy: readOnly    # workspace roles are always host-clamped read-only
+ *     toolPolicy: readOnly    # default readOnly; set inherit for write tools
  *     allowedTools: [read, grep]
+ *     omit_base_prompt: false # when true, role prompt replaces Kun base
  *     color: "#3b82f6"
  *     ---
  *     Body becomes the systemPrompt verbatim (kun's base prompt is
  *     prepended unless omit_base_prompt: true).
  *
- * Workspace roles are repository-controlled input. They never enter automatic
- * routing, cannot choose a model/provider/reasoning level, cannot load skills,
- * and are limited to local read tools (no network/connectors). Files with invalid frontmatter are dropped
- * silently so a single broken file doesn't take down delegation.
+ * Workspace roles enter automatic BM25/LLM routing (indexed by id/name/
+ * description only — body is never searchable). They may opt into
+ * `toolPolicy: inherit` for write tools under the parent capability
+ * snapshot. They still cannot choose a model/provider/reasoning level,
+ * cannot load skills, and cannot nest `delegate_task` / `generate_subagent`.
+ * Files with invalid frontmatter are dropped silently so a single broken
+ * file doesn't take down delegation.
  */
 export type WorkspaceAgentProfile = {
   id: string
@@ -129,20 +134,28 @@ function parseAgentMarkdown(text: string, defaultId: string): { id: string; prof
   if (!id) return null
   const omitBase = boolField(fields, 'omit_base_prompt') === true || boolField(fields, 'omitBasePrompt') === true
   const systemPromptFromBody = body || undefined
+  const toolPolicy = normalizeToolPolicy(fields.toolPolicy)
   const requestedAllowedTools = parseListField(fields, 'allowedTools')
   const safeReadOnlyTools = new Set<string>(SUBAGENT_READ_ONLY_TOOL_NAMES)
   const localReadTools = new Set<string>(WORKSPACE_AGENT_LOCAL_READ_TOOLS)
-  const allowedTools = (requestedAllowedTools ?? WORKSPACE_AGENT_LOCAL_READ_TOOLS)
-    .filter((tool) => safeReadOnlyTools.has(tool) && localReadTools.has(tool))
+  const allowedTools = toolPolicy === 'readOnly'
+    ? (requestedAllowedTools ?? WORKSPACE_AGENT_LOCAL_READ_TOOLS)
+      .filter((tool) => safeReadOnlyTools.has(tool) && localReadTools.has(tool))
+    : requestedAllowedTools
   const raw: Record<string, unknown> = {
     ...(fields.name ? { name: fields.name } : {}),
     ...(fields.description ? { description: fields.description } : {}),
     ...(fields.color ? { color: fields.color } : {}),
     mode: normalizeMode(fields.mode),
     ...(fields.systemPrompt ? { systemPrompt: fields.systemPrompt } : systemPromptFromBody ? { systemPrompt: systemPromptFromBody } : {}),
+    ...(omitBase ? { omitBasePrompt: true } : {}),
     ...(fields.promptPreamble ? { promptPreamble: fields.promptPreamble } : {}),
-    toolPolicy: 'readOnly',
-    allowedTools: allowedTools.length ? allowedTools : [...WORKSPACE_AGENT_LOCAL_READ_TOOLS],
+    toolPolicy,
+    ...(toolPolicy === 'readOnly'
+      ? { allowedTools: (allowedTools && allowedTools.length)
+        ? allowedTools
+        : [...WORKSPACE_AGENT_LOCAL_READ_TOOLS] }
+      : allowedTools && allowedTools.length ? { allowedTools } : {}),
     blockedTools: [...new Set([
       'delegate_task',
       'generate_subagent',
@@ -153,11 +166,6 @@ function parseAgentMarkdown(text: string, defaultId: string): { id: string; prof
     ...(parseListField(fields, 'blockedSkills') ? { blockedSkills: parseListField(fields, 'blockedSkills') } : {}),
     skillsEnabled: false
   }
-  // omit_base_prompt is a hint to the augment strategy; we model it as a
-  // marker the runtime can check if it ever needs to. For now we just keep
-  // the systemPrompt as-is and let the executor's augment-base behavior
-  // append the base prefix.
-  void omitBase
   const parsed = SubagentProfileConfig.safeParse(raw)
   if (!parsed.success) return null
   return { id, profile: parsed.data }
@@ -166,6 +174,10 @@ function parseAgentMarkdown(text: string, defaultId: string): { id: string; prof
 function normalizeMode(value: string | undefined): SubagentMode {
   if (value === 'primary' || value === 'all') return value
   return 'subagent'
+}
+
+function normalizeToolPolicy(value: string | undefined): SubagentToolPolicy {
+  return value === 'inherit' ? 'inherit' : 'readOnly'
 }
 
 function boolField(fields: Record<string, string>, key: string): boolean | undefined {

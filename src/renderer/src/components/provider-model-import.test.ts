@@ -96,6 +96,19 @@ describe('provider model import merging', () => {
     expect(entries[0]?.sources).toEqual(['provider-api', 'models-dev'])
   })
 
+  it('can preselect existing ids when the provider list is authoritative', () => {
+    const entries = buildProviderModelImportEntries(
+      provider({ models: ['old-model', 'current-model'] }),
+      ['current-model', 'new-model'],
+      catalog([], 'enrichment-only')
+    )
+
+    expect(defaultSelectedProviderModelImportKeys(entries, true)).toEqual(new Set([
+      providerModelImportEntryKey('chat', 'current-model'),
+      providerModelImportEntryKey('chat', 'new-model')
+    ]))
+  })
+
   it('returns metadata only for selected rows', () => {
     const entries = buildProviderModelImportEntries(provider(), ['model-a'], catalog([
       { id: 'model-a', inputModalities: ['text'], outputModalities: ['text'] },

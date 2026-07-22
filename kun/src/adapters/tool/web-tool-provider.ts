@@ -8,7 +8,7 @@ import { sourceIdFor, UnavailableWebProvider } from '../../ports/web-provider.js
 import type { CapabilityToolProvider } from './capability-registry.js'
 import { LocalToolHost } from './local-tool-host.js'
 
-const DEFAULT_WEB_TIMEOUT_MS = 15_000
+const WEB_REQUEST_TIMEOUT_MS = 60 * 60_000
 const DEFAULT_WEB_MAX_BYTES = 1_000_000
 // Models sometimes pass tiny max_bytes budgets (2000 was common in the
 // wild); below this floor the extracted text is too small to be useful.
@@ -135,8 +135,7 @@ function createFetchTool(config: WebCapabilityConfig, provider: WebProvider) {
       type: 'object',
       properties: {
         url: { type: 'string' },
-        max_bytes: { type: 'number' },
-        timeout_ms: { type: 'number' }
+        max_bytes: { type: 'number' }
       },
       required: ['url'],
       additionalProperties: false
@@ -156,12 +155,11 @@ function createFetchTool(config: WebCapabilityConfig, provider: WebProvider) {
         Math.min(MIN_WEB_FETCH_BYTES, maxBytesCap),
         maxBytesCap
       )
-      const timeoutMs = boundedInt(args.timeout_ms, DEFAULT_WEB_TIMEOUT_MS, 1, DEFAULT_WEB_TIMEOUT_MS)
       try {
         const result = await provider.fetch({
           url: policy.url.href,
           maxBytes,
-          timeoutMs,
+          timeoutMs: WEB_REQUEST_TIMEOUT_MS,
           signal: context.abortSignal
         })
         return {
@@ -201,8 +199,7 @@ function createSearchTool(config: WebCapabilityConfig, provider: WebProvider) {
       type: 'object',
       properties: {
         query: { type: 'string' },
-        limit: { type: 'number' },
-        timeout_ms: { type: 'number' }
+        limit: { type: 'number' }
       },
       required: ['query'],
       additionalProperties: false
@@ -214,12 +211,11 @@ function createSearchTool(config: WebCapabilityConfig, provider: WebProvider) {
       if (!query) return toolError('invalid_query', 'query is required')
       if (!provider.search) return toolError('provider_unavailable', 'web search provider is unavailable')
       const limit = boundedInt(args.limit, DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT)
-      const timeoutMs = boundedInt(args.timeout_ms, DEFAULT_WEB_TIMEOUT_MS, 1, DEFAULT_WEB_TIMEOUT_MS)
       try {
         const results = await provider.search({
           query,
           limit,
-          timeoutMs,
+          timeoutMs: WEB_REQUEST_TIMEOUT_MS,
           signal: context.abortSignal
         })
         return {

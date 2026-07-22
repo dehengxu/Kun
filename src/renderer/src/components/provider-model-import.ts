@@ -85,11 +85,12 @@ export function buildProviderModelImportEntries(
 }
 
 export function defaultSelectedProviderModelImportKeys(
-  entries: readonly ProviderModelImportEntry[]
+  entries: readonly ProviderModelImportEntry[],
+  includeExisting = false
 ): Set<string> {
   const selected = new Set<string>()
   for (const entry of entries) {
-    if (!entry.alreadyExists && entry.sources.includes('provider-api')) {
+    if ((includeExisting || !entry.alreadyExists) && entry.sources.includes('provider-api')) {
       selected.add(providerModelImportEntryKey(entry.kind, entry.modelId))
     }
   }

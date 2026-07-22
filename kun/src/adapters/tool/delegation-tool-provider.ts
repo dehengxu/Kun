@@ -53,8 +53,6 @@ export function buildDelegationToolProviders(
           properties: {
             label: { type: 'string', description: 'A distinct 2-4 word UI title for this child.' },
             prompt: { type: 'string', description: 'The task for the child agent.' },
-            model: { type: 'string', description: 'Reusable-profile or routed child model override; requires providerId. Ignored with custom_agent because custom agents inherit the current turn model.' },
-            providerId: { type: 'string', description: 'Reusable-profile or routed child provider override; requires model. Ignored with custom_agent because custom agents inherit the current turn provider.' },
             profile: {
               type: 'string',
               description: 'Optional exact agent profile id. Omit profile and custom_agent for BM25 Top-5 agent recall plus an LLM fit decision.'
@@ -160,8 +158,6 @@ export function buildDelegationToolProviders(
             role_brief: { type: 'string', description: 'Optional expertise, scope, non-goals, and output the generated role should own.' },
             tool_policy: { type: 'string', enum: ['auto', 'readOnly', 'inherit'], description: 'Maximum role tool policy; permissions still cannot exceed the parent.' },
             reference_agent_ids: { type: 'array', maxItems: 3, items: { type: 'string' }, description: 'Optional trusted built-in agent examples.' },
-            model: { type: 'string', description: 'Child model override; requires providerId.' },
-            providerId: { type: 'string', description: 'Child provider override; requires model.' },
             detach: { type: 'boolean' },
             returnFormat: { type: 'string', enum: ['summary', 'evidence'] }
           },
@@ -229,8 +225,7 @@ function customAgentSchema(): Record<string, unknown> {
       description: { type: 'string' },
       system_prompt: { type: 'string', description: 'Self-contained expertise, scope, procedure, output, verification, and boundaries.' },
       tool_policy: { type: 'string', enum: ['readOnly', 'inherit'] },
-      blocked_tools: { type: 'array', items: { type: 'string' } },
-      reasoning_effort: { type: 'string', enum: ['auto', 'off', 'low', 'medium', 'high', 'max'], description: 'Ignored for execution because custom agents inherit the current turn reasoning strength.' }
+      blocked_tools: { type: 'array', items: { type: 'string' } }
     },
     required: ['name', 'description', 'system_prompt'],
     additionalProperties: false
@@ -240,8 +235,6 @@ function customAgentSchema(): Record<string, unknown> {
 function parseCommonArgs(args: Record<string, unknown>, context: ToolHostContext): {
   prompt: string
   workspace: string
-  model?: string
-  providerId?: string
   inheritedModel?: string
   inheritedProviderId?: string
   inheritedReasoningEffort?: string
@@ -251,13 +244,9 @@ function parseCommonArgs(args: Record<string, unknown>, context: ToolHostContext
 } | Error {
   const prompt = stringValue(args.prompt)
   if (!prompt) return new Error('prompt is required')
-  const model = stringValue(args.model)
-  const providerId = stringValue(args.providerId)
-  if (Boolean(model) !== Boolean(providerId)) return new Error('model and providerId overrides must be supplied together')
   return {
     prompt,
     workspace: context.workspace,
-    ...(model ? { model, providerId } : {}),
     ...(context.model?.id?.trim() ? { inheritedModel: context.model.id.trim() } : {}),
     ...(context.modelProviderId?.trim() ? { inheritedProviderId: context.modelProviderId.trim() } : {}),
     ...(context.reasoningEffort?.trim() ? { inheritedReasoningEffort: context.reasoningEffort.trim() } : {}),
@@ -281,7 +270,6 @@ async function runChild(
     prompt: common.prompt,
     workspace: common.workspace,
     ...(common.label ? { label: common.label } : {}),
-    ...(common.model ? { model: common.model, providerId: common.providerId } : {}),
     ...(selection.profile ? { profile: selection.profile } : {}),
     ...(selection.inlineProfile ? { inlineProfile: selection.inlineProfile } : {}),
     ...(selection.routing ? { routing: selection.routing } : {}),
@@ -372,8 +360,7 @@ function parseCustomAgent(value: unknown): CustomSubagentDefinition | undefined 
     description: input.description,
     systemPrompt: input.system_prompt,
     toolPolicy: input.tool_policy ?? 'readOnly',
-    ...(input.blocked_tools !== undefined ? { blockedTools: input.blocked_tools } : {}),
-    ...(input.reasoning_effort !== undefined ? { reasoningEffort: input.reasoning_effort } : {})
+    ...(input.blocked_tools !== undefined ? { blockedTools: input.blocked_tools } : {})
   })
   return parsed.success
     ? parsed.data
@@ -466,8 +453,7 @@ function routingToolOutput(routing: ChildRoutingMetadata): Record<string, unknow
       agent: {
         name: routing.customAgent.name,
         description: routing.customAgent.description,
-        toolPolicy: routing.customAgent.toolPolicy,
-        reasoningEffort: routing.customAgent.reasoningEffort
+        toolPolicy: routing.customAgent.toolPolicy
       }
     } : {})
   }
@@ -479,7 +465,6 @@ function generatedToolOutput(profile: string | undefined, generated: SubagentGen
     name: generated.definition.name,
     description: generated.definition.description,
     toolPolicy: generated.definition.toolPolicy,
-    reasoningEffort: generated.definition.reasoningEffort,
     generationMethod: generated.source,
     referenceAgentIds: generated.referenceAgentIds,
     reason: generated.reason
@@ -489,7 +474,7 @@ function generatedToolOutput(profile: string | undefined, generated: SubagentGen
 function buildDelegateTaskDescription(runtime: DelegationRuntime, profileCount: number): string {
   return [
     'Run a standalone child agent and return its result. With no profile or custom_agent, BM25 recalls the Top-5 agent profiles and an LLM selects a fitting profile; if none fits, a separate generator designs and runs a one-run role.',
-    'A custom_agent always inherits the current turn model, provider, and reasoning strength; do not supply model, providerId, or reasoning_effort overrides with custom_agent.',
+    'Child model, provider, and reasoning strength come from the current turn or a trusted reusable profile; they are not tool-call arguments.',
     'Issue multiple calls in one message for independent parallel work.',
     `${profileCount} agent profiles are searchable.`,
     `Children default to the "${runtime.defaultToolPolicy}" tool policy and can never recursively delegate.`

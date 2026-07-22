@@ -2912,7 +2912,7 @@
   "agentPerspectiveSubtitle": "{{count}} model requests in this conversation",
   "agentPerspectiveRefresh": "Refresh requests",
   "agentPerspectiveLoading": "Loading…",
-  "agentPerspectiveEmpty": "No HTTP model requests have been captured for this conversation yet.",
+  "agentPerspectiveEmpty": "No model requests have been captured for this conversation yet.",
   "agentPerspectiveUnsupported": "Select a Code conversation to inspect its model requests.",
   "agentPerspectiveLoadError": "Could not load model requests: {{error}}",
   "agentPerspectiveLoadOlder": "Load older requests",
@@ -2931,7 +2931,7 @@
   "agentPerspectiveRedacted": "Credential values were redacted before this trace was stored.",
   "agentPerspectiveTruncated": "Truncated",
   "agentPerspectiveTruncationNotice": "This trace reached its capture limit. The provider request was not changed.",
-  "agentPerspectiveNoResponse": "No HTTP response was received for this attempt.",
+  "agentPerspectiveNoResponse": "No raw response is available for this attempt.",
   "agentPerspectiveNoDecoded": "No decoded model output is available for this attempt.",
   "agentPerspectiveAttempt": "Attempt",
   "agentPerspectiveInitial": "Initial",
@@ -2948,7 +2948,7 @@
   "agentPerspectiveEndpointFormat": "Endpoint format",
   "agentPerspectiveStartedAt": "Started",
   "agentPerspectiveStatus": "Status",
-  "agentPerspectiveUrl": "Final request URL",
+  "agentPerspectiveUrl": "Request target",
   "agentPerspectiveEventSubtitle": "{{events}} steps · {{requests}} model requests",
   "agentPerspectiveSearch": "Search steps",
   "agentPerspectiveSearchPlaceholder": "Search models, tools, or titles…",
@@ -3061,6 +3061,11 @@
     "toggleCategory": "Toggle {{category}} category",
     "batchModel": "Batch model",
     "mixedModels": "Mixed models",
+    "mixedConfiguration": "Multiple configurations",
+    "categoryConfiguration": "Category default configuration",
+    "categoryConfigurationDesc": "Apply the same defaults to every agent in this category",
+    "resetCategoryConfiguration": "Reset defaults",
+    "effectiveModel": "Effective model",
     "batchModelAria": "Set the same model for all {{count}} agents in {{category}}",
     "reasoning": "Reasoning",
     "mixedReasoning": "Mixed reasoning",
@@ -3099,13 +3104,25 @@
       "desc": "Default for Title & Summary"
     },
     "role": {
+      "general": {
+        "name": "General",
+        "desc": "Full tools · multi-step work"
+      },
+      "explore": {
+        "name": "Explore",
+        "desc": "Read-only · find & search code"
+      },
+      "component-designer": {
+        "name": "Component Designer",
+        "desc": "Focused interactive component prototype"
+      },
       "design-reviewer": {
         "name": "Design review",
-        "desc": "design-reviewer · read-only"
+        "desc": "Visual hierarchy and accessibility · read-only"
       },
       "over-engineering-reviewer": {
         "name": "Over-engineering review",
-        "desc": "over-engineering-reviewer · read-only"
+        "desc": "Find removable complexity · read-only"
       },
       "code-reviewer": {
         "name": "Code reviewer",
@@ -3122,6 +3139,150 @@
       "web-performance-auditor": {
         "name": "Web performance auditor",
         "desc": "Core Web Vitals · evidence-based"
+      },
+      "api-and-interface-design": {
+        "name": "API & Interface Architect",
+        "desc": "Stable public contracts · compatibility and validation"
+      },
+      "browser-testing-with-devtools": {
+        "name": "Web QA Planner",
+        "desc": "Browser and accessibility verification plans · read-only"
+      },
+      "ci-cd-and-automation": {
+        "name": "CI/CD Engineer",
+        "desc": "Pipelines, quality gates, and rollback-safe releases"
+      },
+      "code-review-and-quality": {
+        "name": "Code Quality Reviewer",
+        "desc": "Multi-axis correctness and architecture review · read-only"
+      },
+      "code-simplification": {
+        "name": "Code Simplification Engineer",
+        "desc": "Reduce complexity · preserve behavior"
+      },
+      "context-engineering": {
+        "name": "Context Engineer",
+        "desc": "Minimal authoritative context pack · read-only"
+      },
+      "debugging-and-error-recovery": {
+        "name": "Root Cause Debugger",
+        "desc": "Reproduce, localize, fix, and regression-test"
+      },
+      "deprecation-and-migration": {
+        "name": "Migration Engineer",
+        "desc": "Staged compatibility, data migration, and rollback"
+      },
+      "documentation-and-adrs": {
+        "name": "Documentation & ADR Engineer",
+        "desc": "Architecture decisions, guides, and API docs"
+      },
+      "doubt-driven-development": {
+        "name": "Doubt-Driven Reviewer",
+        "desc": "Challenge assumptions and designs · read-only"
+      },
+      "frontend-ui-engineering": {
+        "name": "Frontend UI Engineer",
+        "desc": "Accessible, responsive, product-quality interfaces"
+      },
+      "git-workflow-and-versioning": {
+        "name": "Git Workflow Engineer",
+        "desc": "Branches, atomic commits, and history safety"
+      },
+      "idea-refine": {
+        "name": "Idea Refinement Partner",
+        "desc": "Compare options, MVP bounds, and validation · read-only"
+      },
+      "incremental-implementation": {
+        "name": "Incremental Implementation Engineer",
+        "desc": "Thin, buildable, continuously verified slices"
+      },
+      "interview-me": {
+        "name": "Requirements Interviewer",
+        "desc": "Find gaps and high-information questions · read-only"
+      },
+      "observability-and-instrumentation": {
+        "name": "Observability Engineer",
+        "desc": "Logs, metrics, traces, and actionable alerts"
+      },
+      "performance-optimization": {
+        "name": "Performance Engineer",
+        "desc": "Measure bottlenecks and prove before/after impact"
+      },
+      "planning-and-task-breakdown": {
+        "name": "Implementation Planner",
+        "desc": "Dependency-aware, acceptance-driven tasks · read-only"
+      },
+      "security-and-hardening": {
+        "name": "Security Hardening Engineer",
+        "desc": "Threat-model and implement scoped security fixes"
+      },
+      "shipping-and-launch": {
+        "name": "Release Readiness Engineer",
+        "desc": "Go/no-go, rollout, and rollback plans · read-only"
+      },
+      "source-driven-development": {
+        "name": "Source-Driven Researcher",
+        "desc": "Ground guidance in version-matched sources · read-only"
+      },
+      "spec-driven-development": {
+        "name": "Specification Engineer",
+        "desc": "Scenarios, interfaces, and acceptance criteria · read-only"
+      },
+      "test-driven-development": {
+        "name": "TDD Engineer",
+        "desc": "Red-green-refactor with behavior-focused proof"
+      },
+      "using-agent-skills": {
+        "name": "Engineering Workflow Advisor",
+        "desc": "Map work to the smallest suitable agent sequence · read-only"
+      },
+      "write-outline-architect": {
+        "name": "Outline Architect",
+        "desc": "Structure, arguments, and narrative progression · read-only"
+      },
+      "write-draft-author": {
+        "name": "Draft Author",
+        "desc": "Long-form drafts and focused section writing"
+      },
+      "write-developmental-editor": {
+        "name": "Developmental Editor",
+        "desc": "Improve logic, structure, pacing, and clarity"
+      },
+      "write-copy-editor": {
+        "name": "Copy Editor",
+        "desc": "Polish tone, terminology, and grammar"
+      },
+      "write-fact-checker": {
+        "name": "Fact Checker",
+        "desc": "Verify claims, figures, and uncertainty · read-only"
+      },
+      "write-citation-researcher": {
+        "name": "Citation Researcher",
+        "desc": "Authoritative sources and traceable citations · read-only"
+      },
+      "design-product-planner": {
+        "name": "Product Design Planner",
+        "desc": "Direction, goals, flows, and tradeoffs · read-only"
+      },
+      "design-ux-researcher": {
+        "name": "UX Researcher",
+        "desc": "User journeys and usability research · read-only"
+      },
+      "design-screen-designer": {
+        "name": "Screen Designer",
+        "desc": "Complete responsive screens and interaction states"
+      },
+      "design-system-architect": {
+        "name": "Design System Architect",
+        "desc": "Semantic tokens, components, and variant constraints"
+      },
+      "design-code-binder": {
+        "name": "Design Code Binder",
+        "desc": "Map design nodes to routes and source files"
+      },
+      "design-handoff-specialist": {
+        "name": "Design Handoff Specialist",
+        "desc": "DESIGN.md, implementation notes, and handoff assets"
       },
       "compaction": {
         "name": "Compaction",
@@ -3142,17 +3303,12 @@
       "summary": {
         "name": "Summary",
         "desc": "LLM · defaults to small model"
-      },
-      "general": {
-        "name": "General",
-        "desc": "Full tools · multi-step work"
-      },
-      "explore": {
-        "name": "Explore",
-        "desc": "Read-only · find & search code"
       }
     },
-    "builtin": "Built-in"
+    "builtin": "Built-in",
+    "customTag": "Custom",
+    "workspaceFile": "Defined in {{path}}",
+    "workspaceReadOnly": "Edit this role in .kun/agents/*.md"
   },
   "summarizeSession": "Summarize",
   "summarizing": "Summarizing…",

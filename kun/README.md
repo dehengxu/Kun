@@ -330,6 +330,11 @@ Feature flags are intentionally explicit:
 - `capabilities.attachments` stores image bytes outside thread logs and allows turns to reference `attachmentIds`. Vision-capable models receive image parts; text-only models receive a bounded compressed base64 text fallback.
 - `capabilities.memory` stores long-term records under the data dir, retrieves scoped matches before turns, and exposes `memory_create`, `memory_update`, and `memory_delete` tools.
 - `capabilities.subagents` exposes `delegate_task` with `maxParallel` and `maxChildRuns` concurrency budgets.
+  Workspace overlays under `<workspace>/.kun/agents/*.md` enter automatic
+  BM25/LLM routing (id/name/description only), appear in Settings and the
+  workbench subagent sidebar with a Custom tag, default to read-only, and may
+  set `toolPolicy: inherit` or `omit_base_prompt: true`. Model/provider overrides
+  and nested delegation stay blocked.
 
 Kun installs 33 fixed standalone subagent profiles. Nine are Kun's existing
 general/design and specialist personas; 24 engineering workflows adapted from

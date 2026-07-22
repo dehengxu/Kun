@@ -63,5 +63,15 @@ function stripBlankProfileFields(profile: Record<string, unknown>): Record<strin
     }
     next[key] = value
   }
+  const hasModel = typeof next.model === 'string' && next.model.trim().length > 0
+  const hasProviderId =
+    typeof next.providerId === 'string' && next.providerId.trim().length > 0
+  if (hasModel !== hasProviderId) {
+    // Legacy settings allowed either field independently. Drop the ambiguous
+    // override as a pair so the profile stays valid and inherits the active
+    // session's coherent model/provider selection.
+    delete next.model
+    delete next.providerId
+  }
   return next
 }

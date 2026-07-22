@@ -21,6 +21,15 @@ import {
   createAgentSdkRuntime,
   type AgentSdkRuntimeFactoryDeps
 } from '../runtime/agent-sdk/agent-sdk-runtime-factory.js'
+import {
+  AntigravityCliRuntime,
+  type AntigravityCliRuntimeDeps
+} from '../runtime/antigravity/antigravity-cli-runtime.js'
+import {
+  CursorSdkRuntime,
+  type CursorSdkRuntimeDeps
+} from '../runtime/cursor/cursor-sdk-runtime.js'
+import { composeDelegatedTurnRuntimes } from '../runtime/delegated-turn-runtime.js'
 import { buildGoalLocalTools } from '../adapters/tool/goal-tools.js'
 import { buildTodoLocalTools } from '../adapters/tool/todo-tools.js'
 import { buildDesignCanvasLocalTools } from '../adapters/tool/design-canvas-tool.js'
@@ -114,7 +123,10 @@ import { InstructionRuntime } from '../instructions/instruction-runtime.js'
 import { resolveConfiguredHooks, type HooksConfig } from '../hooks/hook-config.js'
 import { FileMemoryStore } from '../memory/memory-store.js'
 import { DelegationRuntime, FileDelegationStore } from '../delegation/delegation-runtime.js'
-import { createChildAgentExecutor } from '../delegation/child-agent-executor.js'
+import {
+  createChildAgentExecutor,
+  type ChildDelegatedRuntimeFactory
+} from '../delegation/child-agent-executor.js'
 import { SubagentRouter } from '../delegation/subagent-router.js'
 import { SubagentGenerator } from '../delegation/subagent-generator.js'
 import { BackgroundShellRuntime } from '../services/background-shell-runtime.js'
@@ -274,8 +286,8 @@ export async function createKunServeRuntime(
   const ids = new RandomIdGenerator()
   const nowIso = () => new Date().toISOString()
   const allocateSeq = (threadId: string) => eventBus.allocateSeq(threadId)
-  // Agent Perspective is always available for HTTP-backed model providers.
-  // Records are private, thread-scoped JSONL under the configured data dir.
+  // Agent Perspective covers both HTTP-backed providers and delegated
+  // subscription transports. Records are private, thread-scoped JSONL.
   const llmDebug = new LlmDebugRecorder({ dataDir: activeOptions.dataDir })
   const agentObservability = createAgentObservabilityRecorder({
     config: activeOptions.observability,
@@ -327,10 +339,11 @@ export async function createKunServeRuntime(
     models: activeOptions.models
   })
   const modelCapabilities = (model: string) => modelCapabilitiesForModel(model, modelProfiles)
-  // Providers whose kind is 'agent-sdk' don't get an HTTP client — their turns
-  // are delegated to the embedded Claude Agent SDK (subscription) instead.
+  // Provider-native subscription transports don't get an HTTP client.
   const agentSdkProviderIds = agentSdkProviderIdsForOptions(activeOptions)
-  let agentSdkSignature = agentSdkProviderSignature(activeOptions)
+  const antigravityProviderIds = antigravityProviderIdsForOptions(activeOptions)
+  const cursorSdkProviderIds = cursorSdkProviderIdsForOptions(activeOptions)
+  let delegatedProviderSignature = delegatedProviderSignatureForOptions(activeOptions)
   const extensionProviderAccounts = new ExtensionProviderAccountStore({
     dataDir: activeOptions.dataDir,
     nowIso
@@ -633,6 +646,85 @@ export async function createKunServeRuntime(
     readTracker: true,
     ...(resolvedHooks.length ? { hooks: resolvedHooks } : {})
   })
+  const defaultIsAgentSdk = process.env.KUN_RUNTIME_PROVIDER_KIND === 'agent-sdk'
+  const defaultIsAntigravity = process.env.KUN_RUNTIME_PROVIDER_KIND === 'antigravity-cli'
+  const defaultIsCursorSdk = process.env.KUN_RUNTIME_PROVIDER_KIND === 'cursor-sdk'
+  const createChildDelegatedRuntime: ChildDelegatedRuntimeFactory = (child) =>
+    composeDelegatedTurnRuntimes([
+    ...(agentSdkProviderIds.size > 0 || defaultIsAgentSdk
+      ? [createAgentSdkRuntime({
+          registry: childRegistry,
+          toolHost: childToolHost,
+          turns: child.turns,
+          sessionStore: child.sessionStore,
+          threadStore: child.threadStore,
+          events: child.events,
+          ids: child.ids,
+          prefix: child.prefix,
+          providerConfigs: activeOptions.providers ?? {},
+          agentSdkProviderIds,
+          defaultApprovalPolicy: activeOptions.approvalPolicy,
+          defaultSandboxMode: activeOptions.sandboxMode,
+          defaultModel: activeOptions.model,
+          defaultIsAgentSdk,
+          defaultToken: activeOptions.apiKey,
+          turnLimits: activeOptions.runtime?.turnLimits,
+          approvalGate,
+          instructionRuntime,
+          allowSdkBuiltins: false,
+          toolContextBoundary: {
+            ...(child.allowedProviderIds ? { allowedProviderIds: child.allowedProviderIds } : {}),
+            ...(child.allowedToolNames ? { allowedToolNames: child.allowedToolNames } : {}),
+            ...(child.blockedProviderIds ? { blockedProviderIds: child.blockedProviderIds } : {}),
+            ...(child.blockedToolNames ? { blockedToolNames: child.blockedToolNames } : {}),
+            ...(child.blockedSkillIds ? { blockedSkillIds: child.blockedSkillIds } : {})
+          },
+          ...(child.skillsEnabled ? { skillRuntime } : {}),
+          ...(child.memoryEnabled && memoryStore ? { memoryStore } : {}),
+          ...(attachmentStore ? { attachmentStore } : {}),
+          ...(process.env.KUN_CLAUDE_BINARY
+            ? { pathToClaudeCodeExecutable: process.env.KUN_CLAUDE_BINARY }
+            : {}),
+          nowIso
+        })]
+      : []),
+    ...(antigravityProviderIds.size > 0 || defaultIsAntigravity
+      ? [new AntigravityCliRuntime({
+          providerConfigs: activeOptions.providers ?? {},
+          providerIds: antigravityProviderIds,
+          defaultIsAntigravity,
+          defaultModel: activeOptions.model,
+          systemPrompt: child.prefix.systemPrompt,
+          binaryPath: process.env.KUN_ANTIGRAVITY_BINARY,
+          threadStore: child.threadStore,
+          sessionStore: child.sessionStore,
+          turns: child.turns,
+          events: child.events,
+          ids: child.ids,
+          debugSink: llmDebug,
+          turnLimits: activeOptions.runtime?.turnLimits,
+          enforceReadOnly: child.toolPolicy === 'readOnly'
+        })]
+      : []),
+    ...(cursorSdkProviderIds.size > 0 || defaultIsCursorSdk
+      ? [new CursorSdkRuntime({
+          providerConfigs: activeOptions.providers ?? {},
+          providerIds: cursorSdkProviderIds,
+          defaultIsCursor: defaultIsCursorSdk,
+          defaultApiKey: activeOptions.apiKey,
+          defaultModel: activeOptions.model,
+          systemPrompt: child.prefix.systemPrompt,
+          threadStore: child.threadStore,
+          sessionStore: child.sessionStore,
+          turns: child.turns,
+          events: child.events,
+          ids: child.ids,
+          debugSink: llmDebug,
+          turnLimits: activeOptions.runtime?.turnLimits,
+          enforceReadOnly: child.toolPolicy === 'readOnly'
+        })]
+      : [])
+    ])
 	  let delegationRuntime = activeOptions.capabilities?.subagents.enabled
 	    ? new DelegationRuntime({
 	        config: mergeBuiltinSubagentProfiles(activeOptions.capabilities.subagents),
@@ -654,6 +746,8 @@ export async function createKunServeRuntime(
 	          skillRuntime,
 	          instructionRuntime,
 	          tokenEconomy,
+          approvalGate,
+          createDelegatedRuntime: createChildDelegatedRuntime,
           // Persist the child as a hidden `side` thread on the shared stores +
           // event bus so its session is loadable and streams live in the GUI.
           sessionStore,
@@ -782,12 +876,8 @@ export async function createKunServeRuntime(
       // ignore duplicate/colliding registration
     }
   })
-  // Subscription engine: only constructed when at least one provider is the
-  // 'agent-sdk' kind. Owns the delegated turn for those providers' threads.
-  // The runtime's own default provider can itself be agent-sdk (the Claude
-  // subscription set as the main model). kun-process signals that via env so we
-  // route default-provider turns to the SDK too, not just per-provider ones.
-	  const defaultIsAgentSdk = process.env.KUN_RUNTIME_PROVIDER_KIND === 'agent-sdk'
+  // Provider-native subscription engines own whole turns and share the same
+  // narrow delegated runtime boundary.
 	  let sdkRuntimeDeps: AgentSdkRuntimeFactoryDeps | undefined
 	  if (agentSdkProviderIds.size > 0 || defaultIsAgentSdk) {
 	    sdkRuntimeDeps = {
@@ -819,6 +909,42 @@ export async function createKunServeRuntime(
 	        : {})
 	    }
 	  }
+	  let antigravityRuntimeDeps: AntigravityCliRuntimeDeps | undefined
+	  if (antigravityProviderIds.size > 0 || defaultIsAntigravity) {
+	    antigravityRuntimeDeps = {
+	      providerConfigs: activeOptions.providers ?? {},
+	      providerIds: antigravityProviderIds,
+	      defaultIsAntigravity,
+	      defaultModel: activeOptions.model,
+        systemPrompt: prefix.systemPrompt,
+	      binaryPath: process.env.KUN_ANTIGRAVITY_BINARY,
+	      threadStore,
+	      sessionStore,
+	      turns: turnService,
+	      events,
+	      ids,
+	      debugSink: llmDebug,
+	      turnLimits: activeOptions.runtime?.turnLimits
+	    }
+	  }
+	  let cursorRuntimeDeps: CursorSdkRuntimeDeps | undefined
+	  if (cursorSdkProviderIds.size > 0 || defaultIsCursorSdk) {
+	    cursorRuntimeDeps = {
+	      providerConfigs: activeOptions.providers ?? {},
+	      providerIds: cursorSdkProviderIds,
+	      defaultIsCursor: defaultIsCursorSdk,
+	      defaultApiKey: activeOptions.apiKey,
+	      defaultModel: activeOptions.model,
+	      systemPrompt: prefix.systemPrompt,
+	      threadStore,
+	      sessionStore,
+	      turns: turnService,
+	      events,
+	      ids,
+	      debugSink: llmDebug,
+	      turnLimits: activeOptions.runtime?.turnLimits
+	    }
+	  }
 
   // The main turn abort signal already reaches foreground children. Detached
   // children and background shells intentionally have independent lifetimes,
@@ -830,7 +956,11 @@ export async function createKunServeRuntime(
       Promise.resolve(delegationRuntime?.abortDetachedChildrenForThread(threadId) ?? 0)
     ])
   }
-	  const sdkRuntime = sdkRuntimeDeps ? createAgentSdkRuntime(sdkRuntimeDeps) : undefined
+	  const sdkRuntime = composeDelegatedTurnRuntimes([
+	    ...(sdkRuntimeDeps ? [createAgentSdkRuntime(sdkRuntimeDeps)] : []),
+	    ...(antigravityRuntimeDeps ? [new AntigravityCliRuntime(antigravityRuntimeDeps)] : []),
+	    ...(cursorRuntimeDeps ? [new CursorSdkRuntime(cursorRuntimeDeps)] : [])
+	  ])
 	  const loopOptions: AgentLoopOptions = {
 	    threadStore,
 	    sessionStore,
@@ -1393,12 +1523,12 @@ export async function createKunServeRuntime(
 	        message: 'unauthenticated local model gateway requires a loopback serve host'
 	      }
 	    }
-	    const nextAgentSdkSignature = agentSdkProviderSignature(nextOptions)
-	    if (nextAgentSdkSignature !== agentSdkSignature) {
+	    const nextDelegatedProviderSignature = delegatedProviderSignatureForOptions(nextOptions)
+	    if (nextDelegatedProviderSignature !== delegatedProviderSignature) {
 	      return {
 	        ok: false,
 	        code: 'restart_required',
-	        message: 'agent-sdk provider routing changed and requires a runtime restart'
+	        message: 'delegated subscription provider routing changed and requires a runtime restart'
 	      }
 	    }
 	    const nextSubagentsEnabled = nextOptions.capabilities?.subagents.enabled === true
@@ -1527,7 +1657,7 @@ export async function createKunServeRuntime(
 	    activeOptions = nextOptions
 	    modelProfiles = nextModelProfiles
 	    tokenEconomy = nextTokenEconomy
-	    agentSdkSignature = nextAgentSdkSignature
+	    delegatedProviderSignature = nextDelegatedProviderSignature
 	    replaceRoutedModelClients()
 	    await migrateLegacyProviderCredentials()
 	    skillRuntime.replaceWith(nextSkillRuntime)
@@ -1568,6 +1698,17 @@ export async function createKunServeRuntime(
 	      } else {
 	        delete sdkRuntimeDeps.memoryStore
 	      }
+	    }
+	    if (antigravityRuntimeDeps) {
+	      antigravityRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
+	      antigravityRuntimeDeps.defaultModel = activeOptions.model
+	      antigravityRuntimeDeps.turnLimits = activeOptions.runtime?.turnLimits
+	    }
+	    if (cursorRuntimeDeps) {
+	      cursorRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
+	      cursorRuntimeDeps.defaultApiKey = activeOptions.apiKey
+	      cursorRuntimeDeps.defaultModel = activeOptions.model
+	      cursorRuntimeDeps.turnLimits = activeOptions.runtime?.turnLimits
 	    }
 	    turnService.updateRuntimeConfig({
 	      defaultModel: activeOptions.model,
@@ -1864,12 +2005,12 @@ function buildModelClientRouterInput(
   options: KunServeRuntimeOptions,
   modelCapabilities: (model: string) => ReturnType<typeof modelCapabilitiesForModel>,
   llmDebug?: LlmDebugRecorder
-): { default: CompatModelClient; providers: Map<string, ModelClient> } {
+): { default: ModelClient; providers: Map<string, ModelClient> } {
   const streamIdleOverride =
     options.runtime?.streamIdleTimeoutMs !== undefined
       ? { streamIdleTimeoutMs: options.runtime.streamIdleTimeoutMs }
       : {}
-  const defaultClient = new CompatModelClient({
+  const defaultClient: ModelClient = new CompatModelClient({
     baseUrl: options.baseUrl,
     apiKey: options.apiKey,
     modelProxyUrl: options.modelProxyUrl,
@@ -1884,22 +2025,20 @@ function buildModelClientRouterInput(
   const providerClients = new Map<string, ModelClient>()
   for (const [providerId, provider] of Object.entries(options.providers ?? {})) {
     const trimmedId = providerId.trim()
-    if (!trimmedId || (provider.kind ?? 'http') === 'agent-sdk') continue
-    providerClients.set(
-      trimmedId,
-      new CompatModelClient({
-        baseUrl: provider.baseUrl ?? options.baseUrl ?? '',
-        apiKey: provider.apiKey,
-        modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
-        endpointFormat: provider.endpointFormat ?? options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
-        retry: provider.retry ?? options.retry,
-        model: options.model,
-        modelCapabilities,
-        headers: provider.headers,
-        ...(llmDebug ? { debugSink: llmDebug } : {}),
-        ...streamIdleOverride
-      })
-    )
+    if (!trimmedId || (provider.kind ?? 'http') !== 'http') continue
+    const client: ModelClient = new CompatModelClient({
+      baseUrl: provider.baseUrl ?? options.baseUrl ?? '',
+      apiKey: provider.apiKey,
+      modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
+      endpointFormat: provider.endpointFormat ?? options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
+      retry: provider.retry ?? options.retry,
+      model: options.model,
+      modelCapabilities,
+      headers: provider.headers,
+      ...(llmDebug ? { debugSink: llmDebug } : {}),
+      ...streamIdleOverride
+    })
+    providerClients.set(trimmedId, client)
   }
   return { default: defaultClient, providers: providerClients }
 }
@@ -1913,8 +2052,30 @@ function agentSdkProviderIdsForOptions(options: KunServeRuntimeOptions): Set<str
   return out
 }
 
-function agentSdkProviderSignature(options: KunServeRuntimeOptions): string {
-  return [...agentSdkProviderIdsForOptions(options)].sort().join('\n')
+function antigravityProviderIdsForOptions(options: KunServeRuntimeOptions): Set<string> {
+  const out = new Set<string>()
+  for (const [providerId, provider] of Object.entries(options.providers ?? {})) {
+    const trimmedId = providerId.trim()
+    if (trimmedId && (provider.kind ?? 'http') === 'antigravity-cli') out.add(trimmedId)
+  }
+  return out
+}
+
+function cursorSdkProviderIdsForOptions(options: KunServeRuntimeOptions): Set<string> {
+  const out = new Set<string>()
+  for (const [providerId, provider] of Object.entries(options.providers ?? {})) {
+    const trimmedId = providerId.trim()
+    if (trimmedId && (provider.kind ?? 'http') === 'cursor-sdk') out.add(trimmedId)
+  }
+  return out
+}
+
+function delegatedProviderSignatureForOptions(options: KunServeRuntimeOptions): string {
+  return [
+    ...[...agentSdkProviderIdsForOptions(options)].map((id) => `agent-sdk:${id}`),
+    ...[...antigravityProviderIdsForOptions(options)].map((id) => `antigravity-cli:${id}`),
+    ...[...cursorSdkProviderIdsForOptions(options)].map((id) => `cursor-sdk:${id}`)
+  ].sort().join('\n')
 }
 
 function mergeRuntimeConfigApplyOptions(

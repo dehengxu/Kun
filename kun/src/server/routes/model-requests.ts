@@ -44,7 +44,7 @@ export async function modelRequestsResponse(
       maxResponseBodyBytes: DEFAULT_LLM_DEBUG_RECORDER_LIMITS.maxResponseBodyBytes,
       maxPageSize: DEFAULT_LLM_DEBUG_RECORDER_LIMITS.maxPageSize
     },
-    warnings: ['HTTP model request capture is unavailable in this runtime']
+    warnings: ['model request capture is unavailable in this runtime']
   }
   return jsonResponse(empty)
 }

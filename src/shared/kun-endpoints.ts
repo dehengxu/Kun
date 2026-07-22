@@ -61,6 +61,13 @@ export function kunMemoryRecordPath(memoryId: string): string {
   return `/v1/memory/${encodeURIComponent(memoryId)}`
 }
 
+export const KUN_DELEGATION_PROFILES_PATH = '/v1/delegation/profiles'
+export const KUN_DELEGATION_PROFILES_TEMPLATE = '/v1/delegation/profiles'
+export function kunDelegationProfilesPath(workspace?: string): string {
+  if (!workspace?.trim()) return KUN_DELEGATION_PROFILES_PATH
+  return `${KUN_DELEGATION_PROFILES_PATH}?workspace=${encodeURIComponent(workspace.trim())}`
+}
+
 export const KUN_THREADS_PATH = '/v1/threads'
 export const KUN_THREADS_TEMPLATE = '/v1/threads'
 

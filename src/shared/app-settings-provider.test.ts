@@ -84,6 +84,53 @@ describe('model provider retry settings', () => {
   })
 })
 
+describe('Gemini subscription provider preset', () => {
+  it('uses the official Antigravity CLI transport and current subscription models', () => {
+    const preset = getModelProviderPreset('gemini-subscription')
+    expect(preset).not.toBeNull()
+    const profile = modelProviderPresetProfile(preset!, '')
+    const normalized = normalizeModelProviderSettings({ providers: [profile] })
+    expect(normalized.providers.find((provider) => provider.id === profile.id)).toMatchObject({
+      kind: 'antigravity-cli',
+      baseUrl: '',
+      endpointFormat: 'custom_endpoint',
+      models: expect.arrayContaining(['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.1-pro'])
+    })
+  })
+
+  it('migrates the retired Code Assist transport to Antigravity CLI', () => {
+    const normalized = normalizeModelProviderSettings({
+      providers: [{
+        ...modelProviderPresetProfile(getModelProviderPreset('gemini-subscription')!, ''),
+        kind: 'gemini-code-assist'
+      }]
+    })
+    expect(
+      normalized.providers.find((provider) => provider.id === 'gemini-subscription')
+    ).toMatchObject({
+      kind: 'antigravity-cli',
+      apiKey: '',
+      models: ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.1-pro']
+    })
+  })
+})
+
+describe('Cursor subscription provider preset', () => {
+  it('uses the official Cursor SDK transport with an auto fallback model', () => {
+    const preset = getModelProviderPreset('cursor-subscription')
+    expect(preset).not.toBeNull()
+    const profile = modelProviderPresetProfile(preset!, 'cursor-secret')
+    const normalized = normalizeModelProviderSettings({ providers: [profile] })
+    expect(normalized.providers.find((provider) => provider.id === profile.id)).toMatchObject({
+      kind: 'cursor-sdk',
+      apiKey: 'cursor-secret',
+      baseUrl: '',
+      endpointFormat: 'custom_endpoint',
+      models: ['auto']
+    })
+  })
+})
+
 describe('model route pool settings', () => {
   it('normalizes legacy settings to an empty route catalog', () => {
     const settings = normalizeModelProviderSettings(undefined)

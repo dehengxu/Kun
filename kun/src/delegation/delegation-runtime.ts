@@ -185,6 +185,8 @@ export type ChildRunExecutor = (input: {
   model?: string
   providerId?: string
   systemPrompt?: string
+  /** When true with a non-empty systemPrompt, skip prepending the Kun base prefix. */
+  omitBasePrompt?: boolean
   allowedTools?: string[]
   /** Parent tool/provider/memory boundary; profile permissions may only narrow it. */
   security?: ChildSecuritySnapshot
@@ -425,22 +427,24 @@ export class DelegationRuntime {
     const toolPolicy = input.toolPolicyCeiling === 'readOnly'
       ? 'readOnly'
       : profile?.toolPolicy ?? config.defaultToolPolicy
-    // A parent-authored one-run role follows the user's effective session
-    // model, provider, and reasoning selection. The parent model may still
-    // emit conflicting custom-agent fields, but it must not silently change
-    // how the child runs. Reusable profiles keep their existing precedence.
-    const customAgentInheritsSessionSelection = profileSource === 'custom'
+    // One-run custom/generated roles follow the user's effective session
+    // model, provider, and reasoning selection. Model-authored role content
+    // must not silently change how the child runs. Reusable profiles keep
+    // their trusted configured precedence.
+    const ephemeralAgentInheritsSessionSelection =
+      profileSource === 'custom' || profileSource === 'generated'
     const selection = resolveChildModelSelection({
-      explicitModel: customAgentInheritsSessionSelection ? undefined : input.model,
-      explicitProviderId: customAgentInheritsSessionSelection ? undefined : input.providerId,
-      profileModel: customAgentInheritsSessionSelection ? undefined : profile?.model,
-      profileProviderId: customAgentInheritsSessionSelection ? undefined : profile?.providerId,
+      explicitModel: ephemeralAgentInheritsSessionSelection ? undefined : input.model,
+      explicitProviderId: ephemeralAgentInheritsSessionSelection ? undefined : input.providerId,
+      profileModel: ephemeralAgentInheritsSessionSelection ? undefined : profile?.model,
+      profileProviderId: ephemeralAgentInheritsSessionSelection ? undefined : profile?.providerId,
       inheritedModel: input.inheritedModel,
       inheritedProviderId: input.inheritedProviderId
     })
     const resolvedModel = selection.model
     const resolvedProviderId = selection.providerId
     const resolvedSystemPrompt = profile?.systemPrompt
+    const resolvedOmitBasePrompt = profile?.omitBasePrompt === true
     const resolvedAllowedTools = profile?.allowedTools
     // Delegation is intentionally one level deep. Enforce this in the host,
     // including for user/workspace profiles that forgot to declare a deny-list.
@@ -453,7 +457,7 @@ export class DelegationRuntime {
     const resolvedBlockedSkills = profile?.blockedSkills
     const resolvedSkillsEnabled = profile?.skillsEnabled ?? true
     const promptPreamble = profile?.promptPreamble
-    const resolvedReasoningEffort = customAgentInheritsSessionSelection
+    const resolvedReasoningEffort = ephemeralAgentInheritsSessionSelection
       ? normalizeInheritedReasoningEffort(input.inheritedReasoningEffort)
       : profile?.reasoningEffort
     const returnFormat = input.returnFormat ?? 'summary'
@@ -538,6 +542,7 @@ export class DelegationRuntime {
         resolvedModel,
         resolvedProviderId,
         resolvedSystemPrompt,
+        resolvedOmitBasePrompt,
         resolvedAllowedTools,
         resolvedBlockedTools,
         resolvedBlockedMcpServers,
@@ -603,6 +608,7 @@ export class DelegationRuntime {
         model: resolvedModel,
         ...(resolvedProviderId ? { providerId: resolvedProviderId } : {}),
         ...(resolvedSystemPrompt ? { systemPrompt: resolvedSystemPrompt } : {}),
+        ...(resolvedOmitBasePrompt ? { omitBasePrompt: true } : {}),
         ...(resolvedAllowedTools ? { allowedTools: resolvedAllowedTools } : {}),
         ...(security ? { security } : {}),
         ...(resolvedBlockedTools ? { blockedTools: resolvedBlockedTools } : {}),
@@ -670,6 +676,7 @@ export class DelegationRuntime {
     resolvedModel: string | undefined
     resolvedProviderId: string | undefined
     resolvedSystemPrompt: string | undefined
+    resolvedOmitBasePrompt: boolean
     resolvedAllowedTools: string[] | undefined
     resolvedBlockedTools: string[] | undefined
     resolvedBlockedMcpServers: string[] | undefined
@@ -724,6 +731,7 @@ export class DelegationRuntime {
         model: args.resolvedModel,
         ...(args.resolvedProviderId ? { providerId: args.resolvedProviderId } : {}),
         ...(args.resolvedSystemPrompt ? { systemPrompt: args.resolvedSystemPrompt } : {}),
+        ...(args.resolvedOmitBasePrompt ? { omitBasePrompt: true } : {}),
         ...(args.resolvedAllowedTools ? { allowedTools: args.resolvedAllowedTools } : {}),
         ...(args.security ? { security: args.security } : {}),
         ...(args.resolvedBlockedTools ? { blockedTools: args.resolvedBlockedTools } : {}),
@@ -916,6 +924,44 @@ export class DelegationRuntime {
     }))
   }
 
+  /**
+   * Workspace `.kun/agents/*.md` overlays for the GUI roster.
+   * Returned separately from `listProfiles()` so Settings/Sidebar can merge
+   * them without rewriting persistent GUI settings.
+   */
+  async listWorkspaceProfiles(workspace: string): Promise<Array<{
+    id: string
+    source: 'workspace'
+    filePath: string
+    name?: string
+    description?: string
+    mode: SubagentMode
+    toolPolicy: SubagentToolPolicy
+    color?: string
+    systemPrompt?: string
+    promptPreamble?: string
+    allowedTools?: string[]
+    blockedTools?: string[]
+    omitBasePrompt?: boolean
+  }>> {
+    const overlay = await loadWorkspaceAgentProfiles(workspace)
+    return overlay.map((entry) => ({
+      id: entry.id,
+      source: 'workspace' as const,
+      filePath: entry.filePath,
+      ...(entry.profile.name ? { name: entry.profile.name } : {}),
+      ...(entry.profile.description ? { description: entry.profile.description } : {}),
+      mode: entry.profile.mode,
+      toolPolicy: entry.profile.toolPolicy,
+      ...(entry.profile.color ? { color: entry.profile.color } : {}),
+      ...(entry.profile.systemPrompt ? { systemPrompt: entry.profile.systemPrompt } : {}),
+      ...(entry.profile.promptPreamble ? { promptPreamble: entry.profile.promptPreamble } : {}),
+      ...(entry.profile.allowedTools ? { allowedTools: entry.profile.allowedTools } : {}),
+      ...(entry.profile.blockedTools ? { blockedTools: entry.profile.blockedTools } : {}),
+      ...(entry.profile.omitBasePrompt ? { omitBasePrompt: true } : {})
+    }))
+  }
+
   /** Resolve one explicit profile once so routing and execution share a snapshot. */
   async resolveProfileSnapshot(
     profileId: string,
@@ -943,9 +989,9 @@ export class DelegationRuntime {
     }
   }
 
-  /** Trusted profiles visible to automatic routing. Workspace roles require explicit selection. */
+  /** Profiles visible to automatic routing, including workspace overlays. */
   async listRoutingProfiles(
-    _workspace?: string,
+    workspace?: string,
     agentSurface: 'code' | 'write' | 'design' = 'code'
   ): Promise<SubagentRoutingDocument[]> {
     const profiles = new Map<string, SubagentProfileConfig>(Object.entries(this.options.config.profiles))
@@ -955,6 +1001,13 @@ export class DelegationRuntime {
         BUILTIN_SUBAGENT_PROFILES[id] === profile ? 'builtin' : 'configured'
       ])
     )
+    if (workspace) {
+      const overlay = await loadWorkspaceAgentProfiles(workspace)
+      for (const entry of overlay) {
+        profiles.set(entry.id, entry.profile)
+        sources.set(entry.id, 'workspace')
+      }
+    }
     return [...profiles.entries()]
       .filter(([, profile]) => profile.mode !== 'primary' && profileAvailableOnSurface(profile, agentSurface))
       .map(([id, profile]) => ({
@@ -1093,12 +1146,39 @@ function resolveChildModelSelection(input: {
   inheritedModel?: string
   inheritedProviderId?: string
 }): { model?: string; providerId?: string } {
-  const model = input.explicitModel?.trim() || input.profileModel?.trim() || input.inheritedModel?.trim()
-  const providerId = input.explicitProviderId?.trim() || input.profileProviderId?.trim() || input.inheritedProviderId?.trim()
-  return {
-    ...(model ? { model } : {}),
-    ...(providerId ? { providerId } : {})
+  return (
+    completeModelProviderPair('explicit child override', input.explicitModel, input.explicitProviderId) ??
+    completeModelProviderPair('subagent profile', input.profileModel, input.profileProviderId) ??
+    completeModelProviderPair(
+      'inherited parent selection',
+      input.inheritedModel,
+      input.inheritedProviderId,
+      { allowDefaultProvider: true }
+    ) ??
+    {}
+  )
+}
+
+function completeModelProviderPair(
+  source: string,
+  rawModel: string | undefined,
+  rawProviderId: string | undefined,
+  options: { allowDefaultProvider?: boolean } = {}
+): { model: string; providerId?: string } | undefined {
+  const model = rawModel?.trim()
+  const providerId = rawProviderId?.trim()
+  if (!model && !providerId) return undefined
+  // A normal parent turn on the runtime's default provider has an effective
+  // model but no explicit providerId. Preserve that selection as one source;
+  // absence here means "runtime default", not a field to fill from elsewhere.
+  if (model && !providerId && options.allowDefaultProvider) return { model }
+  if (!model || !providerId) {
+    const missing = model ? 'providerId' : 'model'
+    throw new Error(
+      `${source} must configure model and providerId together; missing ${missing}`
+    )
   }
+  return { model, providerId }
 }
 
 function toUsageSnapshot(usage: ChildRunRecord['usage']): UsageSnapshot {

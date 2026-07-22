@@ -17,7 +17,7 @@ export type ModelRequestTraceStorePage = {
   warnings: string[]
 }
 
-/** Private, append-only, per-thread JSONL storage for completed HTTP exchanges. */
+/** Private, append-only, per-thread JSONL storage for completed model transports. */
 export class ModelRequestTraceStore {
   private readonly root: string
   private readonly writes = new Map<string, Promise<void>>()

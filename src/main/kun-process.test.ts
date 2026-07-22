@@ -1664,7 +1664,7 @@ describe('syncGuiManagedKunConfig', () => {
 })
 
 describe('subagentProfilesForRuntime', () => {
-  it('drops blank optional fields so the runtime config still parses', async () => {
+  it('drops blank fields and legacy partial routing so the profile inherits a coherent pair', async () => {
     const module = await import('./kun-process')
     // Built-in profiles store an empty `name` (the GUI localizes the label) and
     // the user picked a model on one of them. The runtime schema marks every
@@ -1688,7 +1688,34 @@ describe('subagentProfilesForRuntime', () => {
     expect(config.profiles.general).toBeDefined()
     expect('name' in config.profiles.general).toBe(false)
     expect('description' in config.profiles.general).toBe(false)
-    expect(config.profiles.general.model).toBe('deepseek-v4')
+    expect(config.profiles.general.model).toBeUndefined()
+    expect(config.profiles.general.providerId).toBeUndefined()
+  })
+
+  it('removes provider-only legacy routing without dropping the rest of the profile', async () => {
+    const module = await import('./kun-process')
+    const config = module.subagentProfilesForRuntime({
+      enabled: true,
+      profiles: [
+        {
+          id: 'custom',
+          enabled: true,
+          name: 'Safe reviewer',
+          mode: 'subagent',
+          toolPolicy: 'readOnly',
+          providerId: 'openai',
+          blockedTools: ['write']
+        }
+      ]
+    })
+
+    expect(config.profiles.custom).toMatchObject({
+      name: 'Safe reviewer',
+      toolPolicy: 'readOnly',
+      blockedTools: ['write']
+    })
+    expect(config.profiles.custom.model).toBeUndefined()
+    expect(config.profiles.custom.providerId).toBeUndefined()
   })
 
   it('keeps a non-empty name', async () => {
@@ -1749,10 +1776,9 @@ describe('subagentProfilesForRuntime', () => {
       blockedSkills: ['unsafe-skill']
     })
     expect(config.profiles['component-designer']).toBeDefined()
-    expect(config.profiles['security-auditor']).toMatchObject({
-      model: 'security-model',
-      toolPolicy: 'readOnly'
-    })
+    expect(config.profiles['security-auditor']).toMatchObject({ toolPolicy: 'readOnly' })
+    expect(config.profiles['security-auditor'].model).toBeUndefined()
+    expect(config.profiles['security-auditor'].providerId).toBeUndefined()
     expect(config.profiles['custom-disabled']).toBeUndefined()
   })
 })

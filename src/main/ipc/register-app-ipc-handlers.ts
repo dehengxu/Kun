@@ -51,6 +51,7 @@ import {
   clawTaskFromTextPayloadSchema,
   computerUsePermissionKindSchema,
   conversationExportPayloadSchema,
+  cursorSubscriptionDiscoveryPayloadSchema,
   deepseekConfigContentSchema,
   desktopCommandSchema,
   defaultPathSchema,
@@ -160,6 +161,13 @@ import {
   submitGrokBrowserAuthCode,
   cancelGrokBrowserAuth
 } from '../grok-auth'
+import {
+  antigravityCliDownloadState,
+  fetchAntigravityModels,
+  resolveAntigravityCliBinary,
+  startAntigravityCliInstall
+} from '../antigravity-cli'
+import { discoverCursorSubscription } from '../cursor-subscription-models'
 import type { WorkflowRuntime } from '../workflow-runtime'
 import { checkWorkflowCode } from '../workflow-runtime'
 import {
@@ -788,6 +796,37 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       binaryPath: claudeSubBinary()
     })
   )
+  const antigravityBinary = (): string | undefined =>
+    resolveAntigravityCliBinary(app.getPath('userData'))
+  ipcMain.handle('gemini-subscription:cli-status', async () => ({
+    installed: Boolean(antigravityBinary()),
+    ...(antigravityBinary() ? { path: antigravityBinary() } : {}),
+    download: antigravityCliDownloadState()
+  }))
+  ipcMain.handle('gemini-subscription:cli-install', async () =>
+    startAntigravityCliInstall(
+      { userDataDir: app.getPath('userData'), proxyUrl: resolveModelProviderProxyUrl(await store.load()) },
+      (state) => getMainWindow()?.webContents.send('gemini-subscription:cli-progress', state)
+    )
+  )
+  ipcMain.handle('gemini-subscription:models', async () => {
+    const binaryPath = antigravityBinary()
+    if (!binaryPath) {
+      throw new Error('Antigravity CLI is not installed. Install it from the Gemini subscription settings first.')
+    }
+    return fetchAntigravityModels({ binaryPath })
+  })
+  ipcMain.handle('cursor-subscription:discover', async (_event, payload: unknown) => {
+    const { apiKey } = parseIpcPayload(
+      'cursor-subscription:discover',
+      cursorSubscriptionDiscoveryPayloadSchema,
+      payload
+    )
+    return discoverCursorSubscription({
+      apiKey,
+      kunRoots: claudeSubKunDirs()
+    })
+  })
   ipcMain.handle('settings:set', async (event, partial: unknown) =>
     applyProtectedSettingsPatch(
       event,

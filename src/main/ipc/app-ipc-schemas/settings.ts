@@ -60,6 +60,11 @@ const clawTaskStatusSchema = z.enum(['idle', 'queued', 'running', 'success', 'er
 export const scheduleReasoningEffortSchema = z.enum(SCHEDULE_REASONING_EFFORT_IDS)
 export const modelIdSchema = z.string().trim().min(1).max(MAX_MODEL_ID_LENGTH)
 export const optionalModelIdSchema = z.string().trim().max(MAX_MODEL_ID_LENGTH).optional()
+export const cursorSubscriptionDiscoveryPayloadSchema = z
+  .object({
+    apiKey: z.string().trim().min(1).max(MAX_BODY_BYTES)
+  })
+  .strict()
 const writeInlineCompletionModelSchema = z.union([
   z.enum(WRITE_INLINE_COMPLETION_MODEL_IDS),
   modelIdSchema
@@ -134,7 +139,7 @@ const modelProviderPatchSchema = z.object({
       initialDelayMs: z.number().int().min(0).max(600_000).optional(),
       httpStatusCodes: z.array(z.number().int().min(400).max(599)).max(64).optional()
     }).strict().optional(),
-    kind: z.enum(['http', 'agent-sdk']).optional(),
+    kind: z.enum(['http', 'agent-sdk', 'antigravity-cli', 'cursor-sdk', 'gemini-code-assist']).optional(),
     // Some third-party aggregators (litellm, oneapi, …) advertise 500+ chat
     // models in a single /v1/models response. The previous 200/50 caps caused
     // settings:set to silently fail with no toast (#397). Raised to leave

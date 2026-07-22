@@ -4,22 +4,26 @@ import type { ToolHostContext } from '../../ports/tool-host.js'
 import { buildDelegationToolProviders } from './delegation-tool-provider.js'
 
 describe('delegate_task observability output', () => {
-  it('documents that custom agents inherit the current turn model and provider', () => {
+  it('keeps child runtime selection out of model-facing schemas', () => {
     const runtime = {
       enabled: () => true,
       listProfiles: () => [],
       defaultToolPolicy: 'inherit'
     } as unknown as DelegationRuntime
-    const tool = buildDelegationToolProviders(runtime)[0]?.tools
-      .find((candidate) => candidate.name === 'delegate_task')
-    const properties = tool?.inputSchema.properties as Record<string, { description?: string }> | undefined
+    const tools = buildDelegationToolProviders(runtime)[0]?.tools ?? []
+    const delegateTool = tools.find((candidate) => candidate.name === 'delegate_task')
+    const generateTool = tools.find((candidate) => candidate.name === 'generate_subagent')
+    const properties = delegateTool?.inputSchema.properties as Record<string, { description?: string }> | undefined
+    const generatedProperties = generateTool?.inputSchema.properties as Record<string, unknown> | undefined
 
-    expect(tool?.description).toContain('custom_agent always inherits the current turn model, provider, and reasoning strength')
-    expect(properties?.model?.description).toContain('Ignored with custom_agent')
-    expect(properties?.providerId?.description).toContain('Ignored with custom_agent')
+    expect(delegateTool?.description).toContain('not tool-call arguments')
+    expect(properties).not.toHaveProperty('model')
+    expect(properties).not.toHaveProperty('providerId')
+    expect(generatedProperties).not.toHaveProperty('model')
+    expect(generatedProperties).not.toHaveProperty('providerId')
     expect(properties?.custom_agent?.description).toContain('always inherits the current turn model/provider/reasoning strength')
-    const customProperties = (properties?.custom_agent as { properties?: Record<string, { description?: string }> })?.properties
-    expect(customProperties?.reasoning_effort?.description).toContain('inherit the current turn reasoning strength')
+    const customProperties = (properties?.custom_agent as { properties?: Record<string, unknown> })?.properties
+    expect(customProperties).not.toHaveProperty('reasoning_effort')
   })
 
   it('includes the effective model and snapshotted profile name in live and final output', async () => {
@@ -64,7 +68,9 @@ describe('delegate_task observability output', () => {
     const updates: unknown[] = []
     const result = await tool!.execute({
       label: 'Audit pass',
-      prompt: 'Audit the change'
+      prompt: 'Audit the change',
+      model: 'stale-model',
+      providerId: 'stale-provider'
     }, context(), (update) => {
       updates.push(update.output)
     })
@@ -100,6 +106,9 @@ describe('delegate_task observability output', () => {
       inheritedProviderId: 'openai',
       inheritedReasoningEffort: 'high'
     }))
+    const childInput = runChild.mock.calls[0]?.[0]
+    expect(childInput).not.toHaveProperty('model')
+    expect(childInput).not.toHaveProperty('providerId')
   })
 })
 

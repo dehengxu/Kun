@@ -99,6 +99,7 @@ describe('resolveModelsDevProvider', () => {
     ['tencentcloud-token-plan', 'https://api.lkeap.cloud.tencent.com/plan/v3', 'tencent-token-plan', 'catalog'],
     ['codex', 'https://chatgpt.com/backend-api/codex/responses', 'openai', 'enrichment-only'],
     ['claude-subscription', 'https://api.anthropic.com', 'anthropic', 'enrichment-only'],
+    ['gemini-subscription', '', 'google', 'enrichment-only'],
     ['grok-subscription', 'https://cli-chat-proxy.grok.com/v1', 'xai', 'enrichment-only'],
     ['vercel-ai-gateway', 'https://ai-gateway.vercel.sh/v1', 'vercel', 'catalog']
   ])('maps %s deterministically', (providerId, baseUrl, providerKey, matchMode) => {

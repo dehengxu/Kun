@@ -5,7 +5,6 @@ import { resolveRoleModel } from '../loop/title-generator.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../ports/model-client.js'
 import type { UsageSnapshot } from '../contracts/usage.js'
 import {
-  ModelReasoningEffort,
   SubagentProfileConfig,
   type SubagentToolPolicy
 } from '../contracts/capabilities.js'
@@ -38,8 +37,7 @@ export const CustomSubagentDefinitionSchema = z.object({
   description: z.string().trim().min(1).max(500),
   systemPrompt: z.string().trim().min(1).max(12_000),
   toolPolicy: z.enum(['readOnly', 'inherit']).default('readOnly'),
-  blockedTools: z.array(z.string().trim().min(1)).max(32).optional(),
-  reasoningEffort: ModelReasoningEffort.optional()
+  blockedTools: z.array(z.string().trim().min(1)).max(32).optional()
 }).strict()
 export type CustomSubagentDefinition = z.infer<typeof CustomSubagentDefinitionSchema>
 
@@ -299,8 +297,7 @@ export function customSubagentProfile(definition: CustomSubagentDefinition): Sub
     toolPolicy: parsed.toolPolicy,
     systemPrompt: parsed.systemPrompt,
     blockedTools: unique(['delegate_task', 'generate_subagent', 'load_skill', ...(parsed.blockedTools ?? [])]),
-    skillsEnabled: false,
-    ...(parsed.reasoningEffort ? { reasoningEffort: parsed.reasoningEffort } : {})
+    skillsEnabled: false
   })
 }
 

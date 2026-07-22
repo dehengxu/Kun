@@ -56,6 +56,7 @@ import {
 } from './claw-schedule-mcp-config'
 import { defaultKunDataDir } from './runtime/kun-adapter'
 import { resolveClaudeBinary } from './agent-sdk-installer'
+import { resolveAntigravityCliBinary } from './antigravity-cli'
 import { appendManagedLogLine } from './logger'
 import {
   KunProcessController,
@@ -342,12 +343,14 @@ async function startKunChildOnce(
   // not bundled; it's downloaded into userData). Absent in dev when it's still
   // resolvable from kun/node_modules — the SDK auto-resolves it there.
   const claudeBinary = resolveClaudeBinary(app.getPath('userData'), [join(appRoot(), 'kun')])
+  const antigravityBinary = resolveAntigravityCliBinary(app.getPath('userData'))
   const childEnv: NodeJS.ProcessEnv = {
     ...process.env,
     KUN_RUNTIME_TOKEN: runtime.runtimeToken,
     DEEPSEEK_API_KEY: defaultClientApiKey || process.env.DEEPSEEK_API_KEY || '',
-    ...(activeProviderKind === 'agent-sdk' ? { KUN_RUNTIME_PROVIDER_KIND: 'agent-sdk' } : {}),
-    ...(claudeBinary ? { KUN_CLAUDE_BINARY: claudeBinary } : {})
+    ...(activeProviderKind ? { KUN_RUNTIME_PROVIDER_KIND: activeProviderKind } : {}),
+    ...(claudeBinary ? { KUN_CLAUDE_BINARY: claudeBinary } : {}),
+    ...(antigravityBinary ? { KUN_ANTIGRAVITY_BINARY: antigravityBinary } : {})
   }
   const bundledExtensionsDirectory = availableBundledExtensionsDirectory({
     isPackaged: app.isPackaged,

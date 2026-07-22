@@ -13,7 +13,7 @@ import type {
   ModelReasoningEffort
 } from '@shared/app-settings'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
-import { KUN_RUNTIME_TOOLS_PATH } from '@shared/kun-endpoints'
+import { KUN_RUNTIME_TOOLS_PATH, kunDelegationProfilesPath } from '@shared/kun-endpoints'
 import type { CoreRuntimeToolDiagnosticsJson } from '../../agent/kun-contract'
 import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { confirmDialog } from '../../lib/confirm-dialog'
@@ -119,14 +119,96 @@ const AGENT_CATEGORY_ORDER: readonly AgentCategory[] = [
   'custom'
 ]
 
+type CatalogAgentSource = 'builtin' | 'configured' | 'workspace'
+
 type CatalogAgent = {
   profile: KunSubagentProfileV1
   builtin: boolean
+  source: CatalogAgentSource
+  filePath?: string
   name: string
   desc: string
   category: AgentCategory
   baseAgent: boolean
   searchText: string
+}
+
+type WorkspaceAgentJson = {
+  id: string
+  source: 'workspace'
+  filePath?: string
+  name?: string
+  description?: string
+  mode?: KunSubagentProfileV1['mode']
+  toolPolicy?: KunSubagentProfileV1['toolPolicy']
+  color?: string
+  systemPrompt?: string
+  promptPreamble?: string
+  allowedTools?: string[]
+  blockedTools?: string[]
+}
+
+function workspaceProfileToKun(entry: WorkspaceAgentJson): KunSubagentProfileV1 {
+  return {
+    id: entry.id,
+    enabled: true,
+    name: entry.name?.trim() || entry.id,
+    description: entry.description,
+    mode: entry.mode === 'primary' || entry.mode === 'all' ? entry.mode : 'subagent',
+    toolPolicy: entry.toolPolicy === 'inherit' ? 'inherit' : 'readOnly',
+    color: entry.color,
+    systemPrompt: entry.systemPrompt,
+    promptPreamble: entry.promptPreamble,
+    allowedTools: entry.allowedTools,
+    blockedTools: entry.blockedTools,
+    // Workspace markdown roles are available on every surface unless the file
+    // later gains an explicit surfaces field; shared keeps them in the base pool.
+    surfaces: ['shared']
+  }
+}
+
+async function loadWorkspaceAgentCatalog(workspaceRoot: string): Promise<WorkspaceAgentJson[]> {
+  const workspace = workspaceRoot.trim()
+  if (!workspace) return []
+  try {
+    const res = await rendererRuntimeClient.runtimeRequest(
+      kunDelegationProfilesPath(workspace),
+      'GET'
+    )
+    if (!res.ok) return []
+    const data = JSON.parse(res.body) as { profiles?: unknown }
+    if (!Array.isArray(data.profiles)) return []
+    return data.profiles.flatMap((raw) => {
+      if (!raw || typeof raw !== 'object') return []
+      const rec = raw as Record<string, unknown>
+      const id = typeof rec.id === 'string' ? rec.id.trim() : ''
+      if (!id || rec.source !== 'workspace') return []
+      return [{
+        id,
+        source: 'workspace' as const,
+        ...(typeof rec.filePath === 'string' ? { filePath: rec.filePath } : {}),
+        ...(typeof rec.name === 'string' ? { name: rec.name } : {}),
+        ...(typeof rec.description === 'string' ? { description: rec.description } : {}),
+        ...(rec.mode === 'primary' || rec.mode === 'all' || rec.mode === 'subagent'
+          ? { mode: rec.mode }
+          : {}),
+        ...(rec.toolPolicy === 'inherit' || rec.toolPolicy === 'readOnly'
+          ? { toolPolicy: rec.toolPolicy }
+          : {}),
+        ...(typeof rec.color === 'string' ? { color: rec.color } : {}),
+        ...(typeof rec.systemPrompt === 'string' ? { systemPrompt: rec.systemPrompt } : {}),
+        ...(typeof rec.promptPreamble === 'string' ? { promptPreamble: rec.promptPreamble } : {}),
+        ...(Array.isArray(rec.allowedTools)
+          ? { allowedTools: rec.allowedTools.filter((item): item is string => typeof item === 'string') }
+          : {}),
+        ...(Array.isArray(rec.blockedTools)
+          ? { blockedTools: rec.blockedTools.filter((item): item is string => typeof item === 'string') }
+          : {})
+      }]
+    })
+  } catch {
+    return []
+  }
 }
 
 function newProfile(surface: SurfaceTab): KunSubagentProfileV1 {
@@ -235,6 +317,7 @@ export function SubagentSettingsEditor({
   const { t: tSettings } = useTranslation('settings')
   const composerModelGroups = useChatStore((s) => s.composerModelGroups)
   const activeRoute = useChatStore((s) => s.route)
+  const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const loadComposerModels = useChatStore((s) => s.loadComposerModels)
   const [dialog, setDialog] = useState<{ profile: KunSubagentProfileV1; isNew: boolean } | null>(null)
   const [catalogQuery, setCatalogQuery] = useState('')
@@ -246,6 +329,7 @@ export function SubagentSettingsEditor({
     () => new Set(AGENT_CATEGORY_ORDER.slice(1))
   )
   const [systemRolesOpen, setSystemRolesOpen] = useState(false)
+  const [workspaceAgents, setWorkspaceAgents] = useState<WorkspaceAgentJson[]>([])
   const subagents = kun.subagents ?? EMPTY_SUBAGENTS
   // Compaction always runs in model mode (the heuristic fold is only a silent
   // fallback when the model call fails), so there is no user-facing mode toggle.
@@ -265,6 +349,34 @@ export function SubagentSettingsEditor({
   const codeReviewReasoning = kun.codeReviewReasoningEffort ?? 'off'
 
   useEffect(() => { void loadComposerModels() }, [loadComposerModels])
+
+  useEffect(() => {
+    let cancelled = false
+    const workspace = workspaceRoot?.trim() ?? ''
+    if (!workspace) {
+      setWorkspaceAgents([])
+      return
+    }
+    void loadWorkspaceAgentCatalog(workspace).then((agents) => {
+      if (cancelled) return
+      setWorkspaceAgents(agents)
+      if (agents.length === 0) return
+      // Sidebar defaults to the base filter; promote to "all" once so
+      // workspace-defined custom roles are visible without hunting filters.
+      if (variant === 'panel') {
+        setCategoryFilter((current) => (current === 'base' ? 'all' : current))
+      }
+      setCollapsedCategories((current) => {
+        if (!current.has('custom')) return current
+        const next = new Set(current)
+        next.delete('custom')
+        return next
+      })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [variant, workspaceRoot])
 
   const patchSubagents = useCallback((patch: Partial<KunSubagentsSettingsV1>): void => {
     void onPatch({
@@ -341,6 +453,26 @@ export function SubagentSettingsEditor({
       const patched = { ...baseline, reasoningEffort }
       if (existingIdx >= 0) next[existingIdx] = patched
       else next.push(patched)
+    }
+    persistProfiles(next)
+  }, [subagents.profiles, persistProfiles])
+
+  const resetCategoryConfiguration = useCallback((ids: string[]): void => {
+    if (ids.length === 0) return
+    let next = [...subagents.profiles]
+    for (const id of ids) {
+      const existingIdx = next.findIndex((profile) => profile.id === id)
+      const baseline = (existingIdx >= 0 ? next[existingIdx] : undefined)
+        ?? BUILTIN_AGENTS.find((profile) => profile.id === id)
+      if (!baseline) continue
+      const reset = {
+        ...baseline,
+        model: undefined,
+        providerId: undefined,
+        reasoningEffort: undefined
+      }
+      if (existingIdx >= 0) next[existingIdx] = reset
+      else next.push(reset)
     }
     persistProfiles(next)
   }, [subagents.profiles, persistProfiles])
@@ -451,30 +583,97 @@ export function SubagentSettingsEditor({
     upsertProfile(id, { surfaces: next })
   }, [delegatable, upsertProfile])
 
-  const catalogAgents = useMemo<CatalogAgent[]>(() => delegatable.map((profile) => {
-    const builtin = isBuiltin(profile.id)
-    const metadata = BUILTIN_AGENT_BY_ID.get(profile.id)
-    const name = builtin
-      ? t(`subagentsPanel.role.${profile.id}.name`, profile.name || profile.id)
-      : profile.name || profile.id
-    const desc = builtin
-      ? t(`subagentsPanel.role.${profile.id}.desc`, profile.description ?? '')
-      : (profile.description ?? '')
-    const category: AgentCategory = metadata?.category ?? 'custom'
-    const baseAgent = metadata?.family === 'base'
-    const searchText = [
-      profile.id,
-      name,
-      desc,
-      metadata?.name,
-      metadata?.description,
-      ...(metadata?.routingTerms ?? [])
-    ].filter(Boolean).join(' ').toLocaleLowerCase()
-    return { profile, builtin, name, desc, category, baseAgent, searchText }
-  }).sort((left, right) => {
-    const categoryDelta = AGENT_CATEGORY_ORDER.indexOf(left.category) - AGENT_CATEGORY_ORDER.indexOf(right.category)
-    return categoryDelta || left.name.localeCompare(right.name)
-  }), [delegatable, t])
+  const catalogAgents = useMemo<CatalogAgent[]>(() => {
+    const workspaceById = new Map(workspaceAgents.map((entry) => [entry.id, entry]))
+    const seen = new Set<string>()
+    const rows: CatalogAgent[] = []
+
+    for (const profile of delegatable) {
+      const workspace = workspaceById.get(profile.id)
+      const builtin = isBuiltin(profile.id)
+      const metadata = BUILTIN_AGENT_BY_ID.get(profile.id)
+      if (workspace) {
+        const merged = {
+          ...workspaceProfileToKun(workspace),
+          // Keep any GUI surface/model overrides when the same id exists in settings,
+          // but the role body still comes from the workspace markdown overlay.
+          ...(profile.surfaces !== undefined ? { surfaces: profile.surfaces } : {}),
+          ...(profile.model ? { model: profile.model } : {}),
+          ...(profile.providerId ? { providerId: profile.providerId } : {}),
+          ...(profile.reasoningEffort ? { reasoningEffort: profile.reasoningEffort } : {})
+        }
+        const name = merged.name || merged.id
+        const desc = merged.description ?? ''
+        rows.push({
+          profile: merged,
+          builtin: false,
+          source: 'workspace',
+          ...(workspace.filePath ? { filePath: workspace.filePath } : {}),
+          name,
+          desc,
+          // Overlays of first-party ids keep their catalog category so Base/filters
+          // still find them; pure workspace ids land in custom.
+          category: metadata?.category ?? 'custom',
+          baseAgent: metadata?.family === 'base',
+          searchText: [merged.id, name, desc, workspace.filePath, metadata?.name, metadata?.description]
+            .filter(Boolean)
+            .join(' ')
+            .toLocaleLowerCase()
+        })
+        seen.add(profile.id)
+        continue
+      }
+      const name = builtin
+        ? t(`subagentsPanel.role.${profile.id}.name`, profile.name || profile.id)
+        : profile.name || profile.id
+      const desc = builtin
+        ? t(`subagentsPanel.role.${profile.id}.desc`, profile.description ?? '')
+        : (profile.description ?? '')
+      const category: AgentCategory = metadata?.category ?? 'custom'
+      const baseAgent = metadata?.family === 'base'
+      rows.push({
+        profile,
+        builtin,
+        source: builtin ? 'builtin' : 'configured',
+        name,
+        desc,
+        category,
+        baseAgent,
+        searchText: [
+          profile.id,
+          name,
+          desc,
+          metadata?.name,
+          metadata?.description,
+          ...(metadata?.routingTerms ?? [])
+        ].filter(Boolean).join(' ').toLocaleLowerCase()
+      })
+      seen.add(profile.id)
+    }
+
+    for (const workspace of workspaceAgents) {
+      if (seen.has(workspace.id)) continue
+      const profile = workspaceProfileToKun(workspace)
+      const name = profile.name || profile.id
+      const desc = profile.description ?? ''
+      rows.push({
+        profile,
+        builtin: false,
+        source: 'workspace',
+        ...(workspace.filePath ? { filePath: workspace.filePath } : {}),
+        name,
+        desc,
+        category: 'custom',
+        baseAgent: false,
+        searchText: [profile.id, name, desc, workspace.filePath].filter(Boolean).join(' ').toLocaleLowerCase()
+      })
+    }
+
+    return rows.sort((left, right) => {
+      const categoryDelta = AGENT_CATEGORY_ORDER.indexOf(left.category) - AGENT_CATEGORY_ORDER.indexOf(right.category)
+      return categoryDelta || left.name.localeCompare(right.name)
+    })
+  }, [delegatable, t, workspaceAgents])
 
   const panelSurface: Exclude<SurfaceTab, 'shared'> = activeRoute === 'write'
     ? 'write'
@@ -647,18 +846,20 @@ export function SubagentSettingsEditor({
                     expanded={expanded}
                     onToggle={() => toggleCategory(category)}
                     t={t}
-                    modelAction={(
+                    summary={categoryConfigurationSummary(agents, t)}
+                    configuration={(
                       <CategoryBatchControls
                         agents={agents}
                         groups={composerModelGroups}
                         categoryLabel={categoryLabel}
                         onModelsChange={setCategoryModels}
                         onReasoningChange={setCategoryReasoning}
+                        onReset={resetCategoryConfiguration}
                         t={t}
                       />
                     )}
                   >
-                    <div className="grid gap-2 pb-3 sm:grid-cols-2">
+                    <div className="grid gap-2 sm:grid-cols-2">
                       {agents.map((agent) => (
                         <CatalogAgentRow
                           key={agent.profile.id}
@@ -894,20 +1095,23 @@ export function SubagentSettingsEditor({
               onToggle={() => toggleCategory(category)}
               t={t}
               compact
-              modelAction={(
+              summary={categoryConfigurationSummary(agents, t)}
+              configuration={(
                 <CategoryBatchControls
                   agents={agents}
                   groups={composerModelGroups}
                   categoryLabel={categoryLabel}
                   onModelsChange={setCategoryModels}
                   onReasoningChange={setCategoryReasoning}
+                  onReset={resetCategoryConfiguration}
                   t={t}
                 />
               )}
             >
-              <div className="space-y-1 pb-2">
+              <div className="space-y-1">
                 {agents.map((agent) => {
                   const selected = selectedCatalogAgent?.profile.id === agent.profile.id
+                  const workspaceLocked = agent.source === 'workspace'
                   return (
                     <CatalogAgentRow
                       key={agent.profile.id}
@@ -919,32 +1123,45 @@ export function SubagentSettingsEditor({
                     >
                       {selected ? (
                         <div className="space-y-2 border-t border-ds-border-muted px-3 py-2.5">
-                          <div className="flex items-center gap-2">
-                            <ModelSelect
-                              value={agent.profile.model ?? ''}
-                              providerId={agent.profile.providerId ?? ''}
-                              groups={composerModelGroups}
-                              stretch
-                              onChange={(model, providerId) => setProfileModel(agent.profile.id, model, providerId)}
-                            />
-                            <RowActions
-                              enabled={agent.profile.enabled}
-                              builtin={agent.builtin}
-                              t={t}
-                              onToggle={() => toggleEnabled(agent.profile.id)}
-                              onEdit={() => setDialog({ profile: { ...agent.profile }, isNew: false })}
-                              onDelete={() => void removeProfile(agent.profile.id)}
-                            />
-                          </div>
-                          <ReasoningEffortPicker
-                            value={normalizeStoredReasoning(agent.profile.reasoningEffort)}
-                            options={resolveReasoningOptions(
-                              composerModelGroups,
-                              agent.profile.model ?? '',
-                              agent.profile.providerId ?? ''
-                            )}
-                            onChange={(effort) => setProfileReasoning(agent.profile.id, effort)}
-                          />
+                          {workspaceLocked ? (
+                            <div className="rounded-lg border border-ds-border-muted bg-ds-card-muted px-2.5 py-2 text-[10.5px] leading-4 text-ds-muted">
+                              {t('subagentsPanel.workspaceReadOnly', 'Edit this role in .kun/agents/*.md')}
+                              {agent.filePath ? (
+                                <div className="mt-1 truncate text-[9.5px] text-ds-faint" title={agent.filePath}>
+                                  {agent.filePath}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <ModelSelect
+                                  value={agent.profile.model ?? ''}
+                                  providerId={agent.profile.providerId ?? ''}
+                                  groups={composerModelGroups}
+                                  stretch
+                                  onChange={(model, providerId) => setProfileModel(agent.profile.id, model, providerId)}
+                                />
+                                <RowActions
+                                  enabled={agent.profile.enabled}
+                                  builtin={agent.builtin}
+                                  t={t}
+                                  onToggle={() => toggleEnabled(agent.profile.id)}
+                                  onEdit={() => setDialog({ profile: { ...agent.profile }, isNew: false })}
+                                  onDelete={() => void removeProfile(agent.profile.id)}
+                                />
+                              </div>
+                              <ReasoningEffortPicker
+                                value={normalizeStoredReasoning(agent.profile.reasoningEffort)}
+                                options={resolveReasoningOptions(
+                                  composerModelGroups,
+                                  agent.profile.model ?? '',
+                                  agent.profile.providerId ?? ''
+                                )}
+                                onChange={(effort) => setProfileReasoning(agent.profile.id, effort)}
+                              />
+                            </>
+                          )}
                         </div>
                       ) : null}
                     </CatalogAgentRow>
@@ -1189,12 +1406,28 @@ function sharedCategoryReasoning(agents: CatalogAgent[]): {
   return mixed ? { effort: 'off', mixed: true } : { effort, mixed: false }
 }
 
+function categoryConfigurationSummary(
+  agents: CatalogAgent[],
+  t: TFunction<'common'>
+): string {
+  const sharedModel = sharedCategoryModel(agents)
+  const sharedReasoning = sharedCategoryReasoning(agents)
+  if (sharedModel.mixed || sharedReasoning.mixed) {
+    return t('subagentsPanel.mixedConfiguration', 'Multiple configurations')
+  }
+  const model = sharedModel.model || t('agentsView.followDefault', 'Follow default')
+  const reasoning = REASONING_OPTIONS.find((option) => option.id === sharedReasoning.effort)
+  const reasoningLabel = reasoning ? t(reasoning.labelKey, reasoning.id) : sharedReasoning.effort
+  return `${model} · ${reasoningLabel}`
+}
+
 function CategoryBatchControls({
   agents,
   groups,
   categoryLabel,
   onModelsChange,
   onReasoningChange,
+  onReset,
   t
 }: {
   agents: CatalogAgent[]
@@ -1202,45 +1435,80 @@ function CategoryBatchControls({
   categoryLabel: string
   onModelsChange: (ids: string[], model: string, providerId: string) => void
   onReasoningChange: (ids: string[], effort: ModelReasoningEffort) => void
+  onReset: (ids: string[]) => void
   t: TFunction<'common'>
 }): ReactElement {
   const shared = sharedCategoryModel(agents)
   const sharedReasoning = sharedCategoryReasoning(agents)
   const ids = agents.map((agent) => agent.profile.id)
+  const hasOverrides = agents.some((agent) =>
+    Boolean(agent.profile.model || agent.profile.providerId || agent.profile.reasoningEffort))
   const reasoningOptions = shared.mixed
     ? REASONING_OPTIONS
     : resolveReasoningOptions(groups, shared.model, shared.providerId)
   return (
-    <div className="flex max-w-[240px] flex-col items-end gap-1 pr-1">
-      <ModelSelect
-        value={shared.model}
-        providerId={shared.providerId}
-        groups={groups}
-        small
-        emptyLabel={shared.mixed
-          ? t('subagentsPanel.mixedModels', 'Mixed models')
-          : undefined}
-        ariaLabel={t(
-          'subagentsPanel.batchModelAria',
-          'Set the same model for all {{count}} agents in {{category}}',
-          { count: agents.length, category: categoryLabel }
-        )}
-        onChange={(model, providerId) => onModelsChange(ids, model, providerId)}
-      />
-      <ReasoningEffortPicker
-        value={sharedReasoning.mixed ? null : sharedReasoning.effort}
-        options={reasoningOptions}
-        compact
-        mixedLabel={sharedReasoning.mixed
-          ? t('subagentsPanel.mixedReasoning', 'Mixed reasoning')
-          : undefined}
-        ariaLabel={t(
-          'subagentsPanel.batchReasoningAria',
-          'Set the same reasoning effort for all {{count}} agents in {{category}}',
-          { count: agents.length, category: categoryLabel }
-        )}
-        onChange={(effort) => onReasoningChange(ids, effort)}
-      />
+    <div
+      data-testid="subagent-category-configuration"
+      className="mb-2.5 rounded-xl border border-ds-border-muted bg-ds-main/45 p-3"
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[11.5px] font-semibold text-ds-heading">
+            {t('subagentsPanel.categoryConfiguration', 'Category default configuration')}
+          </div>
+          <div className="mt-0.5 text-[10px] text-ds-faint">
+            {t('subagentsPanel.categoryConfigurationDesc', 'Apply the same defaults to every agent in this category')}
+          </div>
+        </div>
+        <button
+          type="button"
+          disabled={!hasOverrides}
+          onClick={() => onReset(ids)}
+          className="shrink-0 rounded-lg px-2 py-1 text-[10px] font-semibold text-accent transition hover:bg-accent-soft disabled:cursor-not-allowed disabled:text-ds-faint disabled:hover:bg-transparent"
+        >
+          {t('subagentsPanel.resetCategoryConfiguration', 'Reset defaults')}
+        </button>
+      </div>
+      <div className="grid gap-3 md:grid-cols-[minmax(160px,0.8fr)_minmax(280px,1.2fr)] md:items-end">
+        <div className="min-w-0">
+          <div className="mb-1.5 text-[9.5px] font-semibold uppercase tracking-wide text-ds-faint">
+            {t('agentsView.fModel', 'Model')}
+          </div>
+          <ModelSelect
+            value={shared.model}
+            providerId={shared.providerId}
+            groups={groups}
+            stretch
+            emptyLabel={shared.mixed
+              ? t('subagentsPanel.mixedModels', 'Mixed models')
+              : undefined}
+            ariaLabel={t(
+              'subagentsPanel.batchModelAria',
+              'Set the same model for all {{count}} agents in {{category}}',
+              { count: agents.length, category: categoryLabel }
+            )}
+            onChange={(model, providerId) => onModelsChange(ids, model, providerId)}
+          />
+        </div>
+        <div className="min-w-0">
+          <div className="mb-1.5 text-[9.5px] font-semibold uppercase tracking-wide text-ds-faint">
+            {t('subagentsPanel.reasoning', 'Reasoning')}
+          </div>
+          <ReasoningEffortPicker
+            value={sharedReasoning.mixed ? null : sharedReasoning.effort}
+            options={reasoningOptions}
+            mixedLabel={sharedReasoning.mixed
+              ? t('subagentsPanel.mixedReasoning', 'Mixed reasoning')
+              : undefined}
+            ariaLabel={t(
+              'subagentsPanel.batchReasoningAria',
+              'Set the same reasoning effort for all {{count}} agents in {{category}}',
+              { count: agents.length, category: categoryLabel }
+            )}
+            onChange={(effort) => onReasoningChange(ids, effort)}
+          />
+        </div>
+      </div>
     </div>
   )
 }
@@ -1482,7 +1750,8 @@ function AgentCategorySection({
   onToggle,
   t,
   compact = false,
-  modelAction,
+  summary,
+  configuration,
   children
 }: {
   category: AgentCategory
@@ -1491,31 +1760,70 @@ function AgentCategorySection({
   onToggle: () => void
   t: TFunction<'common'>
   compact?: boolean
-  modelAction?: ReactNode
+  summary: string
+  configuration?: ReactNode
   children: ReactNode
 }): ReactElement {
   const label = agentCategoryLabel(t, category)
   return (
-    <section data-agent-category={category}>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          aria-expanded={expanded}
-          aria-label={t('subagentsPanel.toggleCategory', 'Toggle {{category}} category', { category: label })}
-          onClick={onToggle}
-          className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left font-semibold text-ds-heading transition hover:bg-ds-hover ${
-            compact ? 'px-2 py-2 text-[11.5px]' : 'px-2 py-2.5 text-[12.5px]'
-          }`}
-        >
-          <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-ds-faint transition ${expanded ? 'rotate-90' : ''}`} />
-          <span className="truncate">{label}</span>
-          <span className="rounded-full bg-ds-card-muted px-1.5 py-0.5 text-[9.5px] font-semibold text-ds-muted">{count}</span>
-        </button>
-        {modelAction ? <div className="shrink-0">{modelAction}</div> : null}
-      </div>
-      {expanded ? children : null}
+    <section
+      data-agent-category={category}
+      className={`mb-2 overflow-visible rounded-xl border transition ${
+        expanded
+          ? 'border-accent/20 bg-ds-card shadow-sm shadow-black/[0.03]'
+          : 'border-ds-border-muted bg-ds-card/80 hover:border-accent/20'
+      }`}
+    >
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-label={t('subagentsPanel.toggleCategory', 'Toggle {{category}} category', { category: label })}
+        onClick={onToggle}
+        className={`flex w-full min-w-0 items-center gap-2 rounded-xl text-left font-semibold text-ds-heading transition hover:bg-ds-hover/60 ${
+          compact ? 'px-3 py-2.5 text-[11.5px]' : 'px-3 py-3 text-[12.5px]'
+        }`}
+      >
+        <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-ds-faint transition ${expanded ? 'rotate-90' : ''}`} />
+        <span className="truncate">{label}</span>
+        <span className="rounded-full bg-ds-card-muted px-1.5 py-0.5 text-[9.5px] font-semibold text-ds-muted">{count}</span>
+        {!expanded ? (
+          <span
+            title={summary}
+            className="ml-auto max-w-[55%] truncate rounded-full bg-ds-card-muted px-2 py-1 text-[9.5px] font-medium text-ds-muted"
+          >
+            {summary}
+          </span>
+        ) : null}
+      </button>
+      {expanded ? (
+        <div className={compact ? 'px-2.5 pb-2.5' : 'px-3 pb-3'}>
+          {configuration}
+          {children}
+        </div>
+      ) : null}
     </section>
   )
+}
+
+function agentSourceChip(
+  agent: Pick<CatalogAgent, 'builtin' | 'source'>,
+  t: TFunction<'common'>
+): ReactElement | null {
+  if (agent.source === 'workspace' || (!agent.builtin && agent.source === 'configured')) {
+    return (
+      <span className="shrink-0 rounded-full bg-violet-500/10 px-1.5 py-px text-[8.5px] font-semibold text-violet-600 dark:text-violet-400">
+        {t('subagentsPanel.customTag', 'Custom')}
+      </span>
+    )
+  }
+  if (agent.builtin || agent.source === 'builtin') {
+    return (
+      <span className="shrink-0 rounded-full bg-accent-soft px-1.5 py-px text-[8.5px] font-semibold text-accent">
+        {t('subagentsPanel.builtin', 'Built-in')}
+      </span>
+    )
+  }
+  return null
 }
 
 function CatalogAgentRow({
@@ -1533,12 +1841,13 @@ function CatalogAgentRow({
   t: TFunction<'common'>
   children?: ReactNode
 }): ReactElement {
-  const { profile, builtin, name, desc } = agent
+  const { profile, name, desc } = agent
   const settings = variant === 'settings'
   const modelLabel = profile.model || t('agentsView.followDefault', 'Follow default')
   return (
     <div
       data-agent-id={profile.id}
+      data-agent-source={agent.source}
       className={`overflow-visible rounded-xl border transition ${
         selected
           ? 'border-accent/70 bg-accent-soft/45 shadow-[0_0_0_1px_rgba(59,130,216,0.08)]'
@@ -1563,11 +1872,7 @@ function CatalogAgentRow({
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-1.5">
             <span className={`truncate font-semibold text-ds-heading ${settings ? 'text-[12.5px]' : 'text-[12px]'}`}>{name}</span>
-            {builtin ? (
-              <span className="shrink-0 rounded-full bg-accent-soft px-1.5 py-px text-[8.5px] font-semibold text-accent">
-                {t('subagentsPanel.builtin', 'Built-in')}
-              </span>
-            ) : null}
+            {agentSourceChip(agent, t)}
             {agent.baseAgent ? (
               <span className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-px text-[8.5px] font-semibold text-emerald-600 dark:text-emerald-400">
                 {t('subagentsPanel.surface.shared', 'Base')}
@@ -1582,11 +1887,16 @@ function CatalogAgentRow({
           ) : null}
         </span>
         {!settings ? (
-          <span
-            title={modelLabel}
-            className="max-w-[112px] shrink-0 truncate rounded-md bg-ds-card-muted px-2 py-1 text-[9.5px] font-semibold text-ds-muted"
-          >
-            {modelLabel}
+          <span className="flex max-w-[132px] shrink-0 flex-col items-end gap-0.5">
+            <span className="text-[8.5px] font-semibold uppercase tracking-wide text-ds-faint">
+              {t('subagentsPanel.effectiveModel', 'Effective model')}
+            </span>
+            <span
+              title={modelLabel}
+              className="max-w-full truncate text-[9.5px] font-semibold text-ds-muted"
+            >
+              {modelLabel}
+            </span>
           </span>
         ) : null}
         <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-ds-faint transition ${selected && !settings ? 'rotate-90' : ''}`} />
@@ -1619,11 +1929,12 @@ function AgentDetailsPanel({
   onDelete: () => void
   t: TFunction<'common'>
 }): ReactElement {
-  const { profile, builtin, name, desc, category } = agent
+  const { profile, builtin, name, desc, category, source, filePath } = agent
   const surfaces = profileSurfaces(profile)
   const inherited = selectedSurface !== 'shared' && surfaces.includes('shared')
   const assigned = inherited || surfaces.includes(selectedSurface)
-  const locked = profile.id === 'general' || inherited
+  const workspaceLocked = source === 'workspace'
+  const locked = profile.id === 'general' || inherited || workspaceLocked
   return (
     <aside className="lg:sticky lg:top-4" data-testid="subagent-details-panel">
       <div className="flex items-start gap-3">
@@ -1639,13 +1950,14 @@ function AgentDetailsPanel({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <h3 className="text-[14px] font-semibold text-ds-heading">{name}</h3>
-            {builtin ? (
-              <span className="rounded-full bg-accent-soft px-1.5 py-0.5 text-[9px] font-semibold text-accent">
-                {t('subagentsPanel.builtin', 'Built-in')}
-              </span>
-            ) : null}
+            {agentSourceChip(agent, t)}
           </div>
           <p className="mt-1 text-[11.5px] leading-5 text-ds-muted">{desc}</p>
+          {workspaceLocked && filePath ? (
+            <p className="mt-1 truncate text-[10px] text-ds-faint" title={filePath}>
+              {t('subagentsPanel.workspaceFile', 'Defined in {{path}}', { path: filePath })}
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -1678,23 +1990,35 @@ function AgentDetailsPanel({
           <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-ds-faint">
             {t('agentsView.fModel', 'Model')}
           </div>
-          <ModelSelect
-            value={profile.model ?? ''}
-            providerId={profile.providerId ?? ''}
-            groups={groups}
-            stretch
-            onChange={onModelChange}
-          />
+          {workspaceLocked ? (
+            <div className="rounded-lg border border-ds-border-muted bg-ds-card-muted px-3 py-2 text-[11px] text-ds-muted">
+              {t('agentsView.followDefault', 'Follow default')}
+            </div>
+          ) : (
+            <ModelSelect
+              value={profile.model ?? ''}
+              providerId={profile.providerId ?? ''}
+              groups={groups}
+              stretch
+              onChange={onModelChange}
+            />
+          )}
         </div>
         <div>
           <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-ds-faint">
             {t('subagentsPanel.reasoning', 'Reasoning')}
           </div>
-          <ReasoningEffortPicker
-            value={normalizeStoredReasoning(profile.reasoningEffort)}
-            options={resolveReasoningOptions(groups, profile.model ?? '', profile.providerId ?? '')}
-            onChange={onReasoningChange}
-          />
+          {workspaceLocked ? (
+            <div className="rounded-lg border border-ds-border-muted bg-ds-card-muted px-3 py-2 text-[11px] text-ds-muted">
+              {t('composerReasoningOff', 'Off')}
+            </div>
+          ) : (
+            <ReasoningEffortPicker
+              value={normalizeStoredReasoning(profile.reasoningEffort)}
+              options={resolveReasoningOptions(groups, profile.model ?? '', profile.providerId ?? '')}
+              onChange={onReasoningChange}
+            />
+          )}
         </div>
 
         <div>
@@ -1729,7 +2053,7 @@ function AgentDetailsPanel({
       </div>
 
       <div className="mt-5 flex items-center gap-2 border-t border-ds-border-muted pt-4">
-        {!builtin ? (
+        {!builtin && source !== 'workspace' ? (
           <button
             type="button"
             onClick={onToggle}
@@ -1739,15 +2063,21 @@ function AgentDetailsPanel({
             <Power className="h-3.5 w-3.5" />
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={onEdit}
-          className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[11.5px] font-semibold text-white transition hover:bg-accent/90"
-        >
-          <Pencil className="h-3.5 w-3.5" />
-          {t('agentsView.edit', 'Edit')}
-        </button>
-        {!builtin ? (
+        {source === 'workspace' ? (
+          <div className="flex-1 rounded-lg border border-ds-border-muted bg-ds-card-muted px-3 py-2 text-[11px] text-ds-muted">
+            {t('subagentsPanel.workspaceReadOnly', 'Edit this role in .kun/agents/*.md')}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[11.5px] font-semibold text-white transition hover:bg-accent/90"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+            {t('agentsView.edit', 'Edit')}
+          </button>
+        )}
+        {!builtin && source !== 'workspace' ? (
           <button
             type="button"
             onClick={onDelete}

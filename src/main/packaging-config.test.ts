@@ -116,11 +116,13 @@ function loadBuilderConfigWithEnv(env: Record<string, string | undefined>): type
 function createMacPackContext(root: string): {
   appOutDir: string
   electronPlatformName: string
+  arch: string
   packager: { appInfo: { productFilename: string } }
 } {
   return {
     appOutDir: join(root, 'mac-arm64'),
     electronPlatformName: 'darwin',
+    arch: 'arm64',
     packager: {
       appInfo: {
         productFilename: 'Kun'
@@ -202,6 +204,7 @@ describe('electron-builder Kun packaging', () => {
     for (const relativePath of afterPack.KUN_RUNTIME_REQUIRED_PATHS) {
       touch(join(unpackedRoot, relativePath))
     }
+    touch(join(unpackedRoot, 'kun/node_modules/@cursor/sdk-darwin-arm64/package.json'))
     touch(join(unpackedRoot, 'node_modules/better-sqlite3/package.json'))
 
     expect(() => afterPack._internals.validateBundledKunRuntime(context)).not.toThrow()

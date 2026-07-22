@@ -189,6 +189,67 @@ describe('runtime factory usage carryover', () => {
     }
   })
 
+  it('hot-applies Cursor credentials but restarts when Cursor routing ownership changes', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-cursor-apply-'))
+    tempDirs.push(dataDir)
+    const baseOptions = {
+      host: '127.0.0.1',
+      port: 0,
+      dataDir,
+      runtimeToken: 'tok',
+      apiKey: 'cursor-default',
+      baseUrl: '',
+      model: 'auto',
+      approvalPolicy: 'auto' as const,
+      sandboxMode: 'workspace-write' as const,
+      tokenEconomyMode: false,
+      insecure: false,
+      storage: { backend: 'file' as const },
+      capabilities: KunCapabilitiesConfig.parse({}),
+      providers: {
+        'cursor-subscription': {
+          kind: 'cursor-sdk' as const,
+          apiKey: 'cursor-before'
+        }
+      }
+    }
+    const runtime = await createKunServeRuntime(baseOptions)
+
+    try {
+      await expect(runtime.applyConfig({
+        serve: {
+          providers: {
+            'cursor-subscription': {
+              kind: 'cursor-sdk',
+              apiKey: 'cursor-after'
+            }
+          }
+        }
+      })).resolves.toEqual({ ok: true })
+
+      await expect(runtime.applyConfig({
+        serve: {
+          providers: {
+            'cursor-subscription': {
+              kind: 'cursor-sdk',
+              apiKey: 'cursor-after'
+            },
+            'cursor-second': {
+              kind: 'cursor-sdk',
+              apiKey: 'cursor-second'
+            }
+          }
+        }
+      })).resolves.toEqual({
+        ok: false,
+        code: 'restart_required',
+        message: 'delegated subscription provider routing changed and requires a runtime restart'
+      })
+    } finally {
+      await runtime.shutdown?.()
+    }
+  })
+
   it('clears per-thread runtime memory when a thread is deleted', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-delete-'))
     tempDirs.push(dataDir)

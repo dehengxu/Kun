@@ -107,6 +107,50 @@ describe('Web tool provider', () => {
     expect(built.searchAvailable).toBe(false)
   })
 
+  it('owns one-hour request timeouts and ignores stale model timeout arguments', async () => {
+    const config = KunCapabilitiesConfig.parse({
+      web: {
+        enabled: true,
+        fetchEnabled: true,
+        searchEnabled: true,
+        provider: 'test-search',
+        allowDomains: ['docs.example.test']
+      }
+    })
+    const provider = deterministicProvider()
+    const timeoutValues: number[] = []
+    const fetch = provider.fetch.bind(provider)
+    const search = provider.search.bind(provider)
+    provider.fetch = async (request) => {
+      timeoutValues.push(request.timeoutMs)
+      return fetch(request)
+    }
+    provider.search = async (request) => {
+      timeoutValues.push(request.timeoutMs)
+      return search(request)
+    }
+    const host = new LocalToolHost({
+      registry: new CapabilityRegistry(buildWebToolProviders(config.web, { provider }).providers)
+    })
+
+    const tools = await host.listTools(buildContext())
+    for (const tool of tools) {
+      expect(tool.inputSchema.properties).not.toHaveProperty('timeout_ms')
+    }
+    await host.execute({
+      callId: 'call_fetch_timeout',
+      toolName: 'web_fetch',
+      arguments: { url: 'https://docs.example.test/page', timeout_ms: 1 }
+    }, buildContext())
+    await host.execute({
+      callId: 'call_search_timeout',
+      toolName: 'web_search',
+      arguments: { query: 'kun web', timeout_ms: 1 }
+    }, buildContext())
+
+    expect(timeoutValues).toEqual([3_600_000, 3_600_000])
+  })
+
   it('fetches allowed URLs with source metadata and telemetry', async () => {
     const config = KunCapabilitiesConfig.parse({
       web: {

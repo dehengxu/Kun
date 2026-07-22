@@ -32,7 +32,7 @@ export const ModelRequestTraceHeadersSchema = z.object({
 export type ModelRequestTraceHeaders = z.infer<typeof ModelRequestTraceHeadersSchema>
 
 export const ModelRequestTraceRequestSchema = z.object({
-  method: z.literal('POST'),
+  method: z.enum(['POST', 'CLI', 'SDK']),
   url: z.string(),
   urlRedacted: z.boolean(),
   headers: ModelRequestTraceHeadersSchema,
@@ -74,6 +74,7 @@ export const ModelRequestTraceRecordSchema = z.object({
   turnId: z.string().min(1),
   provider: z.string(),
   model: z.string(),
+  transport: z.enum(['http', 'cli', 'sdk']).optional(),
   endpointFormat: z.string(),
   attempt: z.number().int().positive(),
   attemptReason: z.enum(['initial', 'transport_retry', 'stream_options_fallback']),

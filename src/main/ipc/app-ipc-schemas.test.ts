@@ -4,6 +4,7 @@ import {
   clawImInstallPollPayloadSchema,
   clawTaskFromTextPayloadSchema,
   conversationExportPayloadSchema,
+  cursorSubscriptionDiscoveryPayloadSchema,
   isSafeOpenExternalUrl,
   modelsDevCatalogPayloadSchema,
   runtimeRequestPayloadSchema,
@@ -26,6 +27,17 @@ import {
 } from './app-ipc-schemas'
 
 describe('app-ipc-schemas', () => {
+  it('accepts only a bounded Cursor API key for subscription discovery', () => {
+    expect(cursorSubscriptionDiscoveryPayloadSchema.parse({
+      apiKey: ' cursor-key '
+    })).toEqual({ apiKey: 'cursor-key' })
+    expect(() => cursorSubscriptionDiscoveryPayloadSchema.parse({
+      apiKey: 'cursor-key',
+      endpoint: 'https://private.cursor.example'
+    })).toThrow()
+    expect(() => cursorSubscriptionDiscoveryPayloadSchema.parse({ apiKey: '' })).toThrow()
+  })
+
   it('accepts only provider identity and refresh fields for models.dev lookup', () => {
     expect(modelsDevCatalogPayloadSchema.parse({
       providerId: 'xiaomi-token-plan',
@@ -197,6 +209,21 @@ describe('app-ipc-schemas', () => {
       path: '/v1/threads/thr_1/goal',
       method: 'DELETE'
     }).path).toBe('/v1/threads/thr_1/goal')
+  })
+
+  it('accepts the Kun delegation profiles endpoint', () => {
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/delegation/profiles',
+      method: 'GET'
+    }).path).toBe('/v1/delegation/profiles')
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/delegation/profiles?workspace=%2Ftmp%2Fproject',
+      method: 'GET'
+    }).path).toBe('/v1/delegation/profiles?workspace=%2Ftmp%2Fproject')
+    expect(() => runtimeRequestPayloadSchema.parse({
+      path: '/v1/delegation/profiles',
+      method: 'POST'
+    })).toThrow(/runtime request path is not allowed/)
   })
 
   it('accepts the Kun thread review endpoint', () => {

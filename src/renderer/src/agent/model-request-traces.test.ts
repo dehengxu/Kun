@@ -99,6 +99,56 @@ describe('model request trace renderer contract', () => {
     ))).toThrow('bounded array')
   })
 
+  it('accepts delegated CLI model requests without inventing an HTTP response', () => {
+    const parsed = parseModelRequestTracePage(page([{
+      ...record(),
+      transport: 'cli',
+      endpointFormat: 'antigravity-cli',
+      request: {
+        ...record().request,
+        method: 'CLI',
+        url: 'antigravity-cli://local/print',
+        headers: { values: {}, redactedNames: [] }
+      },
+      response: undefined
+    }]))
+
+    expect(parsed.records[0]).toMatchObject({
+      transport: 'cli',
+      endpointFormat: 'antigravity-cli',
+      request: {
+        method: 'CLI',
+        url: 'antigravity-cli://local/print'
+      }
+    })
+    expect(parsed.records[0].response).toBeUndefined()
+  })
+
+  it('accepts delegated SDK model requests without labeling them as HTTP or CLI', () => {
+    const parsed = parseModelRequestTracePage(page([{
+      ...record(),
+      transport: 'sdk',
+      endpointFormat: 'cursor-sdk',
+      request: {
+        ...record().request,
+        method: 'SDK',
+        url: 'cursor-sdk://local/agent',
+        headers: { values: {}, redactedNames: [] }
+      },
+      response: undefined
+    }]))
+
+    expect(parsed.records[0]).toMatchObject({
+      transport: 'sdk',
+      endpointFormat: 'cursor-sdk',
+      request: {
+        method: 'SDK',
+        url: 'cursor-sdk://local/agent'
+      }
+    })
+    expect(parsed.records[0].response).toBeUndefined()
+  })
+
   it('rejects malformed JSON and unbounded header values', () => {
     expect(() => parseModelRequestTracePageJson('{')).toThrow('invalid model request trace JSON')
     expect(() => parseModelRequestTracePage(page([{

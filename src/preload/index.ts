@@ -72,6 +72,19 @@ const api = {
     ipcRenderer.on('claude-subscription:sdk-progress', wrapped)
     return () => ipcRenderer.removeListener('claude-subscription:sdk-progress', wrapped)
   },
+  geminiSubscriptionCliStatus: () => ipcRenderer.invoke('gemini-subscription:cli-status'),
+  geminiSubscriptionCliInstall: () => ipcRenderer.invoke('gemini-subscription:cli-install'),
+  onGeminiSubscriptionCliProgress: (handler) => {
+    const wrapped = (
+      _: Electron.IpcRendererEvent,
+      payload: Parameters<typeof handler>[0]
+    ) => handler(payload)
+    ipcRenderer.on('gemini-subscription:cli-progress', wrapped)
+    return () => ipcRenderer.removeListener('gemini-subscription:cli-progress', wrapped)
+  },
+  geminiSubscriptionModels: () => ipcRenderer.invoke('gemini-subscription:models'),
+  cursorSubscriptionDiscover: (apiKey) =>
+    ipcRenderer.invoke('cursor-subscription:discover', { apiKey }),
   setSettings: (partial) =>
     ipcRenderer.invoke('settings:set', partial),
   saveSettingsSilent: (partial) =>

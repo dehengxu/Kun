@@ -718,7 +718,12 @@ describe('cli', () => {
         maxChildRuns: 10,
         defaultProfile: 'reviewer',
         profiles: {
-          reviewer: { model: 'deepseek-v4-pro', promptPreamble: 'Review for bugs.', toolPolicy: 'readOnly' },
+          reviewer: {
+            model: 'deepseek-v4-pro',
+            providerId: 'deepseek',
+            promptPreamble: 'Review for bugs.',
+            toolPolicy: 'readOnly'
+          },
           fixer: { toolPolicy: 'inherit' },
           helper: {}
         }
@@ -754,7 +759,13 @@ describe('cli', () => {
           maxParallel: 2,
           maxChildRuns: 6,
           defaultProfile: 'reviewer',
-          profiles: { reviewer: { model: 'deepseek-v4-pro', toolPolicy: 'readOnly' } }
+          profiles: {
+            reviewer: {
+              model: 'deepseek-v4-pro',
+              providerId: 'deepseek',
+              toolPolicy: 'readOnly'
+            }
+          }
         }
       }),
       subagents: { available: true }

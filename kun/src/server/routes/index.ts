@@ -266,7 +266,7 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('GET', '/v1/delegation/profiles', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    return delegationProfiles(runtime.delegationRuntime)
+    return delegationProfiles(runtime.delegationRuntime, request)
   })
   router.add('POST', '/v1/delegation/abort/:childId', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

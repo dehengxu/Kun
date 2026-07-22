@@ -19,9 +19,11 @@ import type { MemoryStore } from '../memory/memory-store.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { ModelClient } from '../ports/model-client.js'
 import { RandomIdGenerator } from '../ports/id-generator.js'
+import type { ApprovalGate } from '../ports/approval-gate.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { ToolHost } from '../ports/tool-host.js'
+import type { DelegatedTurnRuntime } from '../runtime/delegated-turn-runtime.js'
 import type { SkillRuntime } from '../skills/skill-runtime.js'
 import type { InstructionRuntime } from '../instructions/instruction-runtime.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
@@ -29,6 +31,23 @@ import { ThreadService } from '../services/thread-service.js'
 import { TurnService } from '../services/turn-service.js'
 import { UsageService } from '../services/usage-service.js'
 import type { ChildRunExecutor } from './delegation-runtime.js'
+
+export type ChildDelegatedRuntimeFactory = (input: {
+  turns: TurnService
+  sessionStore: SessionStore
+  threadStore: ThreadStore
+  events: RuntimeEventRecorder
+  ids: { next(prefix: string): string }
+  prefix: ImmutablePrefix
+  toolPolicy: 'readOnly' | 'inherit'
+  allowedToolNames?: readonly string[]
+  allowedProviderIds?: readonly string[]
+  blockedToolNames?: readonly string[]
+  blockedProviderIds?: readonly string[]
+  blockedSkillIds?: readonly string[]
+  skillsEnabled: boolean
+  memoryEnabled: boolean
+}) => DelegatedTurnRuntime | undefined
 
 export type ChildAgentExecutorOptions = {
   model: ModelClient
@@ -47,6 +66,13 @@ export type ChildAgentExecutorOptions = {
   instructionRuntime?: InstructionRuntime
   memoryStore?: MemoryStore
   artifactStore?: ArtifactStore
+  /** Runtime-owned approval channel shared with the HTTP decision endpoint. */
+  approvalGate?: ApprovalGate
+  /**
+   * Host-owned provider-native runtime composition. The callback receives the
+   * already narrowed child capability envelope and child turn services.
+   */
+  createDelegatedRuntime?: ChildDelegatedRuntimeFactory
   /**
    * Persistence wiring. When the main runtime's stores + event recorder are
    * supplied, the child runs as a persisted `relation: 'side'` thread on the
@@ -131,16 +157,45 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     // A custom system prompt augments the base prefix (kun tool/safety
     // conventions stay) on a distinct fingerprint, so same-agent calls still
     // hit the prompt cache; cross-agent reuse is intentionally given up.
-    const childPrefix = input.systemPrompt?.trim()
-      ? setSystemPrompt(options.prefix, `${options.prefix.systemPrompt}\n\n${input.systemPrompt.trim()}`.trim())
+    // omitBasePrompt replaces the base with the role prompt when present.
+    const rolePrompt = input.systemPrompt?.trim()
+    const childPrefix = rolePrompt
+      ? setSystemPrompt(
+        options.prefix,
+        input.omitBasePrompt === true
+          ? rolePrompt
+          : `${options.prefix.systemPrompt}\n\n${rolePrompt}`.trim()
+      )
       : options.prefix
+    const model = input.model?.trim() || options.defaultModel
+    const approvalPolicy = input.approvalPolicy ?? options.approvalPolicy ?? 'auto'
+    const sandboxMode = input.sandboxMode ?? options.sandboxMode
+    const delegatedRuntime = options.createDelegatedRuntime?.({
+      turns,
+      sessionStore,
+      threadStore,
+      events,
+      ids,
+      prefix: childPrefix,
+      toolPolicy: input.toolPolicy,
+      ...(forcedAllowedToolNames ? { allowedToolNames: forcedAllowedToolNames } : {}),
+      ...(input.security?.allowedProviderIds
+        ? { allowedProviderIds: input.security.allowedProviderIds }
+        : {}),
+      ...(blockedToolNames.length ? { blockedToolNames } : {}),
+      ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
+      ...(blockedSkillIds.length ? { blockedSkillIds } : {}),
+      skillsEnabled: input.skillsEnabled !== false,
+      memoryEnabled: input.security?.memoryEnabled !== false
+    })
     const loop = new AgentLoop({
       threadStore,
       sessionStore,
-      approvalGate: new InMemoryApprovalGate(),
+      approvalGate: options.approvalGate ?? new InMemoryApprovalGate(),
       userInputGate: new InMemoryUserInputGate(),
       model: options.model,
       toolHost: options.toolHost,
+      ...(delegatedRuntime ? { sdkRuntime: delegatedRuntime } : {}),
       usage,
       events,
       turns,
@@ -170,9 +225,6 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(options.runtime?.toolArgumentRepair ? { toolArgumentRepair: options.runtime.toolArgumentRepair } : {})
     })
 
-    const model = input.model?.trim() || options.defaultModel
-    const approvalPolicy = input.approvalPolicy ?? options.approvalPolicy ?? 'auto'
-    const sandboxMode = input.sandboxMode ?? options.sandboxMode
     const title = childThreadTitle(input.childId, input.label, input.profile)
     const thread = await threads.create({
       title,

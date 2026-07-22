@@ -288,9 +288,12 @@ export const ServeProviderConfigSchema = z
      * over `baseUrl`. `agent-sdk` delegates whole turns to the embedded Claude
      * Agent SDK (Claude Pro/Max subscription billing): `baseUrl` is unused and
      * `apiKey` carries the CLAUDE_CODE_OAUTH_TOKEN (empty => rely on the host's
-     * existing Claude Code login).
+     * existing Claude Code login). `antigravity-cli` delegates whole turns to
+     * Google's official Antigravity CLI and uses its existing subscription login.
+     * `cursor-sdk` delegates whole turns to the official Cursor SDK and requires
+     * the provider's Cursor API key.
      */
-    kind: z.enum(['http', 'agent-sdk']).default('http').optional(),
+    kind: z.enum(['http', 'agent-sdk', 'antigravity-cli', 'cursor-sdk']).default('http').optional(),
     apiKey: z.string().default(''),
     /** Opaque binding key resolved through the protected account store. */
     credentialSourceId: z.string().min(1).max(256).optional(),
@@ -305,7 +308,7 @@ export const ServeProviderConfigSchema = z
   })
   .strict()
   .superRefine((cfg, ctx) => {
-    if ((cfg.kind ?? 'http') !== 'agent-sdk' && !cfg.baseUrl) {
+    if ((cfg.kind ?? 'http') === 'http' && !cfg.baseUrl) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['baseUrl'],

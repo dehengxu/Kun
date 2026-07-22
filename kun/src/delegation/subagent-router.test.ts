@@ -66,6 +66,34 @@ describe('subagent BM25 recall', () => {
     expect(hits).toEqual([])
   })
 
+  it('recalls workspace agents by description without indexing systemPrompt body', () => {
+    const hits = recallSubagents('unique workspace API contract review', [{
+      kind: 'profile',
+      id: 'workspace-api-reviewer',
+      source: 'workspace',
+      profile: {
+        mode: 'subagent',
+        toolPolicy: 'readOnly',
+        name: 'Workspace API Reviewer',
+        description: 'unique workspace API contract review',
+        systemPrompt: 'never index this private instruction token xyzzy-private'
+      }
+    }])
+    expect(hits[0]).toMatchObject({ targetId: 'workspace-api-reviewer', source: 'workspace' })
+    expect(recallSubagents('xyzzy-private', [{
+      kind: 'profile',
+      id: 'workspace-api-reviewer',
+      source: 'workspace',
+      profile: {
+        mode: 'subagent',
+        toolPolicy: 'readOnly',
+        name: 'Workspace API Reviewer',
+        description: 'unique workspace API contract review',
+        systemPrompt: 'never index this private instruction token xyzzy-private'
+      }
+    }])).toEqual([])
+  })
+
   it('treats common explicit no-mutation language as a hard read-only ceiling', () => {
     for (const task of [
       "Review the implementation, but don't edit code",

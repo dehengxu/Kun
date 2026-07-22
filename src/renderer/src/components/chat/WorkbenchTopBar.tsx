@@ -47,7 +47,6 @@ type Props = {
   onToggleRightPanelMode: (mode: Exclude<RightPanelMode, null>) => void
   planPanelEnabled?: boolean
   canvasEnabled?: boolean
-  sideChatCount?: number
   sideChatRunningCount?: number
   sideChatOpen?: boolean
   sideChatEnabled?: boolean
@@ -386,7 +385,6 @@ export function WorkbenchSideRail({
   onToggleRightPanelMode,
   planPanelEnabled = false,
   canvasEnabled = false,
-  sideChatCount = 0,
   sideChatRunningCount = 0,
   sideChatOpen = false,
   sideChatEnabled = true,
@@ -428,11 +426,6 @@ export function WorkbenchSideRail({
           aria-pressed={sideChatOpen}
         >
           <MessageCircleMore className={TOPBAR_ICON_CLASS} strokeWidth={1.75} />
-          {sideChatCount > 0 ? (
-            <span className="absolute -left-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-white">
-              {Math.min(sideChatCount, 9)}
-            </span>
-          ) : null}
           {sideChatRunningCount > 0 ? (
             <span className="absolute -bottom-0.5 -left-0.5 h-2 w-2 animate-pulse rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.18)]" />
           ) : null}

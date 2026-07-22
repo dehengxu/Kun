@@ -119,6 +119,7 @@ import {
 } from './runtime-settings-apply-mode'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { DataMigrationController } from './data-migration/data-migration-controller'
+import { resolveDataMigrationFeatureEnabled } from './data-migration/feature-policy'
 import {
   configureManagedWeixinBridgeUrlResolver,
   pollFeishuInstall,
@@ -1944,8 +1945,7 @@ app.whenReady().then(async () => {
     sourceInstallationId: `installation_${createHash('sha256').update(app.getPath('userData')).digest('hex').slice(0, 24)}`,
     sourceAppVersion: app.getVersion(),
     sourceRuntimeVersion: app.getVersion(),
-    featureEnabled: process.env.KUN_DATA_MIGRATION_ENABLED === '1' ||
-      (process.env.KUN_DATA_MIGRATION_ENABLED !== '0' && !app.isPackaged)
+    featureEnabled: resolveDataMigrationFeatureEnabled()
   })
   dataMigrationController.registerIpc()
   const extensionIpcOptions: RegisterExtensionIpcHandlersOptions = {

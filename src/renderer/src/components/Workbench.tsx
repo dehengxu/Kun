@@ -1200,7 +1200,6 @@ export function Workbench(): ReactElement {
             onToggleRightPanelMode: openCodeRightTool,
             planPanelEnabled: Boolean(activeGuiPlan),
             canvasEnabled: true,
-            sideChatCount: currentSideConversations.length,
             sideChatRunningCount: currentSideRunningCount,
             sideChatOpen: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.sideConversations,
             sideChatEnabled: runtimeConnection === 'ready' && Boolean(activeThreadId),

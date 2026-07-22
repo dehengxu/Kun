@@ -58,6 +58,7 @@ const PROFILE_MATCHES: Record<string, ModelsDevProviderMatch> = {
   'tencentcloud-token-plan': catalogMatch('tencent-token-plan'),
   codex: catalogMatch('openai', 'enrichment-only'),
   'claude-subscription': catalogMatch('anthropic', 'enrichment-only'),
+  'gemini-subscription': catalogMatch('google', 'enrichment-only'),
   'grok-subscription': catalogMatch('xai', 'enrichment-only'),
   'vercel-ai-gateway': catalogMatch('vercel')
 }

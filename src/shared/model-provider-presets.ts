@@ -31,6 +31,8 @@ export type ModelProviderPresetId =
   | 'opencode-go'
   | 'codex'
   | 'claude-subscription'
+  | 'gemini-subscription'
+  | 'cursor-subscription'
   | 'grok-subscription'
   | 'moonshot-cn'
   | 'moonshot-global'
@@ -47,6 +49,16 @@ export const CHATGPT_SUBSCRIPTION_LEGACY_NAME = 'Codex (ChatGPT)'
 export const CHATGPT_SUBSCRIPTION_NAME = 'ChatGPT 订阅'
 export const GROK_SUBSCRIPTION_PROVIDER_ID = 'grok-subscription'
 export const GROK_SUBSCRIPTION_NAME = 'Grok 订阅'
+export const GEMINI_SUBSCRIPTION_PROVIDER_ID = 'gemini-subscription'
+export const GEMINI_SUBSCRIPTION_NAME = 'Gemini 订阅'
+export const CURSOR_SUBSCRIPTION_PROVIDER_ID = 'cursor-subscription'
+export const CURSOR_SUBSCRIPTION_NAME = 'Cursor 订阅'
+export const CURSOR_SUBSCRIPTION_MODEL_IDS = ['auto'] as const
+export const GEMINI_SUBSCRIPTION_MODEL_IDS = [
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3.1-pro'
+] as const
 export const GROK_SUBSCRIPTION_MODEL_IDS = [
   'grok-4.5',
   'grok-4-1-fast-reasoning',
@@ -129,9 +141,11 @@ export type ModelProviderPreset = {
   category?: 'api' | 'subscription'
   /**
    * 传输类型。'agent-sdk' = 把整轮委托给内置的官方 Claude Agent SDK(消耗 Claude
-   * Pro/Max 订阅额度,合规路径);缺省按 HTTP 模型客户端走 baseUrl。
+   * Pro/Max 订阅额度,合规路径);'antigravity-cli' = 把整轮委托给 Google 官方
+   * Antigravity CLI(使用 Gemini 订阅);'cursor-sdk' = 使用 Cursor API Key 把
+   * 整轮委托给官方 Cursor SDK;缺省按 HTTP 模型客户端走 baseUrl。
    */
-  kind?: 'agent-sdk'
+  kind?: 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk'
   baseUrl: string
   endpointFormat: ModelEndpointFormat
   models: string[]
@@ -196,6 +210,14 @@ const DEEPSEEK_REASONING: ModelProviderReasoningCapabilityV1 = {
   supportedEfforts: ['off', 'high', 'max'],
   defaultEffort: 'max',
   requestProtocol: 'deepseek-chat-completions'
+}
+
+const ANTIGRAVITY_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['low', 'medium', 'high'],
+  defaultEffort: 'medium',
+  // The delegated runtime maps this to `agy --effort`; the HTTP request
+  // protocol is intentionally unused.
+  requestProtocol: 'none'
 }
 
 // 通义千问 / 混元 / 豆包的「思考」开关各家用私有 body 字段,无法用现有 requestProtocol 精确映射,
@@ -291,6 +313,40 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     },
     docsUrl: 'https://code.claude.com/docs/en/authentication',
     apiKeyUrl: 'https://claude.ai'
+  },
+  {
+    id: GEMINI_SUBSCRIPTION_PROVIDER_ID,
+    name: GEMINI_SUBSCRIPTION_NAME,
+    category: 'subscription',
+    // Consumer Gemini subscriptions are served by Google's official
+    // Antigravity CLI. Do not route these ids to the retired Code Assist
+    // v1internal endpoint or the public API-key endpoint.
+    kind: 'antigravity-cli',
+    baseUrl: '',
+    endpointFormat: 'custom_endpoint',
+    models: [...GEMINI_SUBSCRIPTION_MODEL_IDS],
+    modelProfiles: Object.fromEntries(
+      GEMINI_SUBSCRIPTION_MODEL_IDS.map((model) => [
+        model,
+        visionChatProfile(1_048_576, ANTIGRAVITY_REASONING)
+      ])
+    ),
+    docsUrl: 'https://github.com/google-antigravity/antigravity-cli',
+    apiKeyUrl: 'https://antigravity.google'
+  },
+  {
+    id: CURSOR_SUBSCRIPTION_PROVIDER_ID,
+    name: CURSOR_SUBSCRIPTION_NAME,
+    category: 'subscription',
+    // Cursor exposes an official Agent SDK instead of an OpenAI-compatible
+    // subscription endpoint. Account-visible models are pulled after the user
+    // supplies a Cursor API key; `auto` remains the offline fallback.
+    kind: 'cursor-sdk',
+    baseUrl: '',
+    endpointFormat: 'custom_endpoint',
+    models: [...CURSOR_SUBSCRIPTION_MODEL_IDS],
+    docsUrl: 'https://cursor.com/docs/api/sdk/typescript',
+    apiKeyUrl: 'https://cursor.com/dashboard'
   },
   {
     id: 'zhipu-coding-plan',

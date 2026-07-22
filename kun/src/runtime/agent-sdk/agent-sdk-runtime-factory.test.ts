@@ -174,6 +174,125 @@ describe('createAgentSdkRuntime handlesProvider', () => {
 })
 
 describe('createAgentSdkRuntime turn context', () => {
+  test('applies a child capability boundary to SDK discovery and execution', async () => {
+    const executionContexts: Array<{
+      allowedToolNames?: readonly string[]
+      allowedProviderIds?: readonly string[]
+      blockedToolNames?: readonly string[]
+      blockedProviderIds?: readonly string[]
+      blockedSkillIds?: readonly string[]
+    }> = []
+    const readTool = LocalToolHost.defineTool({
+      name: 'read',
+      description: 'Read safely',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: async (_args, context) => {
+        executionContexts.push(context)
+        return { output: 'safe' }
+      }
+    })
+    const writeTool = LocalToolHost.defineTool({
+      name: 'write',
+      description: 'Write a file',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: async () => ({ output: 'mutated' })
+    })
+    const registry = CapabilityRegistry.fromLocalTools([readTool, writeTool])
+    const host = new LocalToolHost({ registry })
+    const skillRuntime = {
+      resolveTurn: vi.fn(async () => ({
+        activeSkillIds: [],
+        activations: [],
+        instructions: [],
+        injectedBytes: 0
+      })),
+      availableSkillIdsForWorkspace: vi.fn(async () => ['safe-skill', 'blocked-skill'])
+    }
+    const sdkTurn = { id: 'tn', prompt: 'inspect' } as ThreadRecord['turns'][number]
+    const runtime = createAgentSdkRuntime({
+      registry,
+      toolHost: host,
+      turns: { updateTurnMetadata: async () => undefined } as never,
+      sessionStore: {
+        loadItems: async () => [{
+          id: 'item_user',
+          turnId: 'tn',
+          threadId: 'th',
+          kind: 'user_message',
+          role: 'user',
+          status: 'completed',
+          text: 'inspect',
+          createdAt: '2026-07-10T00:00:00.000Z'
+        }]
+      } as never,
+      threadStore: {
+        get: async () => threadWith({
+          id: 'th',
+          providerId: 'claude-subscription',
+          turns: [sdkTurn]
+        })
+      } as never,
+      events: {} as never,
+      ids: { next: (prefix) => prefix },
+      prefix: { systemPrompt: '' },
+      providerConfigs: {
+        'claude-subscription': { kind: 'agent-sdk', apiKey: 'tok' }
+      } as never,
+      agentSdkProviderIds: new Set(['claude-subscription']),
+      defaultApprovalPolicy: 'auto',
+      allowSdkBuiltins: false,
+      skillRuntime: skillRuntime as never,
+      toolContextBoundary: {
+        allowedProviderIds: ['builtin'],
+        allowedToolNames: ['read'],
+        blockedProviderIds: ['mcp:private'],
+        blockedToolNames: ['write'],
+        blockedSkillIds: ['blocked-skill']
+      }
+    })
+    const deps = (runtime as unknown as {
+      deps: {
+        loadTurnContext(threadId: string, turnId: string): Promise<{
+          bridgeableTools: Array<{ name: string }>
+          allowSdkBuiltins?: boolean
+        } | null>
+        executeKunTool(
+          threadId: string,
+          turnId: string,
+          toolName: string,
+          args: Record<string, unknown>
+        ): Promise<{ output: unknown; isError?: boolean }>
+      }
+    }).deps
+
+    const context = await deps.loadTurnContext('th', 'tn')
+    expect(context).toMatchObject({
+      allowSdkBuiltins: false,
+      bridgeableTools: [{ name: 'read' }]
+    })
+    await expect(deps.executeKunTool('th', 'tn', 'read', {})).resolves.toEqual({
+      output: 'safe',
+      isError: false
+    })
+    await expect(deps.executeKunTool('th', 'tn', 'write', {})).resolves.toMatchObject({
+      isError: true
+    })
+    expect(executionContexts).toEqual([
+      expect.objectContaining({
+        allowedProviderIds: ['builtin'],
+        allowedToolNames: ['read'],
+        blockedProviderIds: ['mcp:private'],
+        blockedToolNames: ['write'],
+        blockedSkillIds: ['blocked-skill']
+      })
+    ])
+    expect(skillRuntime.resolveTurn).toHaveBeenCalledWith(expect.objectContaining({
+      blockedSkillIds: ['blocked-skill']
+    }))
+  })
+
   test('scopes dedicated SVG turns to structured tools and the artifact-specific policy', async () => {
     type DesignContext = {
       guiDesignCanvas?: boolean

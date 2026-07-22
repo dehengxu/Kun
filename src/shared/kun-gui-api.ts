@@ -525,6 +525,28 @@ export type KunGuiApi = ExtensionIpcApi & {
   claudeSubscriptionSdkInstall: () => Promise<SdkDownloadState>
   /** Subscribe to background-download progress; returns an unsubscribe fn. */
   onClaudeSubscriptionSdkProgress: (handler: (state: SdkDownloadState) => void) => () => void
+  /** Whether Google's official Antigravity CLI is available to Kun. */
+  geminiSubscriptionCliStatus: () => Promise<{
+    installed: boolean
+    path?: string
+    download?: SdkDownloadState | null
+  }>
+  /** Download the pinned official Antigravity CLI release on demand. */
+  geminiSubscriptionCliInstall: () => Promise<SdkDownloadState>
+  /** Subscribe to Antigravity CLI download progress. */
+  onGeminiSubscriptionCliProgress: (handler: (state: SdkDownloadState) => void) => () => void
+  /** Gemini models exposed by the user's current `agy` subscription login. */
+  geminiSubscriptionModels: () => Promise<string[]>
+  /** Validate a Cursor API key and list models visible to that Cursor account. */
+  cursorSubscriptionDiscover: (apiKey: string) => Promise<{
+    account: {
+      apiKeyName: string
+      userEmail?: string
+      userFirstName?: string
+      userLastName?: string
+    }
+    models: string[]
+  }>
   setSettings: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   saveSettingsSilent: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   runtimeRequest: (path: string, method?: string, body?: string) => Promise<RuntimeRequestResult>

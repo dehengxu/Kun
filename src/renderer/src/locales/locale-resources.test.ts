@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { APP_LOCALES, type AppLocale } from '@shared/app-locales'
+import { BUILTIN_AGENT_CATALOG } from '../../../../kun/src/delegation/builtin-agent-catalog'
 import i18n from '../i18n'
 import enCommon from './en/common.json'
 import enSettings from './en/settings.json'
@@ -84,4 +85,17 @@ describe('active locale resources', () => {
     expect(i18n.resolvedLanguage).toBe(locale)
     expect(i18n.t('settings:language')).toBe(resources[locale].settings.language)
   })
+
+  it.each(['en', 'zh'] as const)(
+    'covers every built-in subagent catalog role in %s',
+    (locale) => {
+      const roles = (resources[locale].common.subagentsPanel as { role?: Record<string, { name?: string; desc?: string }> })
+        ?.role
+      expect(roles).toBeTruthy()
+      for (const agent of BUILTIN_AGENT_CATALOG) {
+        expect(roles?.[agent.id]?.name?.trim(), `${locale} name for ${agent.id}`).toBeTruthy()
+        expect(roles?.[agent.id]?.desc?.trim(), `${locale} desc for ${agent.id}`).toBeTruthy()
+      }
+    }
+  )
 })

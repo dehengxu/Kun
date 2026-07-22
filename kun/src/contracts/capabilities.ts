@@ -288,6 +288,11 @@ export const SubagentProfileConfig = z
     providerId: z.string().min(1).optional(),
     /** Persona/instructions appended to the base system prompt for this role (not a full replace). */
     systemPrompt: z.string().min(1).optional(),
+    /**
+     * When true, the child's immutable system prompt is only `systemPrompt`
+     * (no Kun base prefix). Empty/missing role prompts still fall back to base.
+     */
+    omitBasePrompt: z.boolean().optional(),
     /** Short instruction prepended to the delegated task prompt. */
     promptPreamble: z.string().min(1).optional(),
     /**
@@ -315,6 +320,16 @@ export const SubagentProfileConfig = z
     reasoningEffort: ModelReasoningEffort.optional()
   })
   .strict()
+  .superRefine((profile, ctx) => {
+    const hasModel = Boolean(profile.model?.trim())
+    const hasProvider = Boolean(profile.providerId?.trim())
+    if (hasModel === hasProvider) return
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: hasModel ? ['providerId'] : ['model'],
+      message: 'subagent model and providerId must be configured together'
+    })
+  })
 export type SubagentProfileConfig = z.infer<typeof SubagentProfileConfig>
 
 export const SubagentsCapabilityConfig = CapabilityToggleConfig.extend({

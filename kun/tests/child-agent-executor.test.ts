@@ -135,6 +135,66 @@ describe('child agent executor', () => {
     }
   })
 
+  it('omits the Kun base system prefix when omitBasePrompt is set', async () => {
+    const seen: ModelRequest[] = []
+    const basePrompt = 'KUN_BASE_SYSTEM_PROMPT_MARKER'
+    const rolePrompt = 'ROLE_ONLY_SYSTEM_PROMPT'
+    const executor = createChildAgentExecutor({
+      model: model([
+        { kind: 'assistant_text_delta', text: 'ok' },
+        { kind: 'completed', stopReason: 'stop' }
+      ], seen),
+      toolHost: new LocalToolHost({ registry: new CapabilityRegistry([]) }),
+      prefix: createImmutablePrefix({ systemPrompt: basePrompt }),
+      defaultModel: 'child-test',
+      nowIso: () => '2026-06-03T00:00:00.000Z'
+    })
+
+    await executor({
+      childId: 'child_omit_base',
+      parentThreadId: 'thr_parent',
+      parentTurnId: 'turn_parent',
+      prompt: 'do the role work',
+      workspace: '/tmp/project',
+      systemPrompt: rolePrompt,
+      omitBasePrompt: true,
+      toolPolicy: 'readOnly',
+      signal: new AbortController().signal
+    })
+
+    expect(seen[0]?.systemPrompt).toBe(rolePrompt)
+    expect(seen[0]?.systemPrompt).not.toContain(basePrompt)
+  })
+
+  it('augments the Kun base system prefix when omitBasePrompt is unset', async () => {
+    const seen: ModelRequest[] = []
+    const basePrompt = 'KUN_BASE_SYSTEM_PROMPT_MARKER'
+    const rolePrompt = 'ROLE_ONLY_SYSTEM_PROMPT'
+    const executor = createChildAgentExecutor({
+      model: model([
+        { kind: 'assistant_text_delta', text: 'ok' },
+        { kind: 'completed', stopReason: 'stop' }
+      ], seen),
+      toolHost: new LocalToolHost({ registry: new CapabilityRegistry([]) }),
+      prefix: createImmutablePrefix({ systemPrompt: basePrompt }),
+      defaultModel: 'child-test',
+      nowIso: () => '2026-06-03T00:00:00.000Z'
+    })
+
+    await executor({
+      childId: 'child_augment_base',
+      parentThreadId: 'thr_parent',
+      parentTurnId: 'turn_parent',
+      prompt: 'do the role work',
+      workspace: '/tmp/project',
+      systemPrompt: rolePrompt,
+      toolPolicy: 'readOnly',
+      signal: new AbortController().signal
+    })
+
+    expect(seen[0]?.systemPrompt).toBe(`${basePrompt}\n\n${rolePrompt}`)
+  })
+
   it('runs a standalone profile without skill discovery or prompt activation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-child-skill-isolation-'))
     try {

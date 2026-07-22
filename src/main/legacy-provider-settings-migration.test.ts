@@ -42,6 +42,28 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
     expect(runtimeProviders[first.id]?.credentialSourceId).not.toBe(runtimeProviders[second.id]?.credentialSourceId)
   })
 
+  it('projects Cursor SDK providers without persisting their API keys or requiring a base URL', () => {
+    const providerSettings = defaultModelProviderSettings()
+    const cursor = modelProviderPresetProfile(
+      getModelProviderPreset('cursor-subscription')!,
+      'cursor-secret'
+    )
+    const runtimeProviders = providersConfigForRuntime({
+      provider: {
+        ...providerSettings,
+        providers: [...providerSettings.providers, cursor]
+      }
+    } as AppSettingsV1)
+
+    expect(runtimeProviders[cursor.id]).toEqual(expect.objectContaining({
+      apiKey: '',
+      credentialSourceId: 'settings:provider:cursor-subscription',
+      kind: 'cursor-sdk'
+    }))
+    expect(runtimeProviders[cursor.id]?.baseUrl).toBeUndefined()
+    expect(JSON.stringify(runtimeProviders)).not.toContain('cursor-secret')
+  })
+
   it('backs up and removes plaintext while keeping secure bindings readable across restarts', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-credential-migration-'))
     const dataDir = join(userDataDir, 'runtime-data')

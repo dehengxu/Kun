@@ -84,7 +84,6 @@ describe('WorkbenchSideRail', () => {
         onToggleRightPanelMode: vi.fn(),
         planPanelEnabled: true,
         canvasEnabled: true,
-        sideChatCount: 0,
         sideChatRunningCount: 0,
         sideChatOpen: false,
         sideChatEnabled: true,
@@ -152,6 +151,22 @@ describe('WorkbenchSideRail', () => {
     })
     const button = renderer.root.findByProps({ 'aria-label': 'Agent Perspective' })
     expect(button.props.disabled).toBe(true)
+    act(() => renderer.unmount())
+  })
+
+  it('keeps the branch rail launcher free of a numeric count badge', () => {
+    let renderer!: ReturnType<typeof createRenderer>
+    act(() => {
+      renderer = createRenderer(createElement(WorkbenchSideRail, {
+        rightPanelMode: null,
+        onToggleRightPanelMode: vi.fn(),
+        onOpenSideChat: vi.fn(),
+        sideChatRunningCount: 0
+      }))
+    })
+
+    const button = renderer.root.findByProps({ 'aria-label': 'Open branch conversation' })
+    expect(button.findAllByType('span')).toHaveLength(0)
     act(() => renderer.unmount())
   })
 

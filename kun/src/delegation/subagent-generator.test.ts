@@ -25,7 +25,6 @@ describe('SubagentGenerator', () => {
       systemPrompt: 'You are an IPC investigator. Inspect boundaries, cite evidence, verify claims, return a report, and never delegate.',
       toolPolicy: 'readOnly',
       blockedTools: ['delegate_task'],
-      reasoningEffort: 'high',
       reason: 'The fixed catalog lacks an Electron-specific boundary investigator.'
     }))
     const usageTurns: string[] = []
@@ -45,6 +44,7 @@ describe('SubagentGenerator', () => {
       name: 'Electron IPC Investigator', toolPolicy: 'readOnly',
       blockedTools: ['delegate_task', 'generate_subagent', 'load_skill']
     })
+    expect(result.definition).not.toHaveProperty('reasoningEffort')
     expect(model.requests[0]?.turnId).toBe('turn_subagent_generator')
     expect(usageTurns).toEqual(['turn_subagent_generator:10'])
     expect(generatedSubagentProfileId(result.definition)).toMatch(/^generated:electron-ipc-investigator:[a-f0-9]{8}$/)

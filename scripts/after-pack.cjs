@@ -27,6 +27,7 @@ const KUN_RUNTIME_REQUIRED_PATHS = [
   'kun/node_modules/semver/package.json',
   'kun/node_modules/yauzl/package.json',
   'kun/node_modules/yazl/package.json',
+  'kun/node_modules/@cursor/sdk/package.json',
   'kun/node_modules/@modelcontextprotocol/sdk/package.json',
   'kun/node_modules/@kun/extension-api/package.json',
   'kun/node_modules/@kun/extension-api/dist/index.js',
@@ -145,6 +146,12 @@ function validateBundledKunRuntime(context) {
   for (const relativePath of KUN_RUNTIME_REQUIRED_PATHS) {
     assertExists(join(root, relativePath), relativePath)
   }
+  const cursorPlatformPackage =
+    `kun/node_modules/@cursor/sdk-${normalizePlatform(context.electronPlatformName)}-${normalizeArch(context.arch)}`
+  assertExists(
+    join(root, cursorPlatformPackage, 'package.json'),
+    `${cursorPlatformPackage}/package.json`
+  )
   assertExists(
     join(root, 'node_modules', 'better-sqlite3', 'package.json'),
     'root better-sqlite3 dependency'
