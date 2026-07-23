@@ -72,6 +72,25 @@ describe('probeModelProvider', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('does not treat a URL containing the Grok hostname as a subscription endpoint', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'remote-model' }] })))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await probeModelProvider({
+      baseUrl: 'https://attacker.example/cli-chat-proxy.grok.com/v1',
+      apiKey: JSON.stringify({
+        kind: 'grok-oauth',
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        expiresAt: Date.now() + 60 * 60_000,
+        email: 'user@x.ai'
+      }),
+      endpointFormat: 'responses'
+    })
+
+    expect(result).toMatchObject({ ok: true, modelIds: ['remote-model'] })
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
   it('rejects non-http base urls without fetching', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

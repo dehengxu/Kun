@@ -130,10 +130,7 @@ export class SubagentGenerator {
 }
 
 export function generatedSubagentProfileId(definition: CustomSubagentDefinition): string {
-  const slug = definition.name.toLowerCase()
-    .replace(/[^a-z0-9\p{Script=Han}]+/gu, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40) || 'task-specialist'
+  const slug = normalizedProfileSlug(definition.name) || 'task-specialist'
   const hash = createHash('sha256')
     .update(JSON.stringify({
       name: definition.name,
@@ -145,6 +142,28 @@ export function generatedSubagentProfileId(definition: CustomSubagentDefinition)
     .digest('hex')
     .slice(0, 8)
   return `generated:${slug}:${hash}`
+}
+
+function normalizedProfileSlug(value: string): string {
+  let normalized = ''
+  let previousWasSeparator = false
+  for (const character of value.toLowerCase()) {
+    if (isProfileSlugCharacter(character)) {
+      normalized += character
+      previousWasSeparator = false
+    } else if (!previousWasSeparator) {
+      normalized += '-'
+      previousWasSeparator = true
+    }
+  }
+  return normalized.replace(/^-+|-+$/g, '').slice(0, 40)
+}
+
+function isProfileSlugCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0) ?? 0
+  return (codePoint >= 0x30 && codePoint <= 0x39) ||
+    (codePoint >= 0x61 && codePoint <= 0x7a) ||
+    /\p{Script=Han}/u.test(character)
 }
 
 function selectReferences(

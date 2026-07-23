@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID, scryptSync } from 'node:crypto'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { AtomicJsonFile } from '../extensions/atomic-json.js'
@@ -538,7 +538,7 @@ export class LegacyProviderCredentialMigrationService {
         accountId,
         modelId
       },
-      dataAccessDigest: createHash('sha256')
+      dataAccessDigest: createHmac('sha256', 'kun-legacy-provider-binding-v1')
         .update(`legacy-provider-binding\0${source.sourceId}\0${source.providerId}\0${modelId}`)
         .digest('hex'),
       dataCategories: [
@@ -605,7 +605,7 @@ function corePrincipal(providerId: string): ExtensionPrincipal {
 }
 
 function digestSecret(secret: string, salt: string): string {
-  return createHash('sha256').update(salt).update('\0').update(secret).digest('hex')
+  return scryptSync(secret, salt, 32).toString('hex')
 }
 
 function bindingScope(sourceId: string): string {

@@ -1,5 +1,4 @@
-import { randomUUID } from 'node:crypto'
-import { createHash } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { isAbsolute, join, resolve } from 'node:path'
 import type {
   ExtensionAccountProjection,
@@ -296,8 +295,10 @@ export class ExtensionProviderAccountStore {
     scopeKey: string,
     providerId: string
   ): Promise<ExtensionProviderBindingRecord | null> {
-    const key = providerBindingKey(normalizeBindingScope(scopeKey), providerId)
-    const record = (await this.bindings.read(emptyBindings)).bindings[key]
+    const normalizedScope = normalizeBindingScope(scopeKey)
+    const document = await this.bindings.read(emptyBindings)
+    const key = providerBindingKey(normalizedScope, providerId)
+    const record = document.bindings[key] ?? findBindingRecord(document, normalizedScope, providerId)
     return record ? structuredClone(record) : null
   }
 
@@ -335,18 +336,20 @@ export class ExtensionProviderAccountStore {
     await this.bindings.update(emptyBindings, (document) => ({
       ...document,
       revision: document.revision + 1,
-      bindings: { ...document.bindings, [key]: record }
+      bindings: {
+        ...removeMatchingBindingRecords(document.bindings, scopeKey, binding.providerId),
+        [key]: record
+      }
     }))
     return structuredClone(record)
   }
 
   async clearBinding(scopeKey: string, providerId: string): Promise<boolean> {
-    const key = providerBindingKey(normalizeBindingScope(scopeKey), providerId)
+    const normalizedScope = normalizeBindingScope(scopeKey)
     let removed = false
     await this.bindings.update(emptyBindings, (document) => {
-      if (!document.bindings[key]) return document
-      const bindings = { ...document.bindings }
-      delete bindings[key]
+      const bindings = removeMatchingBindingRecords(document.bindings, normalizedScope, providerId)
+      if (Object.keys(bindings).length === Object.keys(document.bindings).length) return document
       removed = true
       return { ...document, revision: document.revision + 1, bindings }
     })
@@ -449,7 +452,29 @@ function normalizeBindingScope(value: string): string {
 }
 
 function providerBindingKey(scopeKey: string, providerId: string): string {
-  return createHash('sha256').update(`${scopeKey}\0${providerId}`).digest('hex')
+  return createHmac('sha256', 'kun-provider-binding-key-v1')
+    .update(`${scopeKey}\0${providerId}`)
+    .digest('hex')
+}
+
+function findBindingRecord(
+  document: BindingDocument,
+  scopeKey: string,
+  providerId: string
+): ExtensionProviderBindingRecord | undefined {
+  return Object.values(document.bindings).find((record) =>
+    record.scopeKey === scopeKey && record.binding.providerId === providerId
+  )
+}
+
+function removeMatchingBindingRecords(
+  bindings: BindingDocument['bindings'],
+  scopeKey: string,
+  providerId: string
+): BindingDocument['bindings'] {
+  return Object.fromEntries(Object.entries(bindings).filter(([, record]) =>
+    record.scopeKey !== scopeKey || record.binding.providerId !== providerId
+  ))
 }
 
 function opaqueProviderError(): Error {

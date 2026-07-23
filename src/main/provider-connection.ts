@@ -20,11 +20,20 @@ import {
 } from './grok-auth'
 
 function isCodexBaseUrl(url: string): boolean {
-  return url.includes('chatgpt.com/backend-api/codex')
+  return hasExpectedHttpsHost(url, 'chatgpt.com') && new URL(url).pathname.startsWith('/backend-api/codex')
 }
 
 function isGrokSubscriptionBaseUrl(url: string): boolean {
-  return url.includes('cli-chat-proxy.grok.com')
+  return hasExpectedHttpsHost(url, 'cli-chat-proxy.grok.com')
+}
+
+function hasExpectedHttpsHost(url: string, host: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' && parsed.hostname === host
+  } catch {
+    return false
+  }
 }
 
 const PROBE_TIMEOUT_MS = 10_000
