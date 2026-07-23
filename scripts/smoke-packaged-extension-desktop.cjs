@@ -975,19 +975,30 @@ async function synchronizeWorkbenchContributionDiscovery({
   }
 
   // The bridge response proves that the runtime, registry, workspace grant,
-  // and renderer preload are ready. Notify the committed layout effect only
-  // after that point, with short retries for the final React commit boundary.
+  // and renderer preload are ready. Start discovery only after that point.
+  // Further retries are issued on demand while the smoke waits for the
+  // committed control below: scheduling all retries here can clear the
+  // registry after the control has been clicked and unmount its new webview.
+  await notifyWorkbenchContributionListener({
+    cdp,
+    session,
+    timeoutMs,
+    processState: readProcessState
+  })
+}
+
+async function notifyWorkbenchContributionListener({
+  cdp,
+  session,
+  timeoutMs,
+  processState: readProcessState
+}) {
   await sendToWorkbenchSession({
     cdp,
     session,
     method: 'Runtime.evaluate',
     params: {
-      expression: `(() => {
-        for (const delayMs of ${JSON.stringify(WORKBENCH_DISCOVERY_RETRY_DELAYS_MS)}) {
-          window.setTimeout(() => window.dispatchEvent(new Event('kun:extensions-changed')), delayMs)
-        }
-        return true
-      })()`,
+      expression: "(() => { window.dispatchEvent(new Event('kun:extensions-changed')); return true })()",
       returnByValue: true
     },
     timeoutMs,
@@ -1006,12 +1017,14 @@ async function waitForContributionAndClick({
   // The direct bridge call above proves the runtime has the trusted smoke
   // contribution, but React can still be committing that snapshot. Clicking
   // an untrusted discovery launcher before the committed reload finishes is
-  // intentionally a no-op when its workspace context is not ready. The
-  // bounded discovery retries above allow the renderer lifecycle to mount;
-  // do not issue more events while polling because each refresh clears the
-  // registry before it reloads. Use the committed control for both open and
-  // re-open validation.
+  // intentionally a no-op when its workspace context is not ready. Retry
+  // discovery only while no committed trusted control exists; each refresh
+  // clears the registry, so no retry may remain queued after the click that
+  // opens the webview. Use the committed control for both open and re-open
+  // validation.
   const selector = `.ds-extension-side-rail-group button[data-contribution-id="${contributionId}"][data-extension-trusted="true"]`
+  const discoveryStartedAt = Date.now()
+  let retryIndex = 1
   const point = await pollUntil(async () => {
     assertDesktopProcessRunning(readProcessState())
     const evaluated = await sendToWorkbenchSession({
@@ -1036,7 +1049,22 @@ async function waitForContributionAndClick({
       processState: readProcessState,
       operation: `locating ${selector}`
     })
-    return evaluationValue(evaluated, `locating ${selector}`)
+    const candidate = evaluationValue(evaluated, `locating ${selector}`)
+    if (candidate) return candidate
+
+    while (
+      retryIndex < WORKBENCH_DISCOVERY_RETRY_DELAYS_MS.length &&
+      Date.now() - discoveryStartedAt >= WORKBENCH_DISCOVERY_RETRY_DELAYS_MS[retryIndex]
+    ) {
+      await notifyWorkbenchContributionListener({
+        cdp,
+        session,
+        timeoutMs,
+        processState: readProcessState
+      })
+      retryIndex += 1
+    }
+    return undefined
   }, { timeoutMs, description: `workbench contribution ${contributionId}` })
 
   await sendToWorkbenchSession({

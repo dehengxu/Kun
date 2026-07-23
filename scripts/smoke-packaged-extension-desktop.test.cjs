@@ -519,7 +519,8 @@ test('synchronizes renderer discovery after the trusted bridge sees the installe
     }
   ])
   assert.match(calls[0][1].expression, /extensionGetWorkbench/)
-  assert.match(calls[1][1].expression, /window\.setTimeout/)
+  assert.match(calls[1][1].expression, /window\.dispatchEvent/)
+  assert.doesNotMatch(calls[1][1].expression, /window\.setTimeout/)
 })
 
 test('reattaches renderer discovery when the packaged workbench CDP session is replaced', async () => {
