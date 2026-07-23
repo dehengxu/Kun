@@ -443,7 +443,7 @@ test('recognizes the workbench and kun-extension guest CDP targets', () => {
 })
 
 test('synchronizes renderer discovery after the trusted bridge sees the installed smoke view', async () => {
-  assert.deepEqual(WORKBENCH_DISCOVERY_RETRY_DELAYS_MS, [0, 250, 1_000])
+  assert.deepEqual(WORKBENCH_DISCOVERY_RETRY_DELAYS_MS, [0, 250, 1_000, 3_000, 6_000])
   const response = {
     ok: true,
     status: 200,
@@ -452,12 +452,40 @@ test('synchronizes renderer discovery after the trusted bridge sees the installe
       revision: 7,
       extensions: [{
         id: EXTENSION_ID,
+        workspaceTrusted: true,
+        grantedPermissions: ['ui.views', 'webview'],
         contributes: { 'views.rightSidebar': [{ id: 'smoke' }] }
       }]
     })
   }
   assert.equal(hasWorkbenchContribution(response, CONTRIBUTION_ID), true)
   assert.equal(hasWorkbenchContribution(response, 'extension:other.example/smoke'), false)
+  assert.equal(hasWorkbenchContribution({
+    ...response,
+    body: JSON.stringify({
+      schemaVersion: 1,
+      revision: 8,
+      extensions: [{
+        id: EXTENSION_ID,
+        workspaceTrusted: false,
+        grantedPermissions: ['ui.views', 'webview'],
+        contributes: { 'views.rightSidebar': [{ id: 'smoke' }] }
+      }]
+    })
+  }, CONTRIBUTION_ID), false)
+  assert.equal(hasWorkbenchContribution({
+    ...response,
+    body: JSON.stringify({
+      schemaVersion: 1,
+      revision: 9,
+      extensions: [{
+        id: EXTENSION_ID,
+        workspaceTrusted: true,
+        grantedPermissions: ['ui.views'],
+        contributes: { 'views.rightSidebar': [{ id: 'smoke' }] }
+      }]
+    })
+  }, CONTRIBUTION_ID), false)
   const calls = []
   const session = { targetId: 'workbench-target', sessionId: 'workbench-session' }
   await synchronizeWorkbenchContributionDiscovery({
@@ -501,6 +529,8 @@ test('reattaches renderer discovery when the packaged workbench CDP session is r
     body: JSON.stringify({
       extensions: [{
         id: EXTENSION_ID,
+        workspaceTrusted: true,
+        grantedPermissions: ['ui.views', 'webview'],
         contributes: { 'views.rightSidebar': [{ id: 'smoke' }] }
       }]
     })
@@ -558,6 +588,8 @@ test('retries renderer discovery when the initial packaged workbench target is r
     body: JSON.stringify({
       extensions: [{
         id: EXTENSION_ID,
+        workspaceTrusted: true,
+        grantedPermissions: ['ui.views', 'webview'],
         contributes: { 'views.rightSidebar': [{ id: 'smoke' }] }
       }]
     })
@@ -1347,6 +1379,8 @@ test('every automated and local release path gates uploads behind packaged Exten
   assert.match(desktopSource, /Target\.getTargets/)
   assert.match(desktopSource, /Input\.dispatchMouseEvent/)
   assert.match(desktopSource, /data-contribution-id/)
+  assert.match(desktopSource, /data-extension-trusted="true"/)
+  assert.match(desktopSource, /kun:extensions-changed/)
   assert.match(desktopSource, /Page\.setBypassCSP/)
   assert.match(desktopSource, /Reflect\.ownKeys/)
   assert.match(desktopSource, /userGesture: true/)

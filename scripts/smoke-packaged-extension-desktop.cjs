@@ -907,7 +907,7 @@ function sendToGuestSession(options) {
   })
 }
 
-const WORKBENCH_DISCOVERY_RETRY_DELAYS_MS = [0, 250, 1_000]
+const WORKBENCH_DISCOVERY_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000, 6_000]
 
 function hasWorkbenchContribution(response, contributionId) {
   if (!response || response.ok !== true || typeof response.body !== 'string') return false
@@ -915,6 +915,10 @@ function hasWorkbenchContribution(response, contributionId) {
     const snapshot = JSON.parse(response.body)
     return Array.isArray(snapshot?.extensions) && snapshot.extensions.some((extension) =>
       extension?.id === EXTENSION_ID &&
+      extension.workspaceTrusted === true &&
+      Array.isArray(extension.grantedPermissions) &&
+      extension.grantedPermissions.includes('ui.views') &&
+      extension.grantedPermissions.includes('webview') &&
       Array.isArray(extension?.contributes?.['views.rightSidebar']) &&
       extension.contributes['views.rightSidebar'].some(
         (view) => `extension:${extension.id}/${view?.id}` === contributionId
@@ -999,10 +1003,15 @@ async function waitForContributionAndClick({
   timeoutMs,
   processState: readProcessState
 }) {
-  // The open View, its Webview, and its toolbar button all carry the same
-  // contribution marker. Target the actual workbench control so a second
-  // click reliably toggles the surface closed.
-  const selector = `button[data-contribution-id="${contributionId}"]`
+  // The direct bridge call above proves the runtime has the trusted smoke
+  // contribution, but React can still be committing that snapshot. Clicking
+  // an untrusted discovery launcher before the committed reload finishes is
+  // intentionally a no-op when its workspace context is not ready. The
+  // bounded discovery retries above allow the renderer lifecycle to mount;
+  // do not issue more events while polling because each refresh clears the
+  // registry before it reloads. Use the committed control for both open and
+  // re-open validation.
+  const selector = `.ds-extension-side-rail-group button[data-contribution-id="${contributionId}"][data-extension-trusted="true"]`
   const point = await pollUntil(async () => {
     assertDesktopProcessRunning(readProcessState())
     const evaluated = await sendToWorkbenchSession({
