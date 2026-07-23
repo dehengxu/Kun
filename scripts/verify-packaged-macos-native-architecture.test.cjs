@@ -34,7 +34,7 @@ async function fixture(arch) {
     )
   }
   await writeFile(join(root, 'Kun.app', 'Contents', 'MacOS', 'Kun'), 'main')
-  await writeFile(join(bindingPackage, 'lib', `sharp-darwin-${arch}.node`), 'binding')
+  await writeFile(join(bindingPackage, 'lib', `sharp-darwin-${arch}-0.35.3.node`), 'binding')
   await writeFile(join(libvipsPackage, 'lib', 'libvips-cpp.test.dylib'), 'libvips')
   await writeFile(join(canvasPackage, `skia.darwin-${arch}.node`), 'canvas')
   return { root, resources }

@@ -20,7 +20,8 @@ const {
   _internals: {
     installLinuxElectronLauncher,
     linuxElectronLauncherContent,
-    linuxRealExecutableName
+    linuxRealExecutableName,
+    packedKunPruneArgs
   }
 } = require('./after-pack.cjs')
 
@@ -64,6 +65,17 @@ function executableLauncherFixture(t) {
   chmodSync(executable, 0o755)
   return { appOutDir, executable, realExecutable }
 }
+
+test('prunes packaged Kun dependencies for the package target architecture', () => {
+  assert.deepEqual(packedKunPruneArgs({ electronPlatformName: 'darwin', arch: 'x64' }), [
+    'prune',
+    '--omit=dev',
+    '--ignore-scripts',
+    '--force',
+    '--os=darwin',
+    '--cpu=x64'
+  ])
+})
 
 test('installs an executable Linux product launcher over a preserved ELF payload', {
   skip: process.platform === 'win32' && 'requires POSIX executable modes'

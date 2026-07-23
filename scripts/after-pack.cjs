@@ -95,6 +95,20 @@ function npmCommand(args, platform = process.platform) {
   return { command: 'npm', args }
 }
 
+function packedKunPruneArgs(context) {
+  // The pack host may differ from the target architecture. npm 11 otherwise
+  // prunes Cursor's target-specific optional SDK package based on the host,
+  // leaving a package that cannot start its bundled runtime.
+  return [
+    'prune',
+    '--omit=dev',
+    '--ignore-scripts',
+    '--force',
+    `--os=${normalizePlatform(context.electronPlatformName)}`,
+    `--cpu=${normalizeArch(context.arch)}`
+  ]
+}
+
 function prunePackedKunDependencies(context) {
   const root = unpackedAppRoot(context)
   const kunDir = join(root, 'kun')
@@ -103,7 +117,7 @@ function prunePackedKunDependencies(context) {
   assertExists(join(kunDir, 'package.json'), 'Kun package manifest')
   assertExists(join(kunDir, 'node_modules'), 'Kun node_modules')
 
-  const prune = npmCommand(['prune', '--omit=dev', '--ignore-scripts'])
+  const prune = npmCommand(packedKunPruneArgs(context))
   execFileSync(prune.command, prune.args, {
     cwd: kunDir,
     env: {
@@ -361,6 +375,7 @@ exports._internals = {
   packedResourcesDir,
   unpackedAppRoot,
   npmCommand,
+  packedKunPruneArgs,
   prunePackedKunDependencies,
   materializePackedWorkspaceDependencies,
   validateBundledKunRuntime,

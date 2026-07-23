@@ -41,6 +41,11 @@ function nativeInstallArguments(arch, versions) {
     '--package-lock=false',
     '--ignore-scripts',
     '--include=optional',
+    // npm 11 validates direct platform-specific packages against the host
+    // architecture even when --cpu targets a different macOS build. This
+    // staging install is intentionally cross-architecture and the copied
+    // package manifests are verified below before they reach the app tree.
+    '--force',
     '--os=darwin',
     `--cpu=${arch}`,
     `sharp@${versions.sharp}`,

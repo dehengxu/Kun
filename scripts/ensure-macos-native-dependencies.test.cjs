@@ -40,6 +40,7 @@ test('uses npm cross-platform flags without changing package metadata', () => {
     '--package-lock=false',
     '--ignore-scripts',
     '--include=optional',
+    '--force',
     '--os=darwin',
     '--cpu=x64',
     'sharp@0.34.5',
