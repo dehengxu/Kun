@@ -69,9 +69,6 @@ type WorkbenchRightPanelElementOptions = Pick<
   changes: {
     blocks: RightPanelHostProps['changes']['blocks']
   }
-  todo: {
-    onOpenPlan: RightPanelHostProps['todo']['onOpenPlan']
-  }
   browser: Pick<BrowserPanelProps, 'blocks' | 'preferredUrl'>
   canvas: Pick<CanvasPanelProps, 'workspaceRoot' | 'activeThreadId'>
   file: Pick<
@@ -123,7 +120,6 @@ export function useWorkbenchRightPanelElement({
   write,
   sdd,
   changes,
-  todo,
   browser,
   canvas,
   file,
@@ -185,7 +181,6 @@ export function useWorkbenchRightPanelElement({
         onCollapse
       }}
       changes={{ blocks: changes.blocks, onCollapse }}
-      todo={{ onCollapse, onOpenPlan: todo.onOpenPlan }}
       browser={{
         blocks: browser.blocks,
         preferredUrl: browser.preferredUrl,

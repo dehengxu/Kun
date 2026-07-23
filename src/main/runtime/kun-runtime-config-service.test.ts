@@ -26,7 +26,11 @@ describe('Kun runtime config service', () => {
       baseUrl: 'https://example.test/v1',
       model: 'model-next',
       approvalPolicy: 'never' as const,
-      sandboxMode: 'read-only' as const
+      sandboxMode: 'read-only' as const,
+      runtimeTuning: {
+        ...defaultKunRuntimeSettings().runtimeTuning,
+        maxConcurrentTurns: 32
+      }
     }
     const base = normalizeAppSettings({} as AppSettingsV1)
     const settings = normalizeAppSettings({
@@ -43,6 +47,11 @@ describe('Kun runtime config service', () => {
         insecure: false,
         storage: { backend: 'hybrid' },
         providers: {}
+      },
+      runtime: {
+        turnLimits: {
+          maxConcurrentTurns: runtime.runtimeTuning.maxConcurrentTurns
+        }
       }
     }))
 
@@ -60,6 +69,9 @@ describe('Kun runtime config service', () => {
     expect(body.serve).not.toHaveProperty('runtimeToken')
     expect(body.serve).not.toHaveProperty('insecure')
     expect(body.serve).not.toHaveProperty('storage')
+    expect(body.serve?.localModelGateway).toEqual({ enabled: false })
+    expect(body.serve?.localModelGateway).not.toHaveProperty('name')
+    expect(body.runtime?.turnLimits?.maxConcurrentTurns).toBe(32)
     expect(RuntimeConfigApplyRequest.safeParse(body).success).toBe(true)
 
     const received: RuntimeConfigApplyPayload[] = []

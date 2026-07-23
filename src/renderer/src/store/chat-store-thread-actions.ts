@@ -1,4 +1,4 @@
-import type { ReviewTarget } from '../agent/types'
+import type { ChatBlock, ReviewTarget } from '../agent/types'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import {
@@ -9,7 +9,7 @@ import {
 import i18n from '../i18n'
 import { applyTheme, applyUiFontScale } from '../lib/apply-theme'
 import { formatWorkspacePickerError } from '../lib/format-workspace-picker-error'
-import { formatRuntimeError, getRuntimeErrorCode } from '../lib/format-runtime-error'
+import { describeRuntimeError, formatRuntimeError, getRuntimeErrorCode } from '../lib/format-runtime-error'
 import {
   deriveThreadTitleFromPrompt,
   getDefaultThreadTitle,
@@ -46,6 +46,12 @@ import type {
   WriteAssistantMessageContext
 } from './chat-store-types'
 import { canGuideQueuedMessage } from './queued-message-guidance'
+import {
+  isPendingQueuedMessage,
+  queuedMessagesForThread,
+  reconcileQueuedMessages,
+  saveQueuedMessagesForThread
+} from './queued-message-persistence'
 import {
   accountIdForComposerSelection,
   activeClawChannel,
@@ -136,6 +142,20 @@ let drainingQueuedMessages = false
 const guidingQueuedMessageIds = new Set<string>()
 const checkpointGitAvailability = new GitCheckpointAvailabilityCache()
 
+function localConversationErrorBlock(error: unknown, id: string): Extract<ChatBlock, { kind: 'system' }> {
+  const view = describeRuntimeError(error)
+  return {
+    kind: 'system',
+    id,
+    createdAt: new Date().toISOString(),
+    text: view.message,
+    ...(view.code ? { code: view.code } : {}),
+    ...(view.detail ? { detail: view.detail } : {}),
+    severity: 'error',
+    runtimeError: true
+  }
+}
+
 function activeChatWorkspaceRoot(state: ChatState): string {
   const activeThread = state.activeThreadId
     ? state.threads.find((thread) => thread.id === state.activeThreadId)
@@ -184,7 +204,14 @@ function activeWriteMessageContextMatches(context: WriteAssistantMessageContext)
 
 export function createThreadActions(
   { set, get, sseAbortRef }: StoreActionContext
-): Pick<ChatState, 'createThread' | 'createConversation' | 'recoverActiveTurn' | 'selectThread' | 'subscribeThreadEventsLive' | 'drainQueuedMessages' | 'removeQueuedMessage' | 'guideQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
+): Pick<ChatState, 'createThread' | 'createConversation' | 'recoverActiveTurn' | 'selectThread' | 'subscribeThreadEventsLive' | 'drainQueuedMessages' | 'removeQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
+  const persistActiveQueuedMessages = (): void => {
+    const state = get()
+    if (state.activeThreadId) {
+      saveQueuedMessagesForThread(state.activeThreadId, state.queuedMessages)
+    }
+  }
+
   return {
   createThread: async (options = {}) => {
     if (get().runtimeConnection !== 'ready') {
@@ -393,8 +420,13 @@ export function createThreadActions(
         ? state.currentTurnUserId ?? latestUserMessageId ?? findLatestUserBlockId(blocks)
         : null
       const currentTurnId = busy ? state.currentTurnId ?? latestTurnId ?? null : null
+      const durableQueuedMessages = queuedMessagesForThread(activeThreadId)
+      const queuedMessages = reconcileQueuedMessages(
+        state.queuedMessages.length > 0 ? state.queuedMessages : durableQueuedMessages,
+        { busy, turnId: currentTurnId, blocks }
+      )
 
-      set((s) => ({
+      set({
         activeThreadId,
         activeThreadGoal: goal ?? null,
         activeThreadTodos: todos ?? null,
@@ -410,8 +442,9 @@ export function createThreadActions(
         currentTurnId,
         currentTurnUserId,
         turnDurationByUserId,
-        queuedMessages: s.queuedMessages
-      }))
+        queuedMessages
+      })
+      saveQueuedMessagesForThread(activeThreadId, queuedMessages)
 
       const ac = new AbortController()
       sseAbortRef.current = ac
@@ -458,6 +491,7 @@ export function createThreadActions(
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
     const p = getProvider()
+    const durableQueuedMessages = queuedMessagesForThread(id)
     try {
       resetBusyRecoveryAttempts()
       clearBusyWatchdog()
@@ -498,6 +532,11 @@ export function createThreadActions(
       const threadSnap = get().threads.find((thread) => thread.id === id) ?? null
       const composerSelection = composerSelectionForThread(get(), threadSnap)
       const composerMode = composerModeForThread(threadSnap, readThreadComposerMode(id))
+      const queuedMessages = reconcileQueuedMessages(durableQueuedMessages, {
+        busy,
+        turnId: latestTurnId,
+        blocks
+      })
       set({
         watchTurnCompletion: nextWatch,
         unreadThreadIds: nextUnread,
@@ -520,7 +559,7 @@ export function createThreadActions(
         turnReasoningFirstAtByUserId: {},
         turnReasoningLastAtByUserId: {},
         inspectorSelectedId: null,
-        queuedMessages: [],
+        queuedMessages,
         composerMode,
         ...(composerSelection
           ? {
@@ -534,12 +573,17 @@ export function createThreadActions(
             }
           : {})
       })
+      saveQueuedMessagesForThread(id, queuedMessages)
       syncTurnCompletionPoll(set, get)
       const ac = new AbortController()
       sseAbortRef.current = ac
       const sink = buildThreadEventSink(set, get, { threadId: id, signal: ac.signal, sinceSeq: latestSeq })
       subscribeThreadEventsWithRecovery(p, id, latestSeq, sink, ac.signal, get)
-      if (busy) armBusyWatchdog(set, get)
+      if (busy) {
+        armBusyWatchdog(set, get)
+      } else if (queuedMessages.some(isPendingQueuedMessage)) {
+        void get().drainQueuedMessages()
+      }
     } catch (e) {
       set({
         error: formatRuntimeError(e),
@@ -595,7 +639,9 @@ export function createThreadActions(
       turnReasoningFirstAtByUserId: {},
       turnReasoningLastAtByUserId: {},
       inspectorSelectedId: null,
-      queuedMessages: []
+      queuedMessages: keepExistingBlocks
+        ? prevState.queuedMessages
+        : queuedMessagesForThread(targetThreadId)
     })
     const ac = new AbortController()
     sseAbortRef.current = ac
@@ -625,6 +671,11 @@ export function createThreadActions(
       const currentTurnUserId = busy
         ? latestUserMessageId ?? findLatestUserBlockId(blocks)
         : null
+      const queuedMessages = reconcileQueuedMessages(get().queuedMessages, {
+        busy,
+        turnId: latestTurnId,
+        blocks
+      })
       set((s) => ({
         activeThreadGoal: goal ?? null,
         activeThreadTodos: todos ?? null,
@@ -635,13 +686,15 @@ export function createThreadActions(
         busy,
         currentTurnId: busy ? latestTurnId ?? null : null,
         currentTurnUserId,
-        turnDurationByUserId
+        turnDurationByUserId,
+        queuedMessages
         // Note: `liveAssistant` and `liveReasoning` are intentionally
         // NOT touched here. They may contain deltas that arrived during
         // the fetch and must be preserved for `flushLiveBlocks` to pick
         // them up at turn boundaries.
       }))
-      if (!busy && get().queuedMessages.length > 0) {
+      saveQueuedMessagesForThread(targetThreadId, queuedMessages)
+      if (!busy && queuedMessages.some(isPendingQueuedMessage)) {
         void get().drainQueuedMessages()
       }
     } catch (e) {
@@ -662,12 +715,21 @@ export function createThreadActions(
     drainingQueuedMessages = true
     try {
       while (true) {
-        const state = get()
-        const queuedMessages = state.queuedMessages.filter((message) => !message.guiPlan)
-        if (queuedMessages.length !== state.queuedMessages.length) {
+        let state = get()
+        const queuedMessages = reconcileQueuedMessages(state.queuedMessages, {
+          busy: state.busy,
+          turnId: state.currentTurnId,
+          blocks: state.blocks
+        }).filter((message) => !message.guiPlan)
+        const queueChanged =
+          queuedMessages.length !== state.queuedMessages.length ||
+          queuedMessages.some((message, index) => message !== state.queuedMessages[index])
+        if (queueChanged) {
           set({ queuedMessages })
+          persistActiveQueuedMessages()
+          state = get()
         }
-        const next = queuedMessages[0]
+        const next = queuedMessages.find(isPendingQueuedMessage)
         if (!next || state.busy) return
         const started = await get().sendMessage(next.text, next.mode, { queued: next })
         if (!started) return
@@ -677,10 +739,33 @@ export function createThreadActions(
     }
   },
 
-  removeQueuedMessage: (id) =>
+  removeQueuedMessage: (id) => {
     set((s) => ({
       queuedMessages: s.queuedMessages.filter((message) => message.id !== id)
-    })),
+    }))
+    persistActiveQueuedMessages()
+  },
+
+  reorderQueuedMessage: (id, targetId, position) => {
+    set((state) => {
+      if (id === targetId) return {}
+      const sourceIndex = state.queuedMessages.findIndex((message) => message.id === id)
+      const targetIndex = state.queuedMessages.findIndex((message) => message.id === targetId)
+      if (sourceIndex < 0 || targetIndex < 0) return {}
+
+      const queuedMessages = [...state.queuedMessages]
+      const [message] = queuedMessages.splice(sourceIndex, 1)
+      if (!message) return {}
+      const remainingTargetIndex = queuedMessages.findIndex((candidate) => candidate.id === targetId)
+      const insertionIndex = remainingTargetIndex + (position === 'after' ? 1 : 0)
+      queuedMessages.splice(insertionIndex, 0, message)
+      if (queuedMessages.every((candidate, index) => candidate === state.queuedMessages[index])) {
+        return {}
+      }
+      return { queuedMessages }
+    })
+    persistActiveQueuedMessages()
+  },
 
   guideQueuedMessage: async (id) => {
     if (guidingQueuedMessageIds.has(id)) return false
@@ -714,6 +799,7 @@ export function createThreadActions(
         queuedMessages: current.queuedMessages.filter((candidate) => candidate.id !== id),
         error: null
       }))
+      persistActiveQueuedMessages()
       return true
     } catch (error) {
       const messageText = formatRuntimeError(error)
@@ -824,6 +910,7 @@ export function createThreadActions(
           {
             id: `q-${now}-${s.queuedMessages.length}`,
             text: trimmedText,
+            deliveryState: 'pending' as const,
             ...(displayText ? { displayText } : {}),
             ...(mode ? { mode } : {}),
             ...(composerModel ? { model: composerModel } : {}),
@@ -834,6 +921,7 @@ export function createThreadActions(
             ...(overrides?.guiPlan ? { guiPlan: overrides.guiPlan } : {}),
             ...(overrides?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
             ...(overrides?.guiDesignMode ? { guiDesignMode: true } : {}),
+            ...(overrides?.agentSurface ? { agentSurface: overrides.agentSurface } : {}),
             ...(overrides?.guiDesignArtifact ? { guiDesignArtifact: overrides.guiDesignArtifact } : {}),
             ...(writeContext ? { writeContext } : {}),
             ...(attachmentIds?.length ? { attachmentIds } : {}),
@@ -845,6 +933,7 @@ export function createThreadActions(
         extensionComposerContexts: withoutConsumedComposerContexts(s, composerContexts),
         error: null
       }))
+      persistActiveQueuedMessages()
       // UI/runtime can briefly drift (busy=false while runtime still has an active turn).
       // Kick recovery so queued input drains as soon as the in-flight turn settles.
       if (!get().busy && hasPendingActiveTurn) {
@@ -943,8 +1032,13 @@ export function createThreadActions(
       error: null,
       currentTurnUserId: userBlockId,
       turnStartedAtByUserId: { ...s.turnStartedAtByUserId, [userBlockId]: now },
-      queuedMessages: queued ? s.queuedMessages.filter((message) => message.id !== queued.id) : s.queuedMessages
+      queuedMessages: queued
+        ? s.queuedMessages.map((message) => message.id === queued.id
+            ? { ...message, deliveryState: 'starting' as const }
+            : message)
+        : s.queuedMessages
     }))
+    if (queued) persistActiveQueuedMessages()
     if (!activeThreadId) {
       try {
         const settings = await rendererRuntimeClient.getSettings()
@@ -962,6 +1056,7 @@ export function createThreadActions(
             queuedMessages: previousQueuedMessages,
             error: i18n.t('common:workspaceRequiredToCreateThread')
           })
+          persistActiveQueuedMessages()
           return false
         }
         const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot])
@@ -1035,12 +1130,14 @@ export function createThreadActions(
             ? { route: 'settings' as const, settingsSection: 'agents' as const }
             : {})
         })
+        persistActiveQueuedMessages()
         return false
       }
     }
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
     clearBusyWatchdog()
+    let runtimeTurnAccepted = false
     try {
       const seqAtSend = get().lastSeq
       const channel = get().route === 'claw' ? activeClawChannel(get()) : null
@@ -1097,6 +1194,8 @@ export function createThreadActions(
       const runtimeDisplayText = channel ? displayText : (userDisplayText ?? trimmedText)
       const { turnId, userMessageItemId } = await p.sendUserMessage(activeThreadId, runtimeText, {
         mode,
+        agentSurface: queued?.agentSurface ?? overrides?.agentSurface ??
+          (writeContext || get().route === 'write' ? 'write' : guiDesignMode || get().route === 'design' ? 'design' : 'code'),
         ...(composerModel ? { model: composerModel } : {}),
         ...(!channel && composerProviderId ? { providerId: composerProviderId } : {}),
         ...(!channel && composerAccountId ? { accountId: composerAccountId } : {}),
@@ -1113,6 +1212,20 @@ export function createThreadActions(
         ...(fileReferences.length ? { fileReferences } : {}),
         ...(composerContexts.length ? { composerContexts } : {})
       })
+      runtimeTurnAccepted = true
+      if (queued) {
+        set((state) => ({
+          queuedMessages: state.queuedMessages.map((message) => message.id === queued.id
+            ? {
+                ...message,
+                deliveryState: 'in_flight' as const,
+                deliveryTurnId: turnId,
+                deliveryUserMessageItemId: userMessageItemId ?? userBlockId
+              }
+            : message)
+        }))
+        persistActiveQueuedMessages()
+      }
       if (!queued && composerContexts.length > 0) {
         set((state) => ({
           extensionComposerContexts: withoutConsumedComposerContexts(state, composerContexts)
@@ -1238,19 +1351,25 @@ export function createThreadActions(
           queuedMessages: previousQueuedMessages,
           error: i18n.t('common:runtimeActiveTurn')
         })
+        persistActiveQueuedMessages()
         await get().recoverActiveTurn()
         await get().refreshThreads()
         return false
       }
-      set({
-        error: formatRuntimeError(e),
+      const view = describeRuntimeError(e)
+      set((state) => ({
+        blocks: runtimeTurnAccepted
+          ? state.blocks
+          : [...state.blocks, localConversationErrorBlock(e, `local_error_${userBlockId}`)],
+        error: view.summary,
         busy: false,
         currentTurnId: null,
         queuedMessages: previousQueuedMessages,
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {})
-      })
+      }))
+      persistActiveQueuedMessages()
       await get().refreshThreads()
       return false
     }

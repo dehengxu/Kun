@@ -306,6 +306,7 @@ function normalizeChildMetadata(
     childId: child.childId,
     ...(child.childLabel ? { childLabel: child.childLabel } : {}),
     ...(child.childProfile ? { childProfile: child.childProfile } : {}),
+    ...(child.childProfileName ? { childProfileName: child.childProfileName } : {}),
     ...(child.childModel ? { childModel: child.childModel } : {}),
     ...(child.childToolPolicy ? { childToolPolicy: child.childToolPolicy } : {}),
     childStatus: child.childStatus,
@@ -1255,7 +1256,8 @@ function systemErrorBlockFromItem(item: CoreTurnItemJson): ChatBlock {
     text: redactSecretText(message),
     ...(item.code ? { code: item.code } : {}),
     ...(detail ? { detail } : {}),
-    severity: errorSeverity(item.severity, item.code)
+    severity: errorSeverity(item.severity, item.code),
+    runtimeError: true
   }
 }
 

@@ -26,6 +26,7 @@ const DEFAULT_IMAGE_GENERATION = {
 function imageGenerationProtocolLabelKey(protocol: string): string {
   if (protocol === 'minimax-image') return 'imageGenProtocolMiniMax'
   if (protocol === 'codex-responses-image') return 'imageGenProtocolCodex'
+  if (protocol === 'grok-imagine-image') return 'imageGenProtocolGrok'
   return 'imageGenProtocolOpenAi'
 }
 

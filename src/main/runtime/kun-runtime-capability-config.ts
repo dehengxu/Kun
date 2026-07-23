@@ -1,5 +1,6 @@
 import type { KunRuntimeSettingsV1 } from '../../shared/app-settings'
 import { resolveCodexOAuthApiKey } from '../codex-auth'
+import { resolveGrokMediaOAuthApiKey } from '../grok-auth'
 
 export function computerUseConfigForRuntime(
   value: Pick<KunRuntimeSettingsV1, 'computerUse'>['computerUse'],
@@ -23,7 +24,9 @@ export function imageGenConfigForRuntime(
     enabled: value.enabled,
     timeoutMs: value.timeoutMs
   }
-  const resolvedApiKey = resolveCodexOAuthApiKey(value.apiKey)
+  const resolvedApiKey = value.protocol === 'grok-imagine-image'
+    ? resolveGrokMediaOAuthApiKey(value.apiKey)
+    : resolveCodexOAuthApiKey(value.apiKey)
   applyTrimmedFields(next, {
     protocol: value.protocol,
     baseUrl: value.baseUrl,
@@ -88,13 +91,18 @@ export function videoGenConfigForRuntime(
     timeoutMs: value.timeoutMs,
     pollIntervalMs: value.pollIntervalMs
   }
+  const resolvedApiKey = value.protocol === 'grok-imagine-video'
+    ? resolveGrokMediaOAuthApiKey(value.apiKey)
+    : { apiKey: value.apiKey }
   applyTrimmedFields(next, {
     protocol: value.protocol,
     baseUrl: value.baseUrl,
-    apiKey: value.apiKey,
+    apiKey: resolvedApiKey.apiKey,
     model: value.model,
     defaultResolution: value.defaultResolution
   })
+  if (resolvedApiKey.headers) next.headers = resolvedApiKey.headers
+  else delete next.headers
   return next
 }
 
@@ -106,6 +114,7 @@ export function runtimeTuningConfigForRuntime(
     ...existing,
     turnLimits: {
       ...objectValue(existing.turnLimits),
+      maxConcurrentTurns: value.maxConcurrentTurns,
       maxWallTimeMs: value.maxWallTimeMs
     },
     streamIdleTimeoutMs: value.streamIdleTimeoutMs,

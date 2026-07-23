@@ -87,6 +87,8 @@ export type ToolHostContext = {
   guiDesignCanvas?: boolean
   /** True only for product Design turns (not Code sidebar canvas turns). */
   guiDesignMode?: boolean
+  /** Code is the compatibility default when an older turn omits the field. */
+  agentSurface?: 'code' | 'write' | 'design'
   /** Reserved SVG artifact exposed to structured SVG tools for this turn. */
   guiDesignArtifact?: GuiDesignArtifactContext
   /** True when the active turn originated from an IM bridge. */
@@ -95,6 +97,8 @@ export type ToolHostContext = {
   model?: ModelCapabilityMetadata
   /** Active model provider id selected for this turn. Child agents inherit this routing unless a profile overrides it. */
   modelProviderId?: string
+  /** Effective reasoning strength selected for this model round. Custom child agents inherit it. */
+  reasoningEffort?: string
   /** Skill ids activated for this turn, if the Skill runtime is enabled. */
   activeSkillIds?: readonly string[]
   /** Optional memory recall/mutation policy for this turn. */

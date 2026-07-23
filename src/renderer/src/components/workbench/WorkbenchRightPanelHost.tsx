@@ -12,7 +12,6 @@ export type WorkbenchRightPanelHostProps = Pick<
   | 'rightPanelMode'
   | 'writeAssistantOpen'
   | 'changes'
-  | 'todo'
   | 'browser'
   | 'planPanel'
   | 'canvas'
@@ -45,7 +44,6 @@ export function WorkbenchRightPanelHost({
   write,
   sdd,
   changes,
-  todo,
   browser,
   planPanel,
   canvas,
@@ -68,7 +66,6 @@ export function WorkbenchRightPanelHost({
       write={{ ...design.shared, ...write }}
       sdd={{ ...design.shared, ...sdd }}
       changes={changes}
-      todo={todo}
       browser={browser}
       planPanel={planPanel}
       canvas={canvas}

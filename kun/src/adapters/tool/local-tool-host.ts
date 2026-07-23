@@ -197,7 +197,18 @@ export class LocalToolHost implements ToolHost {
     const readValidation = this.readTracker.validateBeforeTool({ context, call: activeCall })
     if (!readValidation.ok) {
       return {
-        item: this.errorToolResult(context, activeCall, tool, readValidation.message, 'read_before_edit_required'),
+        item: this.errorToolResult(
+          context,
+          activeCall,
+          tool,
+          readValidation.message,
+          'read_before_edit_required',
+          {
+            guidance: readValidation.guidance,
+            next_action: readValidation.nextAction,
+            retry_tool: activeCall.toolName
+          }
+        ),
         approved: false
       }
     }
@@ -472,7 +483,8 @@ export class LocalToolHost implements ToolHost {
     call: ToolCallLike,
     tool: LocalTool,
     message: string,
-    code: string
+    code: string,
+    details: Record<string, unknown> = {}
   ): TurnItem {
     return makeToolResultItem({
       id: `item_${call.callId}`,
@@ -481,7 +493,7 @@ export class LocalToolHost implements ToolHost {
       callId: call.callId,
       toolName: call.toolName,
       toolKind: call.toolKind ?? tool.toolKind,
-      output: { code, error: message },
+      output: { ...details, code, error: message },
       isError: true
     })
   }

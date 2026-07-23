@@ -6,6 +6,7 @@ import { LocalToolHost, echoTool, userInputTool } from './local-tool-host.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import { InMemoryArtifactStore } from '../../artifacts/artifact-store.js'
 import { createEditLocalTool, createWriteLocalTool } from './builtin-file-tools.js'
+import { createReadLocalTool } from './builtin-read-tool.js'
 import { resolveWorkspacePath, withToolBoundary } from './builtin-tool-utils.js'
 
 describe('LocalToolHost approval policy', () => {
@@ -614,11 +615,102 @@ describe('LocalToolHost approval policy', () => {
       expect(awaitApproval).not.toHaveBeenCalled()
       expect(result.item).toMatchObject({
         isError: true,
-        output: { code: 'read_before_edit_required' }
+        output: {
+          code: 'read_before_edit_required',
+          guidance: expect.stringContaining('fetch the current disk contents'),
+          next_action: {
+            tool: 'read',
+            arguments: { path: target }
+          },
+          retry_tool: 'edit'
+        }
       })
       await expect(readFile(target, 'utf8')).resolves.toBe('alpha')
     } finally {
       await rm(parent, { recursive: true, force: true })
+    }
+  })
+
+  it('recovers from an external mutation with a fresh runtime-identified read', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'kun-edit-read-recovery-'))
+    const target = join(workspace, 'file.ts')
+    const context: ToolHostContext = {
+      threadId: 'thread_edit_read_recovery',
+      turnId: 'turn_edit_read_recovery',
+      workspace,
+      approvalPolicy: 'auto',
+      sandboxMode: 'workspace-write',
+      abortSignal: new AbortController().signal,
+      awaitApproval: vi.fn(async () => 'allow' as const)
+    }
+    try {
+      await writeFile(target, 'const value = "before"')
+      const host = new LocalToolHost({
+        tools: [createReadLocalTool(), createEditLocalTool()],
+        readTracker: true
+      })
+
+      const firstRead = await host.execute(
+        { callId: 'call_tool_1', toolName: 'read', arguments: { path: 'file.ts' } },
+        context
+      )
+      expect(firstRead.item).toMatchObject({
+        id: 'item_call_tool_1',
+        output: { content: 'const value = "before"' }
+      })
+
+      // Simulate a shell or other process mutating the file behind the tracked read.
+      await writeFile(target, 'const value = "after-shell"')
+
+      const blockedEdit = await host.execute(
+        {
+          callId: 'call_tool_2',
+          toolName: 'edit',
+          arguments: {
+            path: 'file.ts',
+            oldText: 'const value = "after-shell"',
+            newText: 'const value = "fixed"'
+          }
+        },
+        context
+      )
+      expect(blockedEdit.item).toMatchObject({
+        isError: true,
+        output: {
+          code: 'read_before_edit_required',
+          next_action: { tool: 'read', arguments: { path: 'file.ts' } }
+        }
+      })
+
+      const freshRead = await host.execute(
+        { callId: 'call_tool_3', toolName: 'read', arguments: { path: 'file.ts' } },
+        context
+      )
+      expect(freshRead.item).toMatchObject({
+        id: 'item_call_tool_3',
+        output: { content: 'const value = "after-shell"' }
+      })
+      expect(freshRead.item.id).not.toBe(firstRead.item.id)
+
+      const successfulEdit = await host.execute(
+        {
+          callId: 'call_tool_4',
+          toolName: 'edit',
+          arguments: {
+            path: 'file.ts',
+            oldText: 'const value = "after-shell"',
+            newText: 'const value = "fixed"'
+          }
+        },
+        context
+      )
+      expect(successfulEdit.item).toMatchObject({
+        id: 'item_call_tool_4',
+        isError: false
+      })
+      await expect(readFile(target, 'utf8')).resolves.toBe('const value = "fixed"')
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
     }
   })
 

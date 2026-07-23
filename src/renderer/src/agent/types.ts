@@ -91,6 +91,8 @@ export type RuntimeChildMetadata = {
   childLabel?: string
   /** Subagent profile id (e.g. `general`, `explore`) resolved by the runtime. */
   childProfile?: string
+  /** Profile display name snapshotted for this child run. */
+  childProfileName?: string
   /** Model override the child ran under, when one was resolved. */
   childModel?: string
   /** Tool policy applied to the child run. */
@@ -339,6 +341,8 @@ export type ChatBlock =
       code?: string
       detail?: string
       severity?: RuntimeErrorSeverity
+      /** Distinguishes durable runtime failures from ordinary system status rows. */
+      runtimeError?: true
     }
   | {
       kind: 'approval'
@@ -564,6 +568,7 @@ export interface AgentProvider {
       }
       guiDesignCanvas?: boolean
       guiDesignMode?: boolean
+      agentSurface?: 'code' | 'write' | 'design'
       guiDesignArtifact?: {
         kind: 'svg'
         artifactId: string

@@ -67,7 +67,10 @@ import {
 } from '../shared/app-settings'
 import { parseRuntimeErrorBody, runtimeErrorToError, type RuntimeErrorCode } from '../shared/runtime-error'
 import type { GuiUpdateState } from '../shared/gui-update'
-import type { TrayActionPayload } from '../shared/kun-gui-api'
+import type {
+  KunRuntimeSettingsSyncStatusPayload,
+  TrayActionPayload
+} from '../shared/kun-gui-api'
 import { isAllowedDevPreviewUrl } from '../shared/dev-preview-url'
 import { isAuthorizedPrototypeFileUrl } from './services/prototype-embed-registry'
 import { fetchUpstreamModelIds } from './upstream-models'
@@ -110,11 +113,13 @@ import {
 } from './claw-schedule-mcp-config'
 import {
   runtimeProcessConfigChanged,
+  runtimeSettingsRollbackPatch,
   runtimeSettingsApplyMode,
   stableSettingsStringify
 } from './runtime-settings-apply-mode'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { DataMigrationController } from './data-migration/data-migration-controller'
+import { resolveDataMigrationFeatureEnabled } from './data-migration/feature-policy'
 import {
   configureManagedWeixinBridgeUrlResolver,
   pollFeishuInstall,
@@ -788,6 +793,23 @@ async function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
  * slow-but-alive runtime would cost the user their in-flight turn (#621).
  */
 const RUNTIME_HUNG_CONFIRM_MS = 10_000
+let runtimeSettingsSyncGeneration = 0
+let runtimeSettingsSyncStatus: KunRuntimeSettingsSyncStatusPayload = {
+  state: 'idle',
+  generation: 0,
+  at: new Date().toISOString()
+}
+
+function publishRuntimeSettingsSyncStatus(
+  status: Omit<KunRuntimeSettingsSyncStatusPayload, 'at'>
+): void {
+  const full = { ...status, at: new Date().toISOString() }
+  runtimeSettingsSyncStatus = full
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('runtime:settings-sync-status', full)
+  }
+}
+
 const runtimeSupervisor = new KunRuntimeSupervisor<AppSettingsV1>({
   deps: {
     loadSettings: () => store.load(),
@@ -839,23 +861,45 @@ function queueRuntimeSettingsApply(prev: AppSettingsV1, next: AppSettingsV1): vo
   runtimeSupervisor.noteLatest(next)
   const applyMode = runtimeSettingsApplyMode(anchor, next)
   if (applyMode === 'none') return
+  const generation = ++runtimeSettingsSyncGeneration
+  publishRuntimeSettingsSyncStatus({ state: 'syncing', generation })
+
+  const reportCurrent = (
+    outcome: Pick<KunRuntimeSettingsSyncStatusPayload, 'state' | 'message'>
+  ): void => {
+    if (generation !== runtimeSettingsSyncGeneration) return
+    publishRuntimeSettingsSyncStatus({
+      state: outcome.state,
+      generation,
+      ...(outcome.message ? { message: outcome.message } : {})
+    })
+  }
 
   runtimeSupervisor.enqueueSettingsApply(
     async () => {
+      if (generation !== runtimeSettingsSyncGeneration) return
       const current = runtimeSupervisor.latestOr(next)
       const currentMode = runtimeSettingsApplyMode(anchor, current)
       if (currentMode === 'restart') {
-        await restartManagedRuntimeForSettingsChange(anchor, current)
+        reportCurrent(await restartManagedRuntimeForSettingsChange(anchor, current))
       } else if (currentMode === 'hot') {
         const result = await applyManagedRuntimeSettingsHot(current, 'settings-apply')
         if (result === 'restart_required') {
-          await restartManagedRuntimeForSettingsChange(anchor, current, true)
+          reportCurrent(await restartManagedRuntimeForSettingsChange(anchor, current, true))
+        } else if (result === 'applied') {
+          reportCurrent({ state: 'synced' })
+        } else {
+          reportCurrent({ state: 'unavailable', message: 'Kun Runtime is not running.' })
         }
+      } else {
+        reportCurrent({ state: 'synced' })
       }
     },
     (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      reportCurrent({ state: 'failed', message })
       logWarn('settings-apply', 'Failed to apply Kun runtime settings in background', {
-        message: error instanceof Error ? error.message : String(error)
+        message
       })
     }
   )
@@ -863,15 +907,38 @@ function queueRuntimeSettingsApply(prev: AppSettingsV1, next: AppSettingsV1): vo
 
 function queueRuntimeMcpConfigApply(settings: AppSettingsV1): void {
   runtimeSupervisor.noteLatest(settings)
+  const settingsGeneration = runtimeSettingsSyncStatus.state === 'syncing'
+    ? runtimeSettingsSyncGeneration
+    : null
+  const reportSettingsOutcome = (outcome: ManagedRuntimeSettingsApplyOutcome): void => {
+    if (
+      settingsGeneration === null ||
+      settingsGeneration !== runtimeSettingsSyncGeneration ||
+      runtimeSettingsSyncStatus.state !== 'syncing'
+    ) return
+    publishRuntimeSettingsSyncStatus({
+      state: outcome.state,
+      generation: settingsGeneration,
+      ...(outcome.message ? { message: outcome.message } : {})
+    })
+  }
   runtimeSupervisor.enqueueSettingsApply(
     async () => {
       const current = runtimeSupervisor.latestOr(settings)
       const result = await applyManagedRuntimeSettingsHot(current, 'mcp-config')
       if (result === 'restart_required') {
-        await restartManagedRuntimeForMcpConfigChange(current)
+        reportSettingsOutcome(await restartManagedRuntimeForMcpConfigChange(current))
+      } else if (result === 'applied') {
+        reportSettingsOutcome({ state: 'synced' })
+      } else {
+        reportSettingsOutcome({ state: 'unavailable', message: 'Kun Runtime is not running.' })
       }
     },
     (error: unknown) => {
+      reportSettingsOutcome({
+        state: 'failed',
+        message: error instanceof Error ? error.message : String(error)
+      })
       logWarn('mcp-config', 'Failed to apply Kun MCP config change in background', {
         message: error instanceof Error ? error.message : String(error)
       })
@@ -1245,6 +1312,9 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
     if (runtimeSupervisor.lastStatus && !window.isDestroyed()) {
       window.webContents.send('runtime:status', runtimeSupervisor.lastStatus)
     }
+    if (!window.isDestroyed()) {
+      window.webContents.send('runtime:settings-sync-status', runtimeSettingsSyncStatus)
+    }
     showWindow()
   })
   setTimeout(() => {
@@ -1317,6 +1387,10 @@ function isFullSettingsSnapshotPatch(partial: AppSettingsPatch): boolean {
 }
 
 type ManagedRuntimeHotApplyResult = 'applied' | 'skipped' | 'restart_required'
+type ManagedRuntimeSettingsApplyOutcome = Pick<
+  KunRuntimeSettingsSyncStatusPayload,
+  'state' | 'message'
+>
 
 async function applyManagedRuntimeSettingsHot(
   settings: AppSettingsV1,
@@ -1369,8 +1443,8 @@ async function restartManagedRuntimeForSettingsChange(
   prev: AppSettingsV1,
   next: AppSettingsV1,
   force = false
-): Promise<void> {
-  if (!force && !runtimeProcessConfigChanged(prev, next)) return
+): Promise<ManagedRuntimeSettingsApplyOutcome> {
+  if (!force && !runtimeProcessConfigChanged(prev, next)) return { state: 'synced' }
 
   // Let any in-flight boot launch finish (or fail) before we read liveness
   // and stop the child. Killing a kun that is still inside its startup window
@@ -1383,7 +1457,7 @@ async function restartManagedRuntimeForSettingsChange(
   const adapter = kunRuntimeAdapter
   const wasRunning = adapter.isChildRunning()
 
-  if (!wasRunning) return
+  if (!wasRunning) return { state: 'unavailable', message: 'Kun Runtime is not running.' }
 
   // Decide BEFORE stopping the child. Stranding a healthy runtime is exactly
   // issue #329: a partial/transient save (e.g. the active providerId moved to
@@ -1399,7 +1473,10 @@ async function restartManagedRuntimeForSettingsChange(
       'settings-apply',
       'Skipping Kun restart: the new settings resolve to no API key but the running runtime had one — leaving the healthy runtime in place.'
     )
-    return
+    return {
+      state: 'failed',
+      message: 'Kun Runtime kept the previous provider configuration because the new credentials are unavailable.'
+    }
   }
 
   await waitForManagedRuntimeReadyBeforeStop(prev, 'settings-apply')
@@ -1410,7 +1487,7 @@ async function restartManagedRuntimeForSettingsChange(
       source: 'settings-apply',
       message: 'Kun was stopped: the new settings have no API key or auto-start is disabled.'
     })
-    return
+    return { state: 'unavailable', message: 'Kun Runtime is stopped by the current settings.' }
   }
 
   publishRuntimeStatus({ state: 'restarting', source: 'settings-apply' })
@@ -1423,10 +1500,12 @@ async function restartManagedRuntimeForSettingsChange(
     }
     noteRuntimeHealthy('settings-apply')
     publishRuntimeStatus({ state: 'running', source: 'settings-apply' })
+    return { state: 'synced' }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     logWarn('settings-apply', `Kun restart failed after settings change: ${message}`)
-    await rollbackRuntimeSettingsAfterFailedApply(prev, message)
+    await rollbackRuntimeSettingsAfterFailedApply(prev, next, message)
+    return { state: 'failed', message }
   }
 }
 
@@ -1438,15 +1517,16 @@ async function restartManagedRuntimeForSettingsChange(
  */
 async function rollbackRuntimeSettingsAfterFailedApply(
   prev: AppSettingsV1,
+  desired: AppSettingsV1,
   failureMessage: string
 ): Promise<void> {
   const adapter = kunRuntimeAdapter
   let base: AppSettingsV1 = prev
   try {
-    base = await store.patch({
-      agents: { kun: getKunRuntimeSettings(prev) },
-      provider: prev.provider
-    })
+    // Route definitions are durable user intent, not process-critical launch
+    // settings. Keep the newest routes repairable while restoring the previous
+    // Runtime/provider transport configuration.
+    base = await store.patch(runtimeSettingsRollbackPatch(prev, desired))
     runtimeSupervisor.noteLatest(base)
   } catch (error) {
     logWarn('settings-apply', 'failed to restore previous runtime settings on disk', {
@@ -1488,7 +1568,9 @@ async function rollbackRuntimeSettingsAfterFailedApply(
   }
 }
 
-async function restartManagedRuntimeForMcpConfigChange(settings: AppSettingsV1): Promise<void> {
+async function restartManagedRuntimeForMcpConfigChange(
+  settings: AppSettingsV1
+): Promise<ManagedRuntimeSettingsApplyOutcome> {
   // See restartManagedRuntimeForSettingsChange: never interrupt an in-flight
   // boot launch (#544 restart storm).
   await waitForKunStartupSettled()
@@ -1497,10 +1579,12 @@ async function restartManagedRuntimeForMcpConfigChange(settings: AppSettingsV1):
   const adapter = kunRuntimeAdapter
   const wasRunning = adapter.isChildRunning()
 
-  if (!wasRunning) return
+  if (!wasRunning) return { state: 'unavailable', message: 'Kun Runtime is not running.' }
   await waitForManagedRuntimeReadyBeforeStop(settings, 'mcp-config')
   await adapter.stopAndWait()
-  if (!resolveConfiguredApiKey(settings) || !runtime.autoStart) return
+  if (!resolveConfiguredApiKey(settings) || !runtime.autoStart) {
+    return { state: 'unavailable', message: 'Kun Runtime is stopped by the current settings.' }
+  }
 
   publishRuntimeStatus({ state: 'restarting', source: 'mcp-config' })
   try {
@@ -1512,6 +1596,7 @@ async function restartManagedRuntimeForMcpConfigChange(settings: AppSettingsV1):
     }
     noteRuntimeHealthy('mcp-config')
     publishRuntimeStatus({ state: 'running', source: 'mcp-config' })
+    return { state: 'synced' }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     logWarn('mcp-config', `Kun restart failed after MCP config change: ${message}`)
@@ -1520,6 +1605,7 @@ async function restartManagedRuntimeForMcpConfigChange(settings: AppSettingsV1):
       source: 'mcp-config',
       message: `Kun failed to restart after the MCP config change: ${message}. Check the MCP config file, then retry.`
     })
+    return { state: 'failed', message }
   }
 }
 
@@ -1811,6 +1897,7 @@ app.whenReady().then(async () => {
       const settings = await store.load()
       return runtimeRequest(settings, path, { method, body, headers })
     },
+    getRuntimeSettingsSyncStatus: () => runtimeSettingsSyncStatus,
     restartRuntime: async () => {
       const settings = await store.load()
       await restartRuntime(settings)
@@ -1858,8 +1945,7 @@ app.whenReady().then(async () => {
     sourceInstallationId: `installation_${createHash('sha256').update(app.getPath('userData')).digest('hex').slice(0, 24)}`,
     sourceAppVersion: app.getVersion(),
     sourceRuntimeVersion: app.getVersion(),
-    featureEnabled: process.env.KUN_DATA_MIGRATION_ENABLED === '1' ||
-      (process.env.KUN_DATA_MIGRATION_ENABLED !== '0' && !app.isPackaged)
+    featureEnabled: resolveDataMigrationFeatureEnabled()
   })
   dataMigrationController.registerIpc()
   const extensionIpcOptions: RegisterExtensionIpcHandlersOptions = {

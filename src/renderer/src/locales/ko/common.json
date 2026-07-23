@@ -1558,6 +1558,7 @@
   "composerVoiceFailed": "음성 녹음 실패: {{message}}",
   "composerImageUnavailable": "이 런타임에는 이미지 입력을 사용할 수 없습니다.",
   "composerAttachmentUnavailable": "첨부파일을 업로드할 수 없습니다.",
+  "composerDropFilesHere": "놓아서 이 대화에 파일 추가",
   "composerAttachmentModelUnsupported": "선택한 모델은 이미지를 읽을 수 없습니다. 비전 모델로 전환하거나 부착물을 제거하세요.",
   "composerPdfAttachmentUnavailable": "이 파일에서는 PDF 텍스트 추출을 사용할 수 없습니다.",
   "composerPdfAttachmentNoText": "이 PDF에는 추출 가능한 텍스트가 없으며 내장 OCR이 읽을 수 있는 텍스트를 감지할 수 없습니다. 더 선명한 스캔을 시도하거나 관련 페이지를 붙여넣으세요.",
@@ -1583,8 +1584,8 @@
   "composerPlanPlaceholder": "실행하기 전에 목표를 세분화하고, 단계를 간략하게 설명하고, 범위 변경 사항을 변경하세요.",
   "composerSlashHint": "명령의 경우 /를 입력하세요.",
   "workingDirectory": "작업 디렉토리",
-  "emptyHeroTitle": "새로운 대화를 시작하세요",
-  "emptyHeroSub": "작업을 선택하거나 질문을 입력하세요.",
+  "emptyHeroTitle": "오늘 Kun과 무엇을 해볼까요?",
+  "emptyHeroSub": "아이디어를 설명하거나 새 작업을 시작해 보세요",
   "emptyHeroSubNoWorkspace": "먼저 로컬 작업 디렉터리를 선택한 다음 첫 번째 스레드를 시작하세요.",
   "usageHeatmapBadge": "쿤 사용법",
   "usageHeatmapTitle": "최근 상담원 리듬",
@@ -1743,6 +1744,9 @@
   "queuedMessagesTitle": "{{count}}개 대기 중",
   "queuedMessagesHint": "이 메시지는 현재 응답이 완료된 후 자동으로 전송됩니다.",
   "queuedMessageRemove": "대기 중인 메시지 제거",
+  "queuedMessageMoreActions": "대기 메시지 추가 작업",
+  "queuedMessageEdit": "메시지 편집",
+  "queuedMessageReorder": "드래그하여 대기 순서 변경",
   "guideQueuedMessage": "가이드",
   "guideQueuedMessagePending": "안내",
   "guideQueuedMessageHint": "에이전트의 다음 모델 상호작용에 이 입력을 추가하세요.",
@@ -1833,6 +1837,11 @@
   "sidePanelTitle": "지점 대화",
   "sidePanelOpen": "지점 대화 열기",
   "sidePanelNew": "새로운 지점 대화",
+  "sidePanelTabTitle": "분기 대화 {{index}}",
+  "sidePanelNewTabTitle": "새 분기",
+  "sidePanelOriginMeta": "‘{{title}}’에서 · {{time}}",
+  "sidePanelDraftOrigin": "‘{{title}}’에서 새 분기",
+  "sidePanelSwitch": "분기 대화 전환",
   "sidePanelParentLabel": "From \"{{title}}\"",
   "sidePanelParentMissing": "지점 대화",
   "sidePanelHide": "분기 패널 숨기기",
@@ -1863,7 +1872,6 @@
   "rightPanelRuntime": "런타임",
   "rightPanelPlan": "계획",
   "rightPanelFiles": "파일",
-  "rightPanelTodo": "토도",
   "rightPanelCanvas": "캔버스",
   "rightPanelWhiteboard": "화이트보드",
   "canvasPanelNeedsThread": "캔버스를 사용하려면 대화를 열거나 시작하세요.",
@@ -1874,7 +1882,6 @@
   "rightPanelBrowserTool": "브라우저",
   "rightPanelNewBrowserTab": "새 탭",
   "rightPanelSideConversations": "지점 대화",
-  "rightPanelTodoTool": "토도",
   "rightPanelChangesReview": "변경/검토",
   "rightPanelTabs": "오른쪽 작업공간 탭",
   "rightPanelCloseTab": "Close {{title}}",
@@ -2139,15 +2146,6 @@
   },
   "goalUpdatedTimeline": "목표 {{status}}: {{objective}}",
   "goalClearedTimeline": "목표가 지워졌습니다.",
-  "todoPanelTitle": "스레드 할 일",
-  "todoClear": "할일 지우기",
-  "todoEmptyTitle": "아직 할 일이 없습니다.",
-  "todoEmptyDescription": "이 스레드에 대한 계획 체크리스트와 모델로 작성된 할 일이 여기에 표시됩니다.",
-  "todoStatusPending": "보류 중",
-  "todoStatusInProgress": "활성",
-  "todoStatusCompleted": "완료",
-  "todoMarkPending": "보류 중으로 표시",
-  "todoMarkCompleted": "완료로 표시",
   "todoProgressStep": "Step {{current}} / {{total}}",
   "todoProgressAria": "Todo progress: step {{current}} of {{total}}",
   "todoProgressDetails": "할일 세부정보",
@@ -2165,6 +2163,18 @@
   "sidebarEmptySubOffline": "먼저 런타임을 연결한 다음 위에서 첫 번째 스레드를 만듭니다.",
   "sidebarWorkspaceEmpty": "아직 스레드가 없습니다.",
   "sidebarWorkspaceNewThread": "새 스레드",
+  "sidebarFolderCreate": "새 폴더",
+  "sidebarFolderCreatePrompt": "폴더 이름을 입력하세요. 사이드바 정리에만 사용되며 디스크에는 폴더가 생성되지 않습니다.",
+  "sidebarFolderRename": "폴더 이름 바꾸기",
+  "sidebarFolderRenamePrompt": "새 폴더 이름 입력",
+  "sidebarFolderNameExists": "이 프로젝트에 같은 이름의 폴더가 이미 있습니다.",
+  "sidebarFolderDelete": "폴더 삭제",
+  "sidebarFolderDeleteDialogTitle": "“{{name}}”을(를) 삭제할까요?",
+  "sidebarFolderDeleteDialogDescription": "사이드바 폴더만 삭제됩니다. 대화나 프로젝트 파일은 삭제되지 않습니다.",
+  "sidebarFolderDeleteDialogDetail": "폴더 안의 스레드 {{count}}개가 프로젝트 루트로 돌아갑니다.",
+  "sidebarFolderDeleteConfirmButton": "폴더 삭제",
+  "sidebarFolderAriaLabel": "{{name}}, 스레드 {{count}}개",
+  "sidebarFolderEmpty": "스레드를 여기로 드래그",
   "sidebarWorkspaceShowMore": "더보기 ({{count}}개 더 보기)",
   "sidebarWorkspaceShowLess": "간략히 보기",
   "sidebarWorkspaceArchiveThreads": "이 프로젝트의 모든 스레드 보관",
@@ -2691,6 +2701,8 @@
   "groupEditedFile": "파일 1개를 수정했습니다.",
   "turnChangeFilesOne": "파일 1개를 수정했습니다.",
   "turnChangeFilesMany": "파일 {{count}}개를 편집함",
+  "turnChangeShowMore": "파일 {{count}}개 더 보기",
+  "turnChangeShowFewer": "파일 접기",
   "groupRanCommands": "{{count}}개의 명령을 실행했습니다.",
   "groupRanCommand": "1 명령 실행",
   "groupRanBackgroundCommands": "{{count}}개의 백그라운드 명령을 실행했습니다.",
@@ -2770,6 +2782,9 @@
   "componentPrototypeIterate": "계속 조정",
   "componentPrototypeAdopt": "디자인을 채택하다",
   "subagentDefaultName": "하위 에이전트",
+  "subagentAgentLabel": "에이전트",
+  "subagentModelLabel": "모델",
+  "subagentNotRecorded": "기록 없음",
   "subagentStatusQueued": "대기 중",
   "subagentStatusRunning": "달리기",
   "subagentStatusDone": "완료",
@@ -2906,6 +2921,110 @@
   "expandSidebar": "사이드바 확장",
   "rightPanelSubagents": "하위 에이전트",
   "rightPanelMcpSkills": "MCP 및 기술",
+  "rightPanelAgentPerspective": "에이전트 관점",
+  "agentPerspectiveTitle": "에이전트 관점",
+  "agentPerspectiveSubtitle": "이 대화의 모델 요청 {{count}}개",
+  "agentPerspectiveRefresh": "요청 새로 고침",
+  "agentPerspectiveLoading": "불러오는 중…",
+  "agentPerspectiveEmpty": "이 대화에서 캡처된 모델 HTTP 요청이 아직 없습니다.",
+  "agentPerspectiveUnsupported": "모델 요청을 검사할 Code 대화를 선택하세요.",
+  "agentPerspectiveLoadError": "모델 요청을 불러올 수 없습니다: {{error}}",
+  "agentPerspectiveLoadOlder": "이전 요청 불러오기",
+  "agentPerspectiveDetailSections": "요청 상세 섹션",
+  "agentPerspectiveOverview": "개요",
+  "agentPerspectiveRequest": "요청",
+  "agentPerspectiveResponse": "응답",
+  "agentPerspectiveDecoded": "해석 결과",
+  "agentPerspectiveHeaders": "헤더",
+  "agentPerspectiveBody": "요청 본문",
+  "agentPerspectiveRawResponse": "원시 응답",
+  "agentPerspectiveRaw": "원문",
+  "agentPerspectivePretty": "정리",
+  "agentPerspectiveCopy": "복사",
+  "agentPerspectiveCopied": "복사됨",
+  "agentPerspectiveRedacted": "자격 증명 값은 이 추적을 저장하기 전에 가려졌습니다.",
+  "agentPerspectiveTruncated": "잘림",
+  "agentPerspectiveTruncationNotice": "캡처 한도에 도달했습니다. 공급자 요청은 변경되지 않았습니다.",
+  "agentPerspectiveNoResponse": "이 시도에서는 HTTP 응답을 받지 못했습니다.",
+  "agentPerspectiveNoDecoded": "이 시도에는 해석된 모델 출력이 없습니다.",
+  "agentPerspectiveAttempt": "시도",
+  "agentPerspectiveInitial": "최초",
+  "agentPerspectiveTransportRetry": "전송 재시도",
+  "agentPerspectiveStreamFallback": "스트림 호환 대체",
+  "agentPerspectivePending": "진행 중",
+  "agentPerspectiveCompleted": "완료",
+  "agentPerspectiveTransportError": "전송 오류",
+  "agentPerspectiveCaptureError": "캡처 오류",
+  "agentPerspectiveDuration": "소요 시간",
+  "agentPerspectiveTimeToHeaders": "헤더 수신 시간",
+  "agentPerspectiveProvider": "공급자",
+  "agentPerspectiveModel": "모델",
+  "agentPerspectiveEndpointFormat": "엔드포인트 형식",
+  "agentPerspectiveStartedAt": "시작 시간",
+  "agentPerspectiveStatus": "상태",
+  "agentPerspectiveUrl": "최종 요청 URL",
+  "agentPerspectiveEventSubtitle": "{{events}}개 단계 · {{requests}}개 모델 요청",
+  "agentPerspectiveSearch": "단계 검색",
+  "agentPerspectiveSearchPlaceholder": "모델, 도구 또는 제목 검색…",
+  "agentPerspectiveFilterAll": "전체",
+  "agentPerspectiveFilterLlm": "LLM",
+  "agentPerspectiveFilterTools": "도구",
+  "agentPerspectiveFilterTitles": "제목",
+  "agentPerspectiveNoMatchingEvents": "일치하는 단계가 없습니다",
+  "agentPerspectiveSemanticRequest": "의미 요청",
+  "agentPerspectiveRawRequest": "원시 요청",
+  "agentPerspectiveStreamEvents": "스트림 이벤트",
+  "agentPerspectiveTiming": "타이밍",
+  "agentPerspectiveLlmRequest": "LLM 요청",
+  "agentPerspectiveToolCall": "도구 호출",
+  "agentPerspectiveTitleGeneration": "제목 생성",
+  "agentPerspectiveTokens": "{{count}} tokens",
+  "agentPerspectiveCacheHit": "캐시 적중 {{rate}}%",
+  "agentPerspectiveRequestComposition": "요청 구성(추정)",
+  "agentPerspectiveSystemPrompt": "시스템 프롬프트",
+  "agentPerspectiveSkills": "Skills",
+  "agentPerspectiveToolDefinitions": "도구 정의",
+  "agentPerspectiveMessages": "메시지",
+  "agentPerspectiveParameters": "매개변수",
+  "agentPerspectiveNoSkills": "이 요청에 Skill이 주입되지 않았습니다",
+  "agentPerspectiveNoTools": "도구 정의가 전송되지 않았습니다",
+  "agentPerspectiveNoMessages": "메시지가 없습니다",
+  "agentPerspectiveToolCompleted": "도구 결과 수신됨",
+  "agentPerspectiveToolPending": "도구 결과 대기 중",
+  "agentPerspectiveCallId": "호출 ID",
+  "agentPerspectiveParentRequest": "원본 요청",
+  "agentPerspectiveToolArguments": "도구 인수",
+  "agentPerspectiveToolResult": "도구 결과",
+  "agentPerspectiveToolResultPending": "도구가 요청되었지만 결과가 아직 후속 요청에 나타나지 않았습니다.",
+  "agentPerspectiveGeneratedTitle": "생성된 제목",
+  "agentPerspectiveResponseOutput": "모델 출력",
+  "agentPerspectiveReasoningOutput": "추론 출력",
+  "agentPerspectiveToolCalls": "도구 호출",
+  "agentPerspectiveUsage": "사용량",
+  "agentPerspectiveResponseStartedAt": "응답 시작",
+  "agentPerspectiveFinishedAt": "완료",
+  "agentPerspectivePrivacyNotice": "자격 증명은 가려지고 내용은 이 기기에만 저장됩니다.",
+  "agentPerspectiveSkillActive": "활성",
+  "agentPerspectiveToolSourceSummary": "소스 {{groups}}개 · 도구 {{tools}}개",
+  "agentPerspectiveSourceKun": "Kun 시스템",
+  "agentPerspectiveSourceMcp": "MCP",
+  "agentPerspectiveSourceExtension": "확장",
+  "agentPerspectiveSourceUnclassified": "미분류",
+  "agentPerspectiveKunCore": "공통 코어",
+  "agentPerspectiveKunGui": "GUI 전용",
+  "agentPerspectiveKunRuntime": "런타임 기능",
+  "agentPerspectiveMcpServer": "MCP 서버",
+  "agentPerspectiveExtensionProvider": "확장 Provider",
+  "agentPerspectiveProviderUnknown": "알 수 없는 제공자",
+  "agentPerspectiveKunManaged": "Kun 관리",
+  "agentPerspectiveMcpDiscovery": "검색 기능",
+  "agentPerspectiveHistoricalInference": "기록 기반 추정",
+  "agentPerspectiveToolSource": "도구 소스",
+  "agentPerspectiveExpandToolSource": "{{source}} 도구 전환",
+  "agentPerspectiveExpandToolProvider": "{{provider}} 그룹 전환",
+  "agentPerspectiveExpandTool": "{{tool}} 세부 정보 전환",
+  "agentPerspectiveNoToolDescription": "설명 없음",
+  "agentPerspectiveToolSchema": "{{tool}} 입력 스키마",
   "mcpSkillsPanel": {
     "projectScope": "현재 프로젝트",
     "globalScope": "글로벌",
@@ -2946,11 +3065,80 @@
     "system": "시스템 · 내부",
     "global": "전역 · 공유",
     "newSubagent": "새 하위 에이전트",
+    "delegatableCount": "위임 가능한 역할 {{count}}개",
+    "configuredCount": "설정됨 {{count}}개",
+    "showingCount": "{{visible}} / {{total}} 표시",
+    "policySummary": "대기열 및 세션 제한",
+    "search": "하위 에이전트 검색",
+    "searchPlaceholder": "이름, 기능 또는 시나리오 검색",
+    "clearSearch": "검색 지우기",
+    "toggleCategory": "{{category}} 카테고리 펼치기 또는 접기",
+    "batchModel": "일괄 모델",
+    "mixedModels": "여러 모델",
+    "mixedConfiguration": "여러 구성",
+    "categoryConfiguration": "카테고리 기본 구성",
+    "categoryConfigurationDesc": "이 카테고리의 모든 에이전트에 동일한 기본값을 적용합니다",
+    "resetCategoryConfiguration": "기본값으로 재설정",
+    "effectiveModel": "적용 모델",
+    "batchModelAria": "{{category}}의 에이전트 {{count}}개를 같은 모델로 설정",
+    "reasoning": "추론 강도",
+    "mixedReasoning": "여러 추론",
+    "batchReasoningAria": "{{category}}의 에이전트 {{count}}개를 같은 추론 강도로 설정",
+    "capabilities": "기능",
+    "emptyTitle": "일치하는 하위 에이전트가 없습니다",
+    "emptySearch": "다른 이름, 기능 또는 시나리오를 검색해 보세요.",
+    "emptyCategory": "다른 카테고리를 선택해 계속 탐색하세요.",
+    "surface": {
+      "shared": "기본",
+      "code": "Code",
+      "write": "쓰기",
+      "design": "디자인"
+    },
+    "surfaceInherited": "기본에서 상속됨",
+    "surfaceAssigned": "이 모드에서 사용 가능",
+    "surfaceUnassigned": "이 모드에서 사용 불가",
+    "pagination": "Agent 페이지",
+    "pageSummary": "{{page}} / {{pages}} 페이지 · Agent {{count}}개",
+    "previousPage": "이전 페이지",
+    "nextPage": "다음 페이지",
+    "extensionAgents": {
+      "title": "확장 에이전트",
+      "description": "기본 세트 외 에이전트 · {{count}}",
+      "enabled": "사용",
+      "disabled": "사용 안 함",
+      "toggle": "확장 에이전트 전환",
+      "keepBaseOnly": "기본 에이전트만 유지",
+      "enableExtensions": "확장 에이전트 사용",
+      "baseAlwaysAvailable": "기본 에이전트는 항상 사용할 수 있습니다"
+    },
+    "category": {
+      "all": "전체",
+      "baseAgent": "기본 에이전트",
+      "development": "개발",
+      "review": "검토",
+      "quality": "품질",
+      "planning": "계획",
+      "operations": "운영",
+      "research": "조사",
+      "custom": "사용자 정의"
+    },
     "smallModel": {
       "name": "소형 모델",
       "desc": "제목 및 요약 기본값"
     },
     "role": {
+      "general": {
+        "name": "일반",
+        "desc": "전체 도구 · 다단계 작업"
+      },
+      "explore": {
+        "name": "탐색",
+        "desc": "읽기 전용 · 코드 찾기 및 검색"
+      },
+      "component-designer": {
+        "name": "Component Designer",
+        "desc": "Focused interactive component prototype"
+      },
       "design-reviewer": {
         "name": "디자인 검토",
         "desc": "디자인 검토자 · 읽기 전용"
@@ -2958,6 +3146,166 @@
       "over-engineering-reviewer": {
         "name": "과도한 엔지니어링 검토",
         "desc": "과도한 엔지니어링 검토자 · 읽기 전용"
+      },
+      "code-reviewer": {
+        "name": "코드 리뷰어",
+        "desc": "5가지 관점 검토 · 읽기 전용"
+      },
+      "test-engineer": {
+        "name": "테스트 엔지니어",
+        "desc": "테스트 전략 · 테스트 작성 및 실행 가능"
+      },
+      "security-auditor": {
+        "name": "보안 감사자",
+        "desc": "위협 및 OWASP 위험 · 읽기 전용"
+      },
+      "web-performance-auditor": {
+        "name": "웹 성능 감사자",
+        "desc": "Core Web Vitals · 증거 기반"
+      },
+      "api-and-interface-design": {
+        "name": "API & Interface Architect",
+        "desc": "Stable public contracts · compatibility and validation"
+      },
+      "browser-testing-with-devtools": {
+        "name": "Web QA Planner",
+        "desc": "Browser and accessibility verification plans · read-only"
+      },
+      "ci-cd-and-automation": {
+        "name": "CI/CD Engineer",
+        "desc": "Pipelines, quality gates, and rollback-safe releases"
+      },
+      "code-review-and-quality": {
+        "name": "Code Quality Reviewer",
+        "desc": "Multi-axis correctness and architecture review · read-only"
+      },
+      "code-simplification": {
+        "name": "Code Simplification Engineer",
+        "desc": "Reduce complexity · preserve behavior"
+      },
+      "context-engineering": {
+        "name": "Context Engineer",
+        "desc": "Minimal authoritative context pack · read-only"
+      },
+      "debugging-and-error-recovery": {
+        "name": "Root Cause Debugger",
+        "desc": "Reproduce, localize, fix, and regression-test"
+      },
+      "deprecation-and-migration": {
+        "name": "Migration Engineer",
+        "desc": "Staged compatibility, data migration, and rollback"
+      },
+      "documentation-and-adrs": {
+        "name": "Documentation & ADR Engineer",
+        "desc": "Architecture decisions, guides, and API docs"
+      },
+      "doubt-driven-development": {
+        "name": "Doubt-Driven Reviewer",
+        "desc": "Challenge assumptions and designs · read-only"
+      },
+      "frontend-ui-engineering": {
+        "name": "Frontend UI Engineer",
+        "desc": "Accessible, responsive, product-quality interfaces"
+      },
+      "git-workflow-and-versioning": {
+        "name": "Git Workflow Engineer",
+        "desc": "Branches, atomic commits, and history safety"
+      },
+      "idea-refine": {
+        "name": "Idea Refinement Partner",
+        "desc": "Compare options, MVP bounds, and validation · read-only"
+      },
+      "incremental-implementation": {
+        "name": "Incremental Implementation Engineer",
+        "desc": "Thin, buildable, continuously verified slices"
+      },
+      "interview-me": {
+        "name": "Requirements Interviewer",
+        "desc": "Find gaps and high-information questions · read-only"
+      },
+      "observability-and-instrumentation": {
+        "name": "Observability Engineer",
+        "desc": "Logs, metrics, traces, and actionable alerts"
+      },
+      "performance-optimization": {
+        "name": "Performance Engineer",
+        "desc": "Measure bottlenecks and prove before/after impact"
+      },
+      "planning-and-task-breakdown": {
+        "name": "Implementation Planner",
+        "desc": "Dependency-aware, acceptance-driven tasks · read-only"
+      },
+      "security-and-hardening": {
+        "name": "Security Hardening Engineer",
+        "desc": "Threat-model and implement scoped security fixes"
+      },
+      "shipping-and-launch": {
+        "name": "Release Readiness Engineer",
+        "desc": "Go/no-go, rollout, and rollback plans · read-only"
+      },
+      "source-driven-development": {
+        "name": "Source-Driven Researcher",
+        "desc": "Ground guidance in version-matched sources · read-only"
+      },
+      "spec-driven-development": {
+        "name": "Specification Engineer",
+        "desc": "Scenarios, interfaces, and acceptance criteria · read-only"
+      },
+      "test-driven-development": {
+        "name": "TDD Engineer",
+        "desc": "Red-green-refactor with behavior-focused proof"
+      },
+      "using-agent-skills": {
+        "name": "Engineering Workflow Advisor",
+        "desc": "Map work to the smallest suitable agent sequence · read-only"
+      },
+      "write-outline-architect": {
+        "name": "Outline Architect",
+        "desc": "Structure, arguments, and narrative progression · read-only"
+      },
+      "write-draft-author": {
+        "name": "Draft Author",
+        "desc": "Long-form drafts and focused section writing"
+      },
+      "write-developmental-editor": {
+        "name": "Developmental Editor",
+        "desc": "Improve logic, structure, pacing, and clarity"
+      },
+      "write-copy-editor": {
+        "name": "Copy Editor",
+        "desc": "Polish tone, terminology, and grammar"
+      },
+      "write-fact-checker": {
+        "name": "Fact Checker",
+        "desc": "Verify claims, figures, and uncertainty · read-only"
+      },
+      "write-citation-researcher": {
+        "name": "Citation Researcher",
+        "desc": "Authoritative sources and traceable citations · read-only"
+      },
+      "design-product-planner": {
+        "name": "Product Design Planner",
+        "desc": "Direction, goals, flows, and tradeoffs · read-only"
+      },
+      "design-ux-researcher": {
+        "name": "UX Researcher",
+        "desc": "User journeys and usability research · read-only"
+      },
+      "design-screen-designer": {
+        "name": "Screen Designer",
+        "desc": "Complete responsive screens and interaction states"
+      },
+      "design-system-architect": {
+        "name": "Design System Architect",
+        "desc": "Semantic tokens, components, and variant constraints"
+      },
+      "design-code-binder": {
+        "name": "Design Code Binder",
+        "desc": "Map design nodes to routes and source files"
+      },
+      "design-handoff-specialist": {
+        "name": "Design Handoff Specialist",
+        "desc": "DESIGN.md, implementation notes, and handoff assets"
       },
       "compaction": {
         "name": "압축",
@@ -2978,17 +3326,12 @@
       "summary": {
         "name": "요약",
         "desc": "LLM · 기본값은 소형 모델"
-      },
-      "general": {
-        "name": "일반",
-        "desc": "전체 도구 · 다단계 작업"
-      },
-      "explore": {
-        "name": "탐색",
-        "desc": "읽기 전용 · 코드 찾기 및 검색"
       }
     },
-    "builtin": "내장"
+    "builtin": "내장",
+    "customTag": "사용자 지정",
+    "workspaceFile": "{{path}}에 정의됨",
+    "workspaceReadOnly": ".kun/agents/*.md 에서 이 역할을 편집하세요"
   },
   "summarizeSession": "요약",
   "summarizing": "요약…",

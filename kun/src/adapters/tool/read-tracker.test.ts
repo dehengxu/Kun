@@ -71,7 +71,16 @@ describe('ReadTracker cross-turn edits (#640)', () => {
     })
 
     expect(verdict.ok).toBe(false)
-    if (!verdict.ok) expect(verdict.message).toContain('Read the current file contents')
+    if (!verdict.ok) {
+      expect(verdict.message).toContain('has not been read')
+      expect(verdict.message).toContain('Call read with path')
+      expect(verdict.guidance).toContain('fetch the current disk contents')
+      expect(verdict.guidance).toContain('Do not bypass this guard with bash')
+      expect(verdict.nextAction).toEqual({
+        tool: 'read',
+        arguments: { path: 'file.ts' }
+      })
+    }
   })
 
   it('still blocks a cross-turn edit when the oldText is not in the cached read', () => {
@@ -84,7 +93,15 @@ describe('ReadTracker cross-turn edits (#640)', () => {
     })
 
     expect(verdict.ok).toBe(false)
-    if (!verdict.ok) expect(verdict.message).toContain('was not present in the latest read output')
+    if (!verdict.ok) {
+      expect(verdict.message).toContain('was not present in the latest read output')
+      expect(verdict.message).toContain('then retry edit')
+      expect(verdict.guidance).toContain('Rebuild every oldText fragment')
+      expect(verdict.nextAction).toEqual({
+        tool: 'read',
+        arguments: { path: 'file.ts' }
+      })
+    }
   })
 
   it('does not block edits based on a bounded read that omitted the target', () => {

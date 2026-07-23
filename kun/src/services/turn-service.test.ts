@@ -16,7 +16,12 @@ import type { ModelClient, ModelRequest, ModelStreamChunk } from '../ports/model
 import { emptyUsageSnapshot } from '../contracts/usage.js'
 import type { TurnItem } from '../contracts/items.js'
 import { RuntimeEventRecorder } from './runtime-event-recorder.js'
-import { TurnCapacityError, TurnConflictError, TurnService } from './turn-service.js'
+import {
+  DEFAULT_MAX_CONCURRENT_TURNS,
+  TurnCapacityError,
+  TurnConflictError,
+  TurnService
+} from './turn-service.js'
 import { ThreadService } from './thread-service.js'
 import { UsageService } from './usage-service.js'
 
@@ -94,6 +99,10 @@ class FailOnceAppendSessionStore extends InMemorySessionStore {
 }
 
 describe('TurnService startTurn', () => {
+  it('defaults to 256 concurrent active turns', () => {
+    expect(DEFAULT_MAX_CONCURRENT_TURNS).toBe(256)
+  })
+
   it('atomically admits only one active turn for a thread', async () => {
     const sessionStore = new InMemorySessionStore()
     const threadStore = new InMemoryThreadStore()

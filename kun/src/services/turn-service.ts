@@ -89,8 +89,11 @@ export type TurnSettlement =
   | { kind: 'already_terminal'; status: TerminalTurnStatus; error?: string }
   | { kind: 'missing' }
 
-/** Finite by default so a burst of threads cannot exhaust one serve process. */
-export const DEFAULT_MAX_CONCURRENT_TURNS = 4
+/**
+ * Keep a finite backstop for one serve process while allowing a desktop user
+ * to work across effectively all of their active conversations by default.
+ */
+export const DEFAULT_MAX_CONCURRENT_TURNS = 256
 
 /**
  * Turn service: owns the turn lifecycle (start, finish, abort, steer,
@@ -179,6 +182,7 @@ export class TurnService {
             guiPlan: input.request.guiPlan,
             guiDesignCanvas: input.request.guiDesignCanvas,
             guiDesignMode: input.request.guiDesignMode,
+            agentSurface: input.request.agentSurface,
             guiDesignArtifact: input.request.guiDesignArtifact,
             mode: input.request.mode,
             disableUserInput: input.request.disableUserInput,

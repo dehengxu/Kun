@@ -126,7 +126,7 @@ describe('runtime factory usage carryover', () => {
     })
 
     try {
-      expect(runtime.llmDebug).toBeUndefined()
+      expect(runtime.llmDebug).toBeDefined()
       expect(runtime.extensionPlatform).toBeDefined()
       expect(runtime.info().extensions).toMatchObject({
         enabled: true,
@@ -152,6 +152,63 @@ describe('runtime factory usage carryover', () => {
       expect(diagnostics?.extensions).toMatchObject({ tools: [], providers: [], hosts: [] })
     } finally {
       await runtime.shutdown?.()
+    }
+  })
+
+  it('keeps Agent Perspective capture available when runtime llmDebug is omitted or disabled', async () => {
+    for (const [name, runtimeOptions] of [
+      ['omitted', undefined],
+      ['disabled', { llmDebug: { enabled: false } }]
+    ] as const) {
+      const dataDir = await mkdtemp(join(tmpdir(), `kun-runtime-llm-debug-${name}-`))
+      tempDirs.push(dataDir)
+      const runtime = await createKunServeRuntime({
+        host: '127.0.0.1',
+        port: 0,
+        dataDir,
+        runtimeToken: 'tok',
+        apiKey: 'sk-default',
+        baseUrl: 'https://api.example.test/v1',
+        model: 'model-before',
+        approvalPolicy: 'auto',
+        sandboxMode: 'danger-full-access',
+        tokenEconomyMode: false,
+        insecure: false,
+        storage: { backend: 'file' },
+        ...(runtimeOptions ? { runtime: runtimeOptions } : {}),
+        capabilities: KunCapabilitiesConfig.parse({})
+      })
+
+      try {
+        const recorder = runtime.llmDebug
+        expect(recorder).toBeDefined()
+        if (!recorder) throw new Error('expected Agent Perspective recorder')
+        const round = recorder.start({
+          threadId: `thread-${name}`,
+          turnId: 'turn-1',
+          provider: 'compat',
+          model: 'model-before'
+        })
+        recorder.beginHttpAttempt(round, {
+          endpointFormat: 'chat_completions',
+          attempt: 1,
+          reason: 'initial',
+          url: 'https://api.example.test/v1/chat/completions',
+          headers: {},
+          bodyText: JSON.stringify({ model: 'model-before' })
+        })
+        await recorder.finish(round)
+        await expect(recorder.listThread(`thread-${name}`)).resolves.toMatchObject({
+          records: [expect.objectContaining({
+            provider: 'compat',
+            model: 'model-before',
+            attempt: 1,
+            endpointFormat: 'chat_completions'
+          })]
+        })
+      } finally {
+        await runtime.shutdown?.()
+      }
     }
   })
 
@@ -183,6 +240,67 @@ describe('runtime factory usage carryover', () => {
         ok: false,
         code: 'restart_required',
         message: 'observability exporter changes require a runtime restart'
+      })
+    } finally {
+      await runtime.shutdown?.()
+    }
+  })
+
+  it('hot-applies Cursor credentials but restarts when Cursor routing ownership changes', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-runtime-cursor-apply-'))
+    tempDirs.push(dataDir)
+    const baseOptions = {
+      host: '127.0.0.1',
+      port: 0,
+      dataDir,
+      runtimeToken: 'tok',
+      apiKey: 'cursor-default',
+      baseUrl: '',
+      model: 'auto',
+      approvalPolicy: 'auto' as const,
+      sandboxMode: 'workspace-write' as const,
+      tokenEconomyMode: false,
+      insecure: false,
+      storage: { backend: 'file' as const },
+      capabilities: KunCapabilitiesConfig.parse({}),
+      providers: {
+        'cursor-subscription': {
+          kind: 'cursor-sdk' as const,
+          apiKey: 'cursor-before'
+        }
+      }
+    }
+    const runtime = await createKunServeRuntime(baseOptions)
+
+    try {
+      await expect(runtime.applyConfig({
+        serve: {
+          providers: {
+            'cursor-subscription': {
+              kind: 'cursor-sdk',
+              apiKey: 'cursor-after'
+            }
+          }
+        }
+      })).resolves.toEqual({ ok: true })
+
+      await expect(runtime.applyConfig({
+        serve: {
+          providers: {
+            'cursor-subscription': {
+              kind: 'cursor-sdk',
+              apiKey: 'cursor-after'
+            },
+            'cursor-second': {
+              kind: 'cursor-sdk',
+              apiKey: 'cursor-second'
+            }
+          }
+        }
+      })).resolves.toEqual({
+        ok: false,
+        code: 'restart_required',
+        message: 'delegated subscription provider routing changed and requires a runtime restart'
       })
     } finally {
       await runtime.shutdown?.()

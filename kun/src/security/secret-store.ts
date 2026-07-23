@@ -13,8 +13,9 @@
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import type { Dirent } from 'node:fs'
+import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 export type SecretEncryptor = {
   encrypt: (plaintext: string, additionalAuthenticatedData?: string | Buffer) => string
@@ -60,6 +61,66 @@ function asBuffer(value: string | Buffer): Buffer {
 
 export function isEncryptedEnvelope(value: string): boolean {
   return value.startsWith(ENVELOPE_PREFIX)
+}
+
+/**
+ * Reports whether a Kun data directory contains credentials that require the
+ * shared secret key. Unknown or unreadable credential state is treated as
+ * encrypted so callers fail closed rather than replace an inaccessible key.
+ */
+export async function hasPersistedSecretKeyMaterial(dataDir: string): Promise<boolean> {
+  return await hasEncryptedExtensionCredentials(dataDir) || await hasEncryptedMcpOAuthState(dataDir)
+}
+
+async function hasEncryptedExtensionCredentials(dataDir: string): Promise<boolean> {
+  const credentialsPath = join(dataDir, 'credentials', 'credentials.enc.json')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await readFile(credentialsPath, 'utf8'))
+  } catch (error) {
+    return !isMissingFileError(error)
+  }
+  if (!isRecord(parsed) || parsed.schemaVersion !== 1 || typeof parsed.profileId !== 'string' || !isRecord(parsed.credentials)) {
+    return true
+  }
+  return Object.keys(parsed.credentials).length > 0
+}
+
+async function hasEncryptedMcpOAuthState(dataDir: string): Promise<boolean> {
+  const oauthDirectory = join(dataDir, 'mcp-oauth')
+  let entries: Dirent<string>[]
+  try {
+    entries = await readdir(oauthDirectory, { withFileTypes: true })
+  } catch (error) {
+    return !isMissingFileError(error)
+  }
+  for (const entry of entries) {
+    // OAuth state is stored as individual JSON files. Unknown entries are
+    // unsafe because they could be a future encrypted storage format.
+    if (!entry.isFile() || !entry.name.endsWith('.json')) return true
+    try {
+      const parsed = JSON.parse(await readFile(join(oauthDirectory, entry.name), 'utf8'))
+      if (containsEncryptedEnvelope(parsed)) return true
+    } catch {
+      return true
+    }
+  }
+  return false
+}
+
+function containsEncryptedEnvelope(value: unknown): boolean {
+  if (typeof value === 'string') return isEncryptedEnvelope(value)
+  if (Array.isArray(value)) return value.some(containsEncryptedEnvelope)
+  return isRecord(value) && Object.values(value).some(containsEncryptedEnvelope)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null &&
+    'code' in error && (error as { code?: unknown }).code === 'ENOENT'
 }
 
 export type CommandResult = { code: number; stdout: string; stderr: string }
@@ -258,6 +319,27 @@ async function writeKeyFileContent(path: string, content: string): Promise<void>
   }
 }
 
+async function createKeyFileFallback(
+  keyFilePath: string,
+  existingKey: Buffer | null,
+  reason: string
+): Promise<KeyProviderResult> {
+  if (existingKey) {
+    return {
+      encryptor: createAesEncryptor(existingKey),
+      osKeychain: false,
+      reason: `${reason}; key loaded from 0600 key file (tokens still encrypted at rest)`
+    }
+  }
+  const fileKey = randomBytes(32)
+  await writeKeyFile(keyFilePath, fileKey)
+  return {
+    encryptor: createAesEncryptor(fileKey),
+    osKeychain: false,
+    reason: `${reason}; created a new 0600 key file (tokens still encrypted at rest)`
+  }
+}
+
 export type CreateKeyProviderOptions = {
   /** Path to the fallback key file (used when the OS keychain is unavailable). */
   keyFilePath: string
@@ -267,9 +349,22 @@ export type CreateKeyProviderOptions = {
   disableOsKeychain?: boolean
   /** Injectable environment used to resolve the non-interactive automation override. */
   environment?: NodeJS.ProcessEnv
+  /**
+   * Confirms that a new local fallback key is safe after an OS credential-store
+   * lookup failure. Omit to preserve the default fail-closed behavior.
+   */
+  canBootstrapKeyFileFallback?: () => boolean | Promise<boolean>
 }
 
 export const DISABLE_OS_CREDENTIAL_STORE_ENV = 'KUN_DISABLE_OS_CREDENTIAL_STORE'
+
+async function canBootstrapKeyFileFallback(options: CreateKeyProviderOptions): Promise<boolean> {
+  try {
+    return await options.canBootstrapKeyFileFallback?.() === true
+  } catch {
+    return false
+  }
+}
 
 /**
  * Resolve a secret encryptor. Tries the OS keychain first (storing a random key
@@ -305,6 +400,9 @@ export async function createSecretEncryptor(options: CreateKeyProviderOptions): 
     // temporarily inaccessible key permanently unreadable. Fail closed and
     // let the caller retry once Keychain/secret-service access is restored.
     if (existing.status === 'unavailable') {
+      if (await canBootstrapKeyFileFallback(options)) {
+        return createKeyFileFallback(options.keyFilePath, null, existing.reason)
+      }
       throw new Error(`${existing.reason}; refusing to replace the existing Kun encryption key`)
     }
     const fresh = randomBytes(32)
@@ -343,18 +441,5 @@ export async function createSecretEncryptor(options: CreateKeyProviderOptions): 
   const fallbackReason = disableOsCredentialStore
     ? 'OS credential store disabled'
     : 'OS keychain unavailable'
-  if (existingFileKey) {
-    return {
-      encryptor: createAesEncryptor(existingFileKey),
-      osKeychain: false,
-      reason: `${fallbackReason}; key loaded from 0600 key file (tokens still encrypted at rest)`
-    }
-  }
-  const fileKey = randomBytes(32)
-  await writeKeyFile(options.keyFilePath, fileKey)
-  return {
-    encryptor: createAesEncryptor(fileKey),
-    osKeychain: false,
-    reason: `${fallbackReason}; created a new 0600 key file (tokens still encrypted at rest)`
-  }
+  return createKeyFileFallback(options.keyFilePath, existingFileKey, fallbackReason)
 }

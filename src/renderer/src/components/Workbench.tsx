@@ -305,7 +305,7 @@ export function Workbench(): ReactElement {
   const inputRef = useRef('')
   const {
     activeClawChannel, activeCodeCanvasWorkspace, activeSkillWorkspace, codeThreads,
-    composerChangeSummary, currentSideConversations, currentSideRunningCount, devPreviewBlocks,
+    currentSideConversations, currentSideRunningCount, devPreviewBlocks,
     latestAutoOpenDevPreviewUrl, latestDevPreviewUrl,
     timelineBlocks, timelineLiveAssistant, timelineLiveReasoning
   } = useWorkbenchDerivedState({
@@ -663,7 +663,10 @@ export function Workbench(): ReactElement {
       unavailable.push(BUILTIN_RIGHT_PANEL_IDS.files)
     }
     if (!filePreviewTarget) unavailable.push(BUILTIN_RIGHT_PANEL_IDS.file)
-    if (!activeThreadId) unavailable.push(BUILTIN_RIGHT_PANEL_IDS.sideConversations)
+    if (!activeThreadId) {
+      unavailable.push(BUILTIN_RIGHT_PANEL_IDS.sideConversations)
+      unavailable.push(BUILTIN_RIGHT_PANEL_IDS.agentPerspective)
+    }
     for (const id of unavailable) {
       if (codeRightTabs.tabs.includes(id)) closeRightPanelTab(id)
     }
@@ -818,15 +821,13 @@ export function Workbench(): ReactElement {
     attachmentUploadEnabled, attachmentUploadBusy, attachmentUploadError,
     activeSddDraft: Boolean(activeSddDraft), composerFileReferences,
     extraFileMentionCandidates: designDocumentFileMentionCandidates, webAccessAvailable,
-    composerExecutionSettings, composerExecutionApplying, composerChangeSummary, runtimeSkills, disabledSkillIds,
+    composerExecutionSettings, composerExecutionApplying, runtimeSkills, disabledSkillIds,
     handlePickAttachments, handlePasteClipboardImage, removeComposerAttachment, addComposerFileReference,
     pickComposerFileReferences, openFileTreeSidePanel: openWorkspaceFileTreeTab,
     openDesignFileTreeSidePanel: openDesignFileTreeTab,
     removeComposerFileReference, queuedMessages,
     removeQueuedMessage, guideQueuedMessage, interrupt, handleGuiPlanCommand, useWorktreePool, worktreeBranch, setWorktreeBranch,
     setUseWorktreePool, createThread, activeSkillWorkspace, reviewActiveThread, updateComposerExecutionSettings,
-    openChangesPanel: () => setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.changes),
-    runtimeConnectionReady: runtimeConnection === 'ready',
     spawnSideConversation, openSideConversationDraft
   })
   const rightPanelSharedProps = buildWorkbenchRightPanelSharedProps({
@@ -951,7 +952,6 @@ export function Workbench(): ReactElement {
       }
     },
     changes: { blocks },
-    todo: { onOpenPlan: openGuiPlanPanel },
     browser: { blocks: devPreviewBlocks, preferredUrl: latestDevPreviewUrl },
     canvas: { workspaceRoot: activeCodeCanvasWorkspace, activeThreadId },
     file: {
@@ -969,6 +969,8 @@ export function Workbench(): ReactElement {
     extensionView: activeExtensionRightPanel,
     code: {
       state: codeRightTabs,
+      activeThreadId,
+      threadRunning: busy,
       sideConversationCount: currentSideConversations.length,
       sideConversationRunningCount: currentSideRunningCount,
       files: {
@@ -987,7 +989,8 @@ export function Workbench(): ReactElement {
       extensionItems: extensionRightRailItems,
       extensionViews: extensionRightPanelItems,
       onActivate: activateRightPanelTab,
-      onClose: closeCodeRightTool
+      onClose: closeCodeRightTool,
+      onNewSideConversation: openSideConversationDraft
     },
     workspaceRoot: extensionWorkspaceRoot
   })
@@ -1148,6 +1151,7 @@ export function Workbench(): ReactElement {
             returnParentTitle: threads.find((thread) => thread.id === activeThreadParentId)?.title?.trim() ?? '',
             showReturnBar: activeThreadRelation === 'side' && Boolean(activeThreadParentId),
             composerProps: chatComposerProps,
+            conversationDropWorkspaceRoot: activeSkillWorkspace,
             terminalOpen,
             terminalWorkspaceRoot: fileTreeWorkspaceRoot,
             terminalHeight,
@@ -1158,6 +1162,9 @@ export function Workbench(): ReactElement {
             onSelectSuggestion: (text) => setInput(text),
             onBuildPlan: () => void buildGuiPlan(),
             onOpenPlan: openGuiPlanPanel,
+            onOpenChanges: () => setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.changes),
+            onReviewChanges: () => void reviewActiveThread({ kind: 'uncommittedChanges' }),
+            reviewChangesDisabled: busy || runtimeConnection !== 'ready',
             onOpenDevPreview: openDevPreview,
             onBackToParent: () => {
               if (activeThreadParentId) void selectThread(activeThreadParentId)
@@ -1194,10 +1201,10 @@ export function Workbench(): ReactElement {
             onToggleRightPanelMode: openCodeRightTool,
             planPanelEnabled: Boolean(activeGuiPlan),
             canvasEnabled: true,
-            sideChatCount: currentSideConversations.length,
             sideChatRunningCount: currentSideRunningCount,
             sideChatOpen: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.sideConversations,
             sideChatEnabled: runtimeConnection === 'ready' && Boolean(activeThreadId),
+            agentPerspectiveEnabled: Boolean(activeThreadId),
             fileTreeOpen: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.files,
             fileTreeEnabled: Boolean(fileTreeWorkspaceRoot),
             onToggleFileTree: () => openCodeRightTool(BUILTIN_RIGHT_PANEL_IDS.files),

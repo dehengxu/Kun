@@ -13,6 +13,13 @@ export const UsageSnapshotSchema = z.object({
   completionTokens: z.number().int().nonnegative(),
   /** Provider-reported reasoning tokens when separately available. */
   reasoningTokens: z.number().int().nonnegative().optional(),
+  /** Virtual/public alias requested before route-pool target resolution. */
+  requestedModelId: z.string().min(1).optional(),
+  /** Concrete upstream attribution for routed requests. */
+  actualProviderId: z.string().min(1).optional(),
+  actualModelId: z.string().min(1).optional(),
+  routePoolId: z.string().min(1).optional(),
+  routeTargetId: z.string().min(1).optional(),
   totalTokens: z.number().int().nonnegative(),
   cachedTokens: z.number().int().nonnegative().optional(),
   cacheHitTokens: z.number().int().nonnegative().optional(),

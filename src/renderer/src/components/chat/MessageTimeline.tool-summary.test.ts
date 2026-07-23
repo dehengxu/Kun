@@ -1140,6 +1140,68 @@ describe('MessageTimeline Kun runtime metadata smoke', () => {
     expect(copyIndex).toBeGreaterThan(0)
   })
 
+  it('renders each file-change summary after the turn that produced it', () => {
+    const patch = (path: string, before: string, after: string) => [
+      `diff --git a/${path} b/${path}`,
+      `--- a/${path}`,
+      `+++ b/${path}`,
+      '@@ -1 +1 @@',
+      `-${before}`,
+      `+${after}`
+    ].join('\n')
+    const blocks: ChatBlock[] = [
+      { kind: 'user', id: 'user_1', turnId: 'turn_1', text: 'change alpha' },
+      {
+        kind: 'tool',
+        id: 'tool_1',
+        summary: 'edit alpha',
+        status: 'success',
+        toolKind: 'file_change',
+        filePath: '/tmp/project/src/alpha.ts',
+        detail: patch('src/alpha.ts', 'alpha old', 'alpha new')
+      },
+      { kind: 'assistant', id: 'assistant_1', turnId: 'turn_1', text: 'alpha done' },
+      { kind: 'user', id: 'user_2', turnId: 'turn_2', text: 'change beta' },
+      {
+        kind: 'tool',
+        id: 'tool_2',
+        summary: 'edit beta',
+        status: 'success',
+        toolKind: 'file_change',
+        filePath: '/tmp/project/src/beta.ts',
+        detail: patch('src/beta.ts', 'beta old', 'beta new')
+      },
+      { kind: 'assistant', id: 'assistant_2', turnId: 'turn_2', text: 'beta done' }
+    ]
+
+    const html = renderToStaticMarkup(
+      createElement(MessageTimeline, {
+        blocks,
+        liveReasoning: '',
+        live: '',
+        activeThreadId: 'thr_1',
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined,
+        onOpenChanges: () => undefined,
+        onReviewChanges: () => undefined
+      })
+    )
+
+    const firstAnswerIndex = html.indexOf('alpha done')
+    const firstFileIndex = html.indexOf('src/alpha.ts')
+    const secondQuestionIndex = html.indexOf('change beta')
+    const secondAnswerIndex = html.indexOf('beta done')
+    const secondFileIndex = html.indexOf('src/beta.ts')
+
+    expect(html.match(/data-turn-change-summary/g)).toHaveLength(2)
+    expect(firstFileIndex).toBeGreaterThan(firstAnswerIndex)
+    expect(firstFileIndex).toBeLessThan(secondQuestionIndex)
+    expect(secondFileIndex).toBeGreaterThan(secondAnswerIndex)
+    expect(html).toMatch(/composerOpenChanges|Preview|预览/)
+    expect(html).toMatch(/composerReviewChanges|Review|审查/)
+  })
+
   it('renders the live assistant bubble while busy is true (streaming period)', () => {
     // Streaming period: the user has just sent a turn, the agent is
     // running, and the SSE has streamed some `live` text into the chat

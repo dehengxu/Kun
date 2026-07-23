@@ -275,10 +275,12 @@ export function ModelSelect({
 export function AdvancedSettingsDisclosure({
   title,
   description,
+  contentClassName = '',
   children
 }: {
   title: string
   description?: string
+  contentClassName?: string
   children: ReactNode
 }): ReactElement {
   return (
@@ -292,7 +294,7 @@ export function AdvancedSettingsDisclosure({
         </span>
         <ChevronDown className="h-4 w-4 shrink-0 text-ds-faint transition group-open:rotate-180" strokeWidth={1.9} />
       </summary>
-      <div className="border-t border-ds-border-muted bg-ds-card/45">{children}</div>
+      <div className={`border-t border-ds-border-muted bg-ds-card/45 ${contentClassName}`}>{children}</div>
     </details>
   )
 }
@@ -300,16 +302,19 @@ export function AdvancedSettingsDisclosure({
 export function Toggle({
   checked,
   onChange,
-  disabled = false
+  disabled = false,
+  ariaLabel
 }: {
   checked: boolean
   onChange: (v: boolean) => void
   disabled?: boolean
+  ariaLabel?: string
 }): ReactElement {
   return (
     <button
       type="button"
       role="switch"
+      aria-label={ariaLabel}
       aria-checked={checked}
       aria-disabled={disabled}
       disabled={disabled}

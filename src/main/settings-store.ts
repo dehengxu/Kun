@@ -4,7 +4,6 @@ import { basename, dirname, join } from 'node:path'
 import { atomicWriteFile } from '../../kun/src/adapters/file/atomic-write.js'
 import {
   applyKunRuntimePatch,
-  kunSettingsEnvelope,
   DEFAULT_GUI_UPDATE_CHANNEL,
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
   DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
@@ -20,7 +19,6 @@ import {
   defaultScheduleSettings,
   defaultWorkflowSettings,
   getKunRuntimeSettings,
-  mergeKunRuntimeSettings,
   mergeModelProviderSettings,
   defaultWriteSettings,
   mergeClawSettings,
@@ -37,7 +35,6 @@ import {
   normalizeCheckpointCleanupSettings,
   normalizeGitBranchPrefix,
   normalizeKeyboardShortcuts,
-  migrateLegacyAppSettings,
   normalizeAppSettings,
   type AppSettingsPatch,
   type AppSettingsV1,
@@ -268,42 +265,10 @@ const defaultSettings = (): AppSettingsV1 => ({
 })
 
 function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
-  const migrated = migrateLegacyAppSettings(parsed)
-  const defaults = defaultSettings()
-  return {
-    ...defaults,
-    ...migrated,
-    provider: mergeModelProviderSettings(defaults.provider, migrated.provider),
-    agents: kunSettingsEnvelope(
-      mergeKunRuntimeSettings(getKunRuntimeSettings(defaults), migrated.agents?.kun)
-    ),
-    log: { ...defaults.log, ...migrated.log },
-    checkpointCleanup: normalizeCheckpointCleanupSettings({
-      ...defaults.checkpointCleanup,
-      ...migrated.checkpointCleanup
-    }),
-    gitBranchPrefix: normalizeGitBranchPrefix(migrated.gitBranchPrefix),
-    notifications: { ...defaults.notifications, ...migrated.notifications },
-    appBehavior: mergeAppBehaviorSettings(defaults.appBehavior, migrated.appBehavior),
-    keyboardShortcuts: normalizeKeyboardShortcuts(migrated.keyboardShortcuts),
-    write: mergeWriteSettings(defaults.write, migrated.write),
-    claw: mergeClawSettings(defaults.claw, migrated.claw),
-    schedule: mergeScheduleSettings(defaults.schedule, migrated.schedule),
-    workflow: mergeWorkflowSettings(defaults.workflow, migrated.workflow),
-    design: mergeDesignSettings(defaults.design, migrated.design),
-    terminal: mergeTerminalSettings(defaults.terminal, migrated.terminal),
-    guiUpdate: { ...defaults.guiUpdate, ...migrated.guiUpdate },
-    codePromptPrefix: typeof migrated.codePromptPrefix === 'string' ? migrated.codePromptPrefix : '',
-    disabledSkillIds: normalizeDisabledSkillIds(migrated.disabledSkillIds)
-  }
-}
-
-function normalizeDisabledSkillIds(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return [...new Set(value
-    .filter((id): id is string => typeof id === 'string')
-    .map((id) => id.trim().replace(/^\/?skill:/i, '').trim())
-    .filter(Boolean))]
+  // normalizeAppSettings owns the legacy predicate. Calling the legacy
+  // migrator unconditionally here rebuilt every current provider object and
+  // silently discarded newer extensions such as routePools/localGateway.
+  return normalizeAppSettings(parsed as AppSettingsV1)
 }
 
 function hasLegacyProviderPlaintext(settings: AppSettingsV1): boolean {

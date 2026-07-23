@@ -150,6 +150,42 @@ describe('deriveTurnSections', () => {
     expect(result.processBlocks.map((block) => block.kind)).toEqual(['tool'])
   })
 
+  it('surfaces runtime errors outside collapsed process work after partial assistant output', () => {
+    const result = sections([
+      { kind: 'reasoning', id: 'reasoning_1', text: 'Checking the provider.' },
+      { kind: 'assistant', id: 'partial_1', text: 'I found part of the answer.' },
+      {
+        kind: 'system',
+        id: 'error_1',
+        text: 'model request was rate limited (HTTP 429)',
+        code: 'http_429',
+        severity: 'error',
+        runtimeError: true
+      }
+    ])
+
+    expect(result.assistantContentBlocks.map((block) => block.id)).toEqual(['partial_1'])
+    expect(result.processBlocks.map((block) => block.id)).toEqual(['reasoning_1'])
+    expect(result.runtimeErrorBlocks).toEqual([
+      expect.objectContaining({
+        id: 'error_1',
+        text: 'model request was rate limited (HTTP 429)',
+        runtimeError: true
+      })
+    ])
+  })
+
+  it('keeps ordinary system statuses in process work', () => {
+    const result = sections([{
+      kind: 'system',
+      id: 'retry_status',
+      text: 'Retrying model request 1/3'
+    }])
+
+    expect(result.runtimeErrorBlocks).toEqual([])
+    expect(result.processBlocks.map((block) => block.id)).toEqual(['retry_status'])
+  })
+
   it('surfaces generated media blocks outside the collapsed process work', () => {
     const result = sections([
       {

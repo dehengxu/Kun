@@ -1,5 +1,5 @@
 import type { ModelClient } from '../ports/model-client.js'
-import type { AgentSdkRuntime } from '../runtime/agent-sdk/agent-sdk-runtime.js'
+import type { DelegatedTurnRuntime } from '../runtime/delegated-turn-runtime.js'
 import type {
   ToolHost,
   ToolHostContext,
@@ -162,6 +162,8 @@ export type AgentLoopOptions = {
    * tools — enforced at both the schema (listTools) and execute layers.
    */
   forcedAllowedToolNames?: readonly string[]
+  /** Provider allow-list inherited from the parent turn for delegated loops. */
+  allowedProviderIds?: readonly string[]
   /**
    * Provider ids hard-blocked for this loop (e.g. a subagent profile's blocked
    * MCP servers, as `mcp:<serverId>`). Deny-list layered on top of inherit and
@@ -204,12 +206,11 @@ export type AgentLoopOptions = {
     markdown: string
   }) => Promise<void>
   /**
-   * Subscription engine. When set and it owns the active thread's provider
-   * (kind: 'agent-sdk'), the entire turn is delegated to the embedded Claude
-   * Agent SDK instead of kun's own model loop, billing the user's Claude
-   * subscription. kun's tools/persona/permissions are injected into the SDK.
+   * Subscription engine. When set and it owns the active thread's provider,
+   * the entire turn is delegated to that provider-native SDK/CLI instead of
+   * Kun's HTTP model loop.
    */
-  sdkRuntime?: AgentSdkRuntime
+  sdkRuntime?: DelegatedTurnRuntime
 }
 
 /**
@@ -344,6 +345,7 @@ export class AgentLoop {
       getMemoryStore: () => opts.memoryStore,
       interactiveToolBridge: this.interactiveToolBridge,
       ...(opts.forcedAllowedToolNames ? { forcedAllowedToolNames: opts.forcedAllowedToolNames } : {}),
+      ...(opts.allowedProviderIds ? { allowedProviderIds: opts.allowedProviderIds } : {}),
       ...(opts.blockedProviderIds ? { blockedProviderIds: opts.blockedProviderIds } : {}),
       ...(opts.blockedToolNames ? { blockedToolNames: opts.blockedToolNames } : {}),
       ...(opts.blockedSkillIds ? { blockedSkillIds: opts.blockedSkillIds } : {}),
@@ -436,17 +438,17 @@ export class AgentLoop {
       return statusFromSettlement(settlement, 'aborted')
     }
     const owningThread = await this.opts.threadStore.get(threadId)
-    // Subscription engine dispatch: if a Claude Agent SDK runtime owns this
-    // thread's provider, delegate the whole turn to it (the SDK runs the loop on
-    // the user's subscription; kun's brain is injected). All other providers
-    // fall through to kun's native loop below.
+    // Subscription engine dispatch. All other providers fall through to Kun's
+    // native HTTP model loop below.
     const sdkRuntime = this.opts.sdkRuntime
-    let delegatedSdkRuntime: AgentSdkRuntime | undefined
+    let delegatedSdkRuntime: DelegatedTurnRuntime | undefined
+    let delegatedProviderId: string | undefined
     if (sdkRuntime) {
       const turn = owningThread?.turns.find((candidate) => candidate.id === turnId)
       const providerId = turn?.providerId?.trim() || owningThread?.providerId?.trim()
       if (sdkRuntime.handlesProvider(providerId)) {
         delegatedSdkRuntime = sdkRuntime
+        delegatedProviderId = providerId
       }
     }
     // The Agent SDK owns its own wall-clock timeout so it can distinguish a
@@ -535,7 +537,12 @@ export class AgentLoop {
         // native mid-turn queue. Drain anything that arrived before startup,
         // then seal admission so later guidance remains renderer-owned.
         await this.drainAndSealSteering(threadId, turnId, signal)
-        const reportedStatus = await delegatedSdkRuntime.runTurn(threadId, turnId, signal)
+        const reportedStatus = await delegatedSdkRuntime.runTurn(
+          threadId,
+          turnId,
+          signal,
+          delegatedProviderId
+        )
         const settlement = await finalizer.observeExternal({ threadId, turnId })
         finalStatus = statusFromSettlement(settlement, reportedStatus)
         finalError = errorFromSettlement(settlement)
@@ -608,6 +615,7 @@ export class AgentLoop {
       } finally {
         this.modelRouting.clear(threadId, turnId)
         this.toolStormBreakers.delete(turnId)
+        this.modelRoundEngine.clearTurn(turnId)
         this.roundOutcome.clearTurn(turnId)
         this.goalTurns.clearTurn(turnId)
         if (typeof this.opts.skillRuntime?.clearTurnActivation === 'function') {
@@ -769,6 +777,7 @@ export class AgentLoop {
   private async dispatchToolCalls(input: ToolDispatchInput): Promise<ToolDispatchOutcome> {
     const context = createToolExecutionContext(input, {
       memoryEnabled: Boolean(this.opts.memoryStore),
+      ...(this.opts.allowedProviderIds ? { allowedProviderIds: this.opts.allowedProviderIds } : {}),
       ...(this.opts.blockedProviderIds ? { blockedProviderIds: this.opts.blockedProviderIds } : {}),
       ...(this.opts.blockedToolNames ? { blockedToolNames: this.opts.blockedToolNames } : {}),
       ...(this.opts.blockedSkillIds ? { blockedSkillIds: this.opts.blockedSkillIds } : {}),

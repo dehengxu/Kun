@@ -122,6 +122,8 @@ export const TurnSchema = z.object({
   guiDesignCanvas: z.boolean().optional(),
   /** True only for product Design-mode turns; Code canvas turns leave it unset. */
   guiDesignMode: z.boolean().optional(),
+  /** Product surface that owns this turn. Missing legacy values behave as Code. */
+  agentSurface: z.enum(['code', 'write', 'design']).optional(),
   /** Reserved first-class SVG artifact for structured SVG tools. */
   guiDesignArtifact: GuiDesignArtifactContextSchema.optional(),
   /**
@@ -196,6 +198,8 @@ export const StartTurnRequest = z.object({
   guiDesignCanvas: z.boolean().optional(),
   /** True only for product Design-mode turns; Code canvas turns leave it unset. */
   guiDesignMode: z.boolean().optional(),
+  /** Product surface used to scope subagent discovery and execution. */
+  agentSurface: z.enum(['code', 'write', 'design']).optional(),
   /** Reserved first-class SVG artifact for structured SVG tools. */
   guiDesignArtifact: GuiDesignArtifactContextSchema.optional(),
   /**

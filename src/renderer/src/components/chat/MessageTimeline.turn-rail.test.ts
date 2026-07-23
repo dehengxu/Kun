@@ -1,5 +1,8 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
+  TimelineJumpPreviewTitle,
   activeTimelineTurnKey,
   timelineJumpRailLeft,
   timelineJumpRailPreviewLeft,
@@ -7,6 +10,21 @@ import {
   timelineJumpPreviewTop,
   timelineJumpWaveDistance
 } from './MessageTimeline'
+
+describe('TimelineJumpPreviewTitle', () => {
+  it('shows the question number before the prompt preview', () => {
+    const html = renderToStaticMarkup(
+      createElement(TimelineJumpPreviewTitle, {
+        index: 12,
+        title: '交互逻辑都改完了吗'
+      })
+    )
+
+    expect(html).toContain('timeline-jump-rail-preview-turn-index')
+    expect(html).toContain('>12<')
+    expect(html).toContain('交互逻辑都改完了吗')
+  })
+})
 
 describe('activeTimelineTurnKey', () => {
   const positions = [

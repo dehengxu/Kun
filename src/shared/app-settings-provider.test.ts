@@ -14,13 +14,17 @@ import {
   isTextToSpeechModelId,
   isVideoGenerationModelId,
   modelProviderPresetProfile,
+  modelProviderPresetAccountCount,
+  modelProviderPresetAccountProfile,
   modelProviderTokenPlanProfile,
+  resolveModelProviderPresetSource,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultTerminalSettings,
   defaultWriteSettings,
   defaultModelRequestRetrySettings,
   CHATGPT_SUBSCRIPTION_MODEL_IDS,
+  GROK_SUBSCRIPTION_PROVIDER_ID,
   listMusicGenerationProviderProfiles,
   listSpeechToTextProviderProfiles,
   listTextToSpeechProviderProfiles,
@@ -30,6 +34,8 @@ import {
   modelSupportsImageInput,
   defaultDesignSettings,
   normalizeModelProviderSettings,
+  projectExecutableModelRoutePools,
+  resolveModelRouteTargetReference,
   resolveKunImageGenerationSettings,
   resolveKunMusicGenerationSettings,
   resolveModelProviderBaseUrl,
@@ -78,6 +84,130 @@ describe('model provider retry settings', () => {
   })
 })
 
+describe('Gemini subscription provider preset', () => {
+  it('uses the official Antigravity CLI transport and current subscription models', () => {
+    const preset = getModelProviderPreset('gemini-subscription')
+    expect(preset).not.toBeNull()
+    const profile = modelProviderPresetProfile(preset!, '')
+    const normalized = normalizeModelProviderSettings({ providers: [profile] })
+    expect(normalized.providers.find((provider) => provider.id === profile.id)).toMatchObject({
+      kind: 'antigravity-cli',
+      baseUrl: '',
+      endpointFormat: 'custom_endpoint',
+      models: expect.arrayContaining(['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.1-pro'])
+    })
+  })
+
+  it('migrates the retired Code Assist transport to Antigravity CLI', () => {
+    const normalized = normalizeModelProviderSettings({
+      providers: [{
+        ...modelProviderPresetProfile(getModelProviderPreset('gemini-subscription')!, ''),
+        kind: 'gemini-code-assist'
+      }]
+    })
+    expect(
+      normalized.providers.find((provider) => provider.id === 'gemini-subscription')
+    ).toMatchObject({
+      kind: 'antigravity-cli',
+      apiKey: '',
+      models: ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.1-pro']
+    })
+  })
+})
+
+describe('Cursor subscription provider preset', () => {
+  it('uses the official Cursor SDK transport with an auto fallback model', () => {
+    const preset = getModelProviderPreset('cursor-subscription')
+    expect(preset).not.toBeNull()
+    expect(preset?.apiKeyUrl).toBe('https://cursor.com/dashboard?tab=integrations')
+    const profile = modelProviderPresetProfile(preset!, 'cursor-secret')
+    const normalized = normalizeModelProviderSettings({ providers: [profile] })
+    expect(normalized.providers.find((provider) => provider.id === profile.id)).toMatchObject({
+      kind: 'cursor-sdk',
+      apiKey: 'cursor-secret',
+      baseUrl: '',
+      endpointFormat: 'custom_endpoint',
+      models: ['auto'],
+      modelProfiles: {
+        auto: {
+          reasoning: {
+            supportedEfforts: ['auto'],
+            defaultEffort: 'auto',
+            requestProtocol: 'none'
+          }
+        }
+      }
+    })
+  })
+})
+
+describe('model route pool settings', () => {
+  it('normalizes legacy settings to an empty route catalog', () => {
+    const settings = normalizeModelProviderSettings(undefined)
+    expect(settings.routePools).toEqual([])
+    expect(settings.localGateway).toEqual({ enabled: false, name: 'Kun API' })
+  })
+
+  it('persists a custom local gateway provider name', () => {
+    expect(normalizeModelProviderSettings({
+      localGateway: { enabled: true, name: '  Team Relay  ' }
+    }).localGateway).toEqual({ enabled: true, name: 'Team Relay' })
+  })
+
+  it('keeps valid concrete targets and allows a routed alias to match a concrete model', () => {
+    const settings = normalizeModelProviderSettings({
+      providers: [{ id: 'provider-a', name: 'A', baseUrl: 'https://a.example', models: ['kimi-k3'] }],
+      routePools: [{
+        id: 'pool', name: 'Pool', modelId: 'kimi-auto', enabled: true, strategy: 'adaptive',
+        targets: [{ id: 'a', providerId: 'provider-a', modelId: 'kimi-k3', enabled: true, weight: 200 }],
+        failurePolicy: { failoverHttpStatusCodes: [429], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
+        healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
+      }, {
+        id: 'collision', name: 'Collision', modelId: 'kimi-k3', enabled: true, strategy: 'priority',
+        targets: [{ id: 'b', providerId: 'provider-a', modelId: 'kimi-k3', enabled: true, weight: 1 }],
+        failurePolicy: { failoverHttpStatusCodes: [429], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
+        healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
+      }]
+    })
+    expect(settings.routePools[0]).toMatchObject({ enabled: true, strategy: 'adaptive', targets: [{ providerId: 'provider-a', weight: 100 }] })
+    expect(settings.routePools[1]).toMatchObject({ modelId: 'kimi-k3', enabled: true })
+  })
+
+  it('preserves dangling targets while excluding them from the executable projection', () => {
+    const settings = normalizeModelProviderSettings({
+      providers: [{ id: 'provider-a', name: 'A', baseUrl: 'https://a.example', models: ['kimi-k3'] }],
+      routePools: [{
+        id: 'pool', name: 'Pool', modelId: 'kimi-auto', enabled: true, strategy: 'priority',
+        targets: [
+          { id: 'valid', providerId: 'provider-a', modelId: 'kimi-k3', enabled: true, weight: 1 },
+          { id: 'provider-missing', providerId: 'provider-gone', modelId: 'kimi-k3', enabled: true, weight: 1 },
+          { id: 'model-missing', providerId: 'provider-a', modelId: 'kimi-removed', enabled: true, weight: 1 }
+        ],
+        failurePolicy: { failoverHttpStatusCodes: [429], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
+        healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
+      }]
+    })
+
+    expect(settings.routePools[0].targets).toHaveLength(3)
+    expect(resolveModelRouteTargetReference(settings.routePools[0].targets[0], settings.providers).status).toBe('valid')
+    expect(resolveModelRouteTargetReference(settings.routePools[0].targets[1], settings.providers).status).toBe('provider-missing')
+    expect(resolveModelRouteTargetReference(settings.routePools[0].targets[2], settings.providers).status).toBe('model-missing')
+    expect(projectExecutableModelRoutePools(settings)[0]).toMatchObject({
+      enabled: true,
+      targets: [{ id: 'valid', providerId: 'provider-a', modelId: 'kimi-k3' }]
+    })
+
+    const withoutProvider = normalizeModelProviderSettings({
+      ...settings,
+      providers: [],
+      routePools: settings.routePools
+    })
+    expect(withoutProvider.routePools[0]).toMatchObject({ enabled: true })
+    expect(withoutProvider.routePools[0].targets).toHaveLength(3)
+    expect(projectExecutableModelRoutePools(withoutProvider)[0]).toMatchObject({ enabled: false, targets: [] })
+  })
+})
+
 describe('ChatGPT subscription migration', () => {
   it('renames only the legacy default and upgrades exactly the legacy model set', () => {
     const normalized = normalizeModelProviderSettings({
@@ -122,6 +252,57 @@ describe('ChatGPT subscription migration', () => {
     expect(normalized.providers.find((item) => item.id === 'codex')).toMatchObject({
       name: 'Team subscription',
       models: ['gpt-5.5', 'team-model']
+    })
+  })
+})
+
+describe('Grok subscription media capabilities', () => {
+  it('exposes the Grok Build image and video models on the subscription profile', () => {
+    const preset = getModelProviderPreset(GROK_SUBSCRIPTION_PROVIDER_ID)
+    expect(preset).toBeDefined()
+    const provider = modelProviderPresetProfile(preset!, 'grok-oauth-json')
+
+    expect(provider.image).toEqual({
+      protocol: 'grok-imagine-image',
+      baseUrl: 'https://api.x.ai/v1',
+      models: ['grok-imagine-image-quality', 'grok-imagine-image']
+    })
+    expect(provider.video).toEqual({
+      protocol: 'grok-imagine-video',
+      baseUrl: 'https://api.x.ai/v1',
+      models: ['grok-imagine-video-1.5-preview', 'grok-imagine-video']
+    })
+
+    const defaults = defaultKunRuntimeSettings()
+    const appSettings: AppSettingsV1 = {
+      ...settings(),
+      provider: {
+        ...defaultModelProviderSettings(),
+        providers: [
+          ...defaultModelProviderSettings().providers.filter((item) => item.id !== provider.id),
+          provider
+        ]
+      },
+      agents: {
+        kun: {
+          ...defaults,
+          videoGeneration: {
+            ...defaults.videoGeneration,
+            enabled: true,
+            providerId: provider.id,
+            defaultDuration: 8,
+            defaultResolution: '1080P'
+          }
+        }
+      }
+    }
+    expect(resolveKunVideoGenerationSettings(appSettings)).toMatchObject({
+      protocol: 'grok-imagine-video',
+      baseUrl: 'https://api.x.ai/v1',
+      apiKey: 'grok-oauth-json',
+      model: 'grok-imagine-video-1.5-preview',
+      defaultDuration: 6,
+      defaultResolution: '480P'
     })
   })
 })
@@ -1209,6 +1390,134 @@ describe('model provider settings', () => {
     expect(defaultModels).toEqual(['deepseek-v4-pro', 'deepseek-v4-flash'])
     expect(defaultModels).not.toContain('deepseek-chat')
     expect(defaultModels).not.toContain('deepseek-reasoner')
+  })
+})
+
+describe('multi-account provider presets', () => {
+  it('allocates stable numbered identities for repeated subscription accounts', () => {
+    const kimi = getModelProviderPreset('kimi-code')
+    expect(kimi).not.toBeNull()
+
+    const first = modelProviderPresetAccountProfile(kimi!, 'api', [])!
+    const second = modelProviderPresetAccountProfile(kimi!, 'api', [first])!
+    const renamedSecond = { ...second, name: 'Work Kimi' }
+    const third = modelProviderPresetAccountProfile(kimi!, 'api', [first, renamedSecond])!
+
+    expect(first).toMatchObject({
+      id: 'kimi-code',
+      name: 'Kimi Code',
+      presetSource: { presetId: 'kimi-code', mode: 'api' }
+    })
+    expect(second).toMatchObject({
+      id: 'kimi-code-2',
+      name: 'Kimi Code 2',
+      presetSource: { presetId: 'kimi-code', mode: 'api' }
+    })
+    expect(third).toMatchObject({ id: 'kimi-code-3', name: 'Kimi Code 3' })
+    expect(modelProviderPresetAccountCount(kimi!, 'api', [first, renamedSecond, third])).toBe(3)
+  })
+
+  it('avoids global id and display-name collisions while preserving family ordinals', () => {
+    const kimi = getModelProviderPreset('kimi-code')!
+    const first = modelProviderPresetAccountProfile(kimi, 'api', [])!
+    const collisions = [
+      first,
+      { ...first, id: 'custom-kimi', name: 'Kimi Code 2', presetSource: undefined },
+      { ...first, id: 'kimi-code-2', name: 'Unrelated', presetSource: undefined }
+    ]
+
+    expect(modelProviderPresetAccountProfile(kimi, 'api', collisions)).toMatchObject({
+      id: 'kimi-code-3',
+      name: 'Kimi Code 3'
+    })
+  })
+
+  it('allocates independent Token Plan accounts and retains their preset capabilities', () => {
+    const minimax = getModelProviderPreset('minimax')
+    expect(minimax?.tokenPlan).toBeDefined()
+    const first = modelProviderPresetAccountProfile(minimax!, 'token-plan', [])!
+    const second = {
+      ...modelProviderPresetAccountProfile(minimax!, 'token-plan', [first])!,
+      apiKey: 'sk-second',
+      modelProfiles: {}
+    }
+    const normalized = normalizeModelProviderSettings({ providers: [first, second] })
+    const resolved = normalized.providers.find((provider) => provider.id === 'minimax-token-plan-2')!
+
+    expect(first).toMatchObject({
+      id: 'minimax-token-plan',
+      name: 'MiniMax Token Plan',
+      presetSource: { presetId: 'minimax', mode: 'token-plan' }
+    })
+    expect(resolved).toMatchObject({
+      id: 'minimax-token-plan-2',
+      name: 'MiniMax Token Plan 2',
+      apiKey: 'sk-second',
+      presetSource: { presetId: 'minimax', mode: 'token-plan' },
+      textToSpeech: expect.objectContaining({ models: expect.arrayContaining(['speech-2.8-hd']) })
+    })
+    expect(resolved.modelProfiles['minimax-m3']).toEqual(expect.objectContaining({
+      supportsToolCalling: true,
+      inputModalities: expect.arrayContaining(['image'])
+    }))
+  })
+
+  it('backfills legacy canonical sources and keeps duplicate account credentials independent', () => {
+    const kimi = getModelProviderPreset('kimi-code')!
+    const first = { ...modelProviderPresetAccountProfile(kimi, 'api', [])!, apiKey: 'sk-first' }
+    const second = {
+      ...modelProviderPresetAccountProfile(kimi, 'api', [first])!,
+      apiKey: 'sk-second',
+      modelProfiles: {}
+    }
+    const state = settings()
+    state.provider = normalizeModelProviderSettings({
+      providers: [
+        { ...first, presetSource: undefined },
+        second
+      ]
+    })
+    state.agents.kun = {
+      ...defaultKunRuntimeSettings(),
+      providerId: second.id,
+      model: second.models[0]
+    }
+
+    const normalizedFirst = state.provider.providers.find((provider) => provider.id === first.id)!
+    const normalizedSecond = state.provider.providers.find((provider) => provider.id === second.id)!
+    expect(resolveModelProviderPresetSource(normalizedFirst)).toMatchObject({
+      preset: expect.objectContaining({ id: 'kimi-code' }),
+      mode: 'api'
+    })
+    expect(normalizedFirst.presetSource).toEqual({ presetId: 'kimi-code', mode: 'api' })
+    expect(normalizedFirst.apiKey).toBe('sk-first')
+    expect(normalizedSecond.apiKey).toBe('sk-second')
+    expect(normalizedSecond.modelProfiles['kimi-for-coding']).toEqual(expect.objectContaining({
+      supportsToolCalling: true
+    }))
+    expect(resolveKunRuntimeSettings(state)).toMatchObject({
+      apiKey: 'sk-second',
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      model: 'kimi-for-coding'
+    })
+  })
+
+  it('does not grant preset behavior to an invalid duplicate source', () => {
+    const normalized = normalizeModelProviderSettings({
+      providers: [{
+        id: 'fake-plan-2',
+        name: 'Fake plan',
+        presetSource: { presetId: 'missing-preset', mode: 'token-plan' },
+        apiKey: 'sk-fake',
+        baseUrl: 'https://fake.example/v1',
+        endpointFormat: 'chat_completions',
+        models: ['fake-model'],
+        modelProfiles: {}
+      }]
+    }).providers.find((provider) => provider.id === 'fake-plan-2')!
+
+    expect(normalized.presetSource).toBeUndefined()
+    expect(normalized.modelProfiles).toEqual({})
   })
 })
 

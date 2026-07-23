@@ -72,18 +72,34 @@ const api = {
     ipcRenderer.on('claude-subscription:sdk-progress', wrapped)
     return () => ipcRenderer.removeListener('claude-subscription:sdk-progress', wrapped)
   },
+  geminiSubscriptionCliStatus: () => ipcRenderer.invoke('gemini-subscription:cli-status'),
+  geminiSubscriptionCliInstall: () => ipcRenderer.invoke('gemini-subscription:cli-install'),
+  onGeminiSubscriptionCliProgress: (handler) => {
+    const wrapped = (
+      _: Electron.IpcRendererEvent,
+      payload: Parameters<typeof handler>[0]
+    ) => handler(payload)
+    ipcRenderer.on('gemini-subscription:cli-progress', wrapped)
+    return () => ipcRenderer.removeListener('gemini-subscription:cli-progress', wrapped)
+  },
+  geminiSubscriptionModels: () => ipcRenderer.invoke('gemini-subscription:models'),
+  cursorSubscriptionDiscover: (apiKey) =>
+    ipcRenderer.invoke('cursor-subscription:discover', { apiKey }),
   setSettings: (partial) =>
     ipcRenderer.invoke('settings:set', partial),
   saveSettingsSilent: (partial) =>
     ipcRenderer.invoke('settings:save-silent', partial),
   runtimeRequest: (path, method, body) =>
     ipcRenderer.invoke('runtime:request', { path, method, body }),
+  getRuntimeSettingsSyncStatus: () =>
+    ipcRenderer.invoke('runtime:settings-sync-status:get'),
   uploadRuntimeImageAttachment: (request) =>
     ipcRenderer.invoke('runtime:attachment:upload-image', request),
   resolveKunApproval: (request) => ipcRenderer.invoke('approval:decide', request),
   restartRuntime: () => ipcRenderer.invoke('runtime:restart'),
   fetchUpstreamModels: () => ipcRenderer.invoke('upstream:models'),
   probeModelProvider: (payload) => ipcRenderer.invoke('provider:probe', payload),
+  fetchModelsDevCatalog: (payload) => ipcRenderer.invoke('provider:models-dev-catalog', payload),
   optimizePrompt: (payload) => ipcRenderer.invoke('prompt:optimize', payload),
   getClawStatus: () => ipcRenderer.invoke('claw:status'),
   runClawTask: (taskId) =>
@@ -113,6 +129,12 @@ const api = {
     ipcRenderer.invoke('codex:auth:poll', { deviceCode, userCode }),
   startCodexBrowserAuth: () =>
     ipcRenderer.invoke('codex:auth:browser'),
+  startGrokBrowserAuth: () =>
+    ipcRenderer.invoke('grok:auth:browser'),
+  submitGrokBrowserAuthCode: (code) =>
+    ipcRenderer.invoke('grok:auth:browser:paste', { code }),
+  cancelGrokBrowserAuth: () =>
+    ipcRenderer.invoke('grok:auth:browser:cancel'),
   pickWorkspaceDirectory: (defaultPath) =>
     ipcRenderer.invoke('workspace:pick-directory', defaultPath),
   workspaceDirectoryExists: (workspaceRoot) =>
@@ -364,6 +386,14 @@ const api = {
     ) => handler(payload)
     ipcRenderer.on('runtime:status', wrapped)
     return () => ipcRenderer.removeListener('runtime:status', wrapped)
+  },
+  onRuntimeSettingsSyncStatus: (handler) => {
+    const wrapped = (
+      _: Electron.IpcRendererEvent,
+      payload: Parameters<typeof handler>[0]
+    ) => handler(payload)
+    ipcRenderer.on('runtime:settings-sync-status', wrapped)
+    return () => ipcRenderer.removeListener('runtime:settings-sync-status', wrapped)
   },
   mirrorClawChannelMessage: (threadId, text, direction) =>
     ipcRenderer.invoke('claw:channel:mirror', { threadId, text, direction }),

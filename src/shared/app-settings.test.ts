@@ -323,6 +323,7 @@ describe('kun defaults', () => {
         summaryInputMaxBytes: 98304
       },
       runtimeTuning: {
+        maxConcurrentTurns: 256,
         maxWallTimeMs: 86400000,
         streamIdleTimeoutMs: 450000,
         toolStorm: {
@@ -716,6 +717,7 @@ describe('mergeKunRuntimeSettings', () => {
       ...defaultKunRuntimeSettings(),
       subagents: {
         enabled: true,
+        useExistingAgents: true,
         maxParallel: 3,
         maxChildRuns: 12,
         defaultToolPolicy: 'inherit' as const,
@@ -753,11 +755,19 @@ describe('mergeKunRuntimeSettings', () => {
       subagents: { enabled: false }
     })
 
-    expect(next.subagents).toEqual({ enabled: false, profiles: [] })
+    expect(next.subagents).toEqual({
+      enabled: false,
+      useExistingAgents: true,
+      profiles: []
+    })
     expect(normalizeAppSettings({
       ...settings(),
       agents: { kun: next }
-    }).agents.kun.subagents).toEqual({ enabled: false, profiles: [] })
+    }).agents.kun.subagents).toEqual({
+      enabled: false,
+      useExistingAgents: true,
+      profiles: []
+    })
   })
 
   it('deep-merges token economy settings and keeps the legacy switch synced', () => {
@@ -892,6 +902,7 @@ describe('mergeKunRuntimeSettings', () => {
     expect(next.runtimeTuning.toolStorm.windowSize).toBe(current.runtimeTuning.toolStorm.windowSize)
     expect(next.runtimeTuning.toolStorm.threshold).toBe(5)
     expect(next.runtimeTuning.toolArgumentRepair).toEqual(current.runtimeTuning.toolArgumentRepair)
+    expect(next.runtimeTuning.maxConcurrentTurns).toBe(current.runtimeTuning.maxConcurrentTurns)
     expect(next.runtimeTuning.maxWallTimeMs).toBe(current.runtimeTuning.maxWallTimeMs)
     expect(next.runtimeTuning.streamIdleTimeoutMs).toBe(current.runtimeTuning.streamIdleTimeoutMs)
   })
@@ -914,6 +925,24 @@ describe('mergeKunRuntimeSettings', () => {
       mergeKunRuntimeSettings(current, { runtimeTuning: { maxWallTimeMs: 999_999_999 } })
         .runtimeTuning.maxWallTimeMs
     ).toBe(86_400_000)
+  })
+
+  it('normalizes maximum concurrent turns to the supported range', () => {
+    const current = defaultKunRuntimeSettings()
+    expect(current.runtimeTuning.maxConcurrentTurns).toBe(256)
+
+    expect(
+      mergeKunRuntimeSettings(current, { runtimeTuning: { maxConcurrentTurns: 32 } })
+        .runtimeTuning.maxConcurrentTurns
+    ).toBe(32)
+    expect(
+      mergeKunRuntimeSettings(current, { runtimeTuning: { maxConcurrentTurns: 0 } })
+        .runtimeTuning.maxConcurrentTurns
+    ).toBe(256)
+    expect(
+      mergeKunRuntimeSettings(current, { runtimeTuning: { maxConcurrentTurns: 257 } })
+        .runtimeTuning.maxConcurrentTurns
+    ).toBe(256)
   })
 
   it('normalizes the stream idle timeout (0 disables, out-of-range clamps)', () => {

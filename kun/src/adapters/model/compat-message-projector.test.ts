@@ -53,4 +53,37 @@ describe('compat composer context projection', () => {
     expect(messages.filter((message) => message.role === 'system').map((message) => message.content))
       .toEqual(['stable-system-prefix'])
   })
+
+  it('orders stable prompt, profile, mode, history, and turn context', () => {
+    const request: ModelRequest = {
+      threadId: 'thread-order',
+      turnId: 'turn-order',
+      model: 'test-model',
+      systemPrompt: 'stable-system-prefix',
+      threadProfileInstruction: 'thread-profile',
+      modeInstruction: 'mode-instruction',
+      prefix: [],
+      history: [makeUserItem({
+        id: 'item-order',
+        threadId: 'thread-order',
+        turnId: 'turn-order',
+        text: 'user-history'
+      })],
+      contextInstructions: ['turn-context-preamble', 'turn-context-block'],
+      tools: [],
+      abortSignal: new AbortController().signal
+    }
+
+    expect(projectCompatMessages(request, {
+      thinkingMode: false,
+      supportsImages: false
+    }).map((message) => [message.role, message.content])).toEqual([
+      ['system', 'stable-system-prefix'],
+      ['system', 'thread-profile'],
+      ['system', 'mode-instruction'],
+      ['user', 'user-history'],
+      ['system', 'turn-context-preamble'],
+      ['system', 'turn-context-block']
+    ])
+  })
 })

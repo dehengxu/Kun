@@ -205,6 +205,8 @@ export function parseServeOptions(
         : configServe.observability,
     headers: configServe.headers,
     providers: configServe.providers,
+    routePools: configServe.routePools,
+    localModelGateway: configServe.localModelGateway,
     models: loadedConfig?.config.models,
     contextCompaction: loadedConfig?.config.contextCompaction,
     runtime: loadedConfig?.config.runtime,

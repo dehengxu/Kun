@@ -19,4 +19,22 @@ describe('estimateModelRequestInputTokens', () => {
 
     expect(estimateModelRequestInputTokens(request)).toBeGreaterThanOrEqual(2_100)
   })
+
+  it('includes a separate thread profile in request overhead', () => {
+    const base: ModelRequest = {
+      threadId: 'thr_profile_estimate',
+      turnId: 'turn_profile_estimate',
+      model: 'model',
+      systemPrompt: 'stable',
+      prefix: [],
+      history: [],
+      tools: [],
+      abortSignal: new AbortController().signal
+    }
+
+    expect(estimateModelRequestInputTokens({
+      ...base,
+      threadProfileInstruction: 'p'.repeat(400)
+    })).toBeGreaterThanOrEqual(estimateModelRequestInputTokens(base) + 100)
+  })
 })

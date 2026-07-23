@@ -15,6 +15,7 @@ const estimator = new ContextEstimator(CHARS_PER_TOKEN)
 export function estimateModelRequestInputTokens(request: ModelRequest): number {
   let tokens = 0
   tokens += estimateText(request.systemPrompt)
+  tokens += estimateText(request.threadProfileInstruction)
   tokens += estimateText(request.modeInstruction)
   tokens += estimateText(request.contextInstructions?.join('\n'))
   tokens += estimateItems(request.prefix)
@@ -39,6 +40,7 @@ export function estimateModelRequestInputTokens(request: ModelRequest): number {
  */
 export function estimateRequestOverheadTokens(input: {
   systemPrompt?: string
+  threadProfileInstruction?: string
   modeInstruction?: string
   contextInstructions?: string[]
   prefix?: TurnItem[]
@@ -46,6 +48,7 @@ export function estimateRequestOverheadTokens(input: {
 }): number {
   let tokens = 0
   tokens += estimateText(input.systemPrompt)
+  tokens += estimateText(input.threadProfileInstruction)
   tokens += estimateText(input.modeInstruction)
   tokens += estimateText(input.contextInstructions?.join('\n'))
   tokens += estimateItems(input.prefix)

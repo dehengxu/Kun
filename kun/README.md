@@ -330,6 +330,29 @@ Feature flags are intentionally explicit:
 - `capabilities.attachments` stores image bytes outside thread logs and allows turns to reference `attachmentIds`. Vision-capable models receive image parts; text-only models receive a bounded compressed base64 text fallback.
 - `capabilities.memory` stores long-term records under the data dir, retrieves scoped matches before turns, and exposes `memory_create`, `memory_update`, and `memory_delete` tools.
 - `capabilities.subagents` exposes `delegate_task` with `maxParallel` and `maxChildRuns` concurrency budgets.
+  Workspace overlays under `<workspace>/.kun/agents/*.md` enter automatic
+  BM25/LLM routing (id/name/description only), appear in Settings and the
+  workbench subagent sidebar with a Custom tag, default to read-only, and may
+  set `toolPolicy: inherit` or `omit_base_prompt: true`. Model/provider overrides
+  and nested delegation stay blocked.
+
+Kun installs 33 fixed standalone subagent profiles. Nine are Kun's existing
+general/design and specialist personas; 24 engineering workflows adapted from
+`addyosmani/agent-skills` are rebuilt as independent agents with their own
+self-contained system prompts. They do not load a Skill by id and remain usable
+when Skills are disabled. Interactive upstream workflows are child-safe:
+`interview-me` produces prioritized requirement questions for the parent, and
+`doubt-driven-development` performs one fresh-context adversarial review.
+
+The main agent can choose an exact `profile`, provide a one-run `custom_agent`,
+or omit both. Automatic routing runs BM25 Top-5 over agent profiles and uses a
+small-model judge to select an existing agent. If none fits, a separate
+generator recalls up to three trusted built-in agent examples, creates a
+self-contained temporary role, and runs it. `generate_subagent` exposes that
+same design-and-run path explicitly. Generated roles are not installed into
+settings or the reusable catalog; their exact definitions remain in the
+permission-protected child-run audit record. They cannot delegate or load Skills. Router and generator usage are recorded
+separately. See `../THIRD_PARTY_NOTICES.md` for attribution.
 
 Use `GET /v1/runtime/info` for the runtime capability manifest and
 `GET /v1/runtime/tools` for redacted provider diagnostics. The GUI

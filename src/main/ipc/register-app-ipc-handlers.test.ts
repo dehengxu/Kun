@@ -122,6 +122,11 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     applySettingsPatch,
     saveSettingsPatch,
     runtimeRequest: vi.fn() as never,
+    getRuntimeSettingsSyncStatus: () => ({
+      state: 'idle' as const,
+      generation: 0,
+      at: '2026-07-22T00:00:00.000Z'
+    }),
     restartRuntime: vi.fn(async () => undefined),
     fetchUpstreamModels: vi.fn() as never,
     getClawRuntime: () => null,
@@ -159,6 +164,12 @@ describe('registerAppIpcHandlers', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs()
+  })
+
+  it('registers the Cursor subscription discovery handler at application startup', () => {
+    registerAppIpcHandlers(registerOptions())
+
+    expect(handlers.get('cursor-subscription:discover')).toBeTypeOf('function')
   })
 
   it('bypasses cache for development reload commands and keeps packaged reloads ordinary', async () => {
@@ -294,6 +305,30 @@ describe('registerAppIpcHandlers', () => {
     }
     const handler = handlers.get('settings:set')
     await expect(handler?.({}, payload)).resolves.toEqual(settings())
+    expect(applySettingsPatch).toHaveBeenCalledWith(payload)
+  })
+
+  it('accepts strict multi-account provider source metadata with routing settings', async () => {
+    const applySettingsPatch = vi.fn(async () => settings())
+    registerAppIpcHandlers(registerOptions({ applySettingsPatch }))
+    const payload = {
+      provider: {
+        providers: [{
+          id: 'kimi-code-2',
+          name: 'Kimi Code 2',
+          presetSource: { presetId: 'kimi-code', mode: 'api' as const },
+          models: ['kimi-for-coding']
+        }],
+        routePools: [{
+          id: 'kimi-route', name: 'Kimi Route', modelId: 'kimi-auto', enabled: true, strategy: 'priority' as const,
+          targets: [{ id: 'target-2', providerId: 'kimi-code-2', modelId: 'kimi-for-coding', enabled: true, weight: 1 }],
+          failurePolicy: { failoverHttpStatusCodes: [429], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
+          healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
+        }]
+      }
+    }
+
+    await expect(handlers.get('settings:set')?.({}, payload)).resolves.toEqual(settings())
     expect(applySettingsPatch).toHaveBeenCalledWith(payload)
   })
 
@@ -652,6 +687,24 @@ describe('registerAppIpcHandlers', () => {
 
     await expect(handlers.get('runtime:restart')?.({})).resolves.toBeUndefined()
     expect(restartRuntime).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns the current Runtime settings synchronization status', async () => {
+    registerAppIpcHandlers(registerOptions({
+      getRuntimeSettingsSyncStatus: () => ({
+        state: 'failed',
+        generation: 7,
+        message: 'hot apply failed',
+        at: '2026-07-22T08:00:00.000Z'
+      })
+    }))
+
+    expect(handlers.get('runtime:settings-sync-status:get')?.({})).toEqual({
+      state: 'failed',
+      generation: 7,
+      message: 'hot apply failed',
+      at: '2026-07-22T08:00:00.000Z'
+    })
   })
 
   it('saves generated files to a user-selected path', async () => {
@@ -1194,9 +1247,9 @@ describe('registerAppIpcHandlers', () => {
     }
   })
 
-  it('does not create a missing custom conversation workspace root', async () => {
+  it('creates a missing custom conversation workspace root when creating a conversation', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'kun-conv-missing-'))
-    const root = join(parent, 'custom-root')
+    const root = join(parent, 'custom-root', 'nested-root')
     try {
       registerAppIpcHandlers(registerOptions({
         store: { load: vi.fn(async () => ({ ...settings(), conversationWorkspaceRoot: root })) } as never
@@ -1205,9 +1258,10 @@ describe('registerAppIpcHandlers', () => {
       const handler = handlers.get('conversation:create-workspace')
       const result = await handler?.({}) as { ok: boolean; path: string; error?: string }
 
-      expect(result.ok).toBe(false)
-      expect(result.path).toBe('')
-      expect(existsSync(root)).toBe(false)
+      expect(result.ok).toBe(true)
+      expect(result.path.startsWith(root)).toBe(true)
+      expect(existsSync(root)).toBe(true)
+      expect(existsSync(result.path)).toBe(true)
     } finally {
       rmSync(parent, { recursive: true, force: true })
     }

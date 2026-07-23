@@ -90,6 +90,7 @@ const RuntimeEventBase = z.object({
     childModel: z.string().optional(),
     childProviderId: z.string().optional(),
     childProfile: z.string().optional(),
+    childProfileName: z.string().optional(),
     childToolPolicy: SubagentToolPolicy.optional(),
     prefixReused: z.boolean().optional(),
     inheritedHistoryItems: z.number().int().nonnegative().optional(),

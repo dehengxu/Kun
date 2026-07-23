@@ -297,6 +297,9 @@ describe('create_plan tool mapping', () => {
       parentTurnId: 'turn_1',
       childId: 'child_1',
       childLabel: 'child',
+      childProfile: 'security-auditor',
+      childProfileName: 'Security Auditor',
+      childModel: 'gpt-5.6-sol',
       childStatus: 'completed' as const,
       childSeq: 1,
       detached: true
@@ -317,7 +320,10 @@ describe('create_plan tool mapping', () => {
         child: {
           childId: 'child_1',
           childStatus: 'running',
-          detached: true
+          detached: true,
+          childProfile: 'security-auditor',
+          childProfileName: 'Security Auditor',
+          childModel: 'gpt-5.6-sol'
         }
       }
     })
@@ -357,7 +363,10 @@ describe('create_plan tool mapping', () => {
         child: {
           childId: 'child_1',
           childStatus: 'failed',
-          detached: true
+          detached: true,
+          childProfile: 'security-auditor',
+          childProfileName: 'Security Auditor',
+          childModel: 'gpt-5.6-sol'
         }
       }
     })
@@ -443,6 +452,28 @@ describe('create_plan tool mapping', () => {
       message: 'Authorization=<redacted> failed',
       code: 'stream_read_error',
       details: { token: 'secret-token' }
+    })
+  })
+
+  it('marks persisted error items for direct conversation rendering', () => {
+    const block = chatBlockFromItem({
+      id: 'item_error_persisted',
+      turnId: 'turn_1',
+      threadId: 'thr_1',
+      role: 'system',
+      status: 'failed',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      kind: 'error',
+      message: 'provider rejected the request',
+      code: 'provider_error'
+    })
+
+    expect(block).toMatchObject({
+      kind: 'system',
+      id: 'item_error_persisted',
+      text: 'provider rejected the request',
+      code: 'provider_error',
+      runtimeError: true
     })
   })
 

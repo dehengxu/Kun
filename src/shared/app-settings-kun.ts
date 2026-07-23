@@ -351,6 +351,7 @@ export function defaultKunContextCompactionSettings(): KunContextCompactionSetti
 
 export function defaultKunRuntimeTuningSettings(): KunRuntimeTuningSettingsV1 {
   return {
+    maxConcurrentTurns: 256,
     maxWallTimeMs: 86_400_000,
     streamIdleTimeoutMs: 450_000,
     toolStorm: {
@@ -487,6 +488,9 @@ export function mergeKunRuntimeSettings(
           ...(patch.runtimeTuning.maxWallTimeMs !== undefined
             ? { maxWallTimeMs: patch.runtimeTuning.maxWallTimeMs }
             : {}),
+          ...(patch.runtimeTuning.maxConcurrentTurns !== undefined
+            ? { maxConcurrentTurns: patch.runtimeTuning.maxConcurrentTurns }
+            : {}),
           ...(patch.runtimeTuning.streamIdleTimeoutMs !== undefined
             ? { streamIdleTimeoutMs: patch.runtimeTuning.streamIdleTimeoutMs }
             : {}),
@@ -568,9 +572,10 @@ function mergeKunSubagentsSettings(
 ): KunRuntimeSettingsV1['subagents'] {
   if (patch === undefined) return current
   return {
-    ...(current ?? { enabled: true, profiles: [] }),
+    ...(current ?? { enabled: true, useExistingAgents: true, profiles: [] }),
     ...patch,
     enabled: patch.enabled ?? current?.enabled ?? true,
+    useExistingAgents: patch.useExistingAgents ?? current?.useExistingAgents ?? true,
     // A roster diff is an intentional whole-array replacement (including []
     // for deleting every custom profile). Omitting it keeps the current roster.
     profiles: patch.profiles !== undefined
@@ -680,6 +685,7 @@ function normalizeKunImageGenerationQuality(value: unknown): ImageGenerationQual
 function normalizeKunImageGenerationProtocol(value: unknown): ImageGenerationProtocol {
   if (value === 'minimax-image') return 'minimax-image'
   if (value === 'codex-responses-image') return 'codex-responses-image'
+  if (value === 'grok-imagine-image') return 'grok-imagine-image'
   return DEFAULT_IMAGE_GENERATION_PROTOCOL
 }
 
@@ -789,6 +795,7 @@ function normalizeKunVideoGenerationSettings(
 }
 
 function normalizeKunVideoGenerationProtocol(value: unknown): VideoGenerationProtocol {
+  if (value === 'grok-imagine-video') return 'grok-imagine-video'
   return value === 'minimax-video' ? 'minimax-video' : DEFAULT_VIDEO_GENERATION_PROTOCOL
 }
 
@@ -957,6 +964,11 @@ function normalizeKunRuntimeTuningSettings(
 ): KunRuntimeTuningSettingsV1 {
   const defaults = defaultKunRuntimeTuningSettings()
   return {
+    maxConcurrentTurns: boundedPositiveInt(
+      input?.maxConcurrentTurns,
+      defaults.maxConcurrentTurns,
+      256
+    ),
     maxWallTimeMs: boundedPositiveInt(
       input?.maxWallTimeMs,
       defaults.maxWallTimeMs,
@@ -1285,6 +1297,7 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     sandboxMode: isReasoningLegacy ? kunDefaults.sandboxMode : legacyLocalHttp.sandboxMode
   }
   const provider = normalizeModelProviderSettings({
+    ...parsed.provider,
     apiKey: hasProviderSettings
       ? parsed.provider?.apiKey
       : nonEmptyStringOrFallback(explicitKun.apiKey, legacySeed.apiKey),
@@ -1292,7 +1305,9 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
       ? parsed.provider?.baseUrl
       : nonEmptyStringOrFallback(explicitKun.baseUrl, legacySeed.baseUrl),
     proxy: parsed.provider?.proxy,
-    providers: parsed.provider?.providers
+    providers: parsed.provider?.providers,
+    routePools: parsed.provider?.routePools,
+    localGateway: parsed.provider?.localGateway
   })
   const kun = {
     ...kunDefaults,

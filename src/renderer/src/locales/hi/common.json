@@ -1558,6 +1558,7 @@
   "composerVoiceFailed": "Voice transcription failed: {{message}}",
   "composerImageUnavailable": "इस रनटाइम के लिए छवि इनपुट अनुपलब्ध है.",
   "composerAttachmentUnavailable": "अनुलग्नक अपलोड अनुपलब्ध है.",
+  "composerDropFilesHere": "इस बातचीत में फ़ाइलें जोड़ने के लिए छोड़ें",
   "composerAttachmentModelUnsupported": "चयनित मॉडल छवियाँ नहीं पढ़ सकता. विज़न मॉडल पर स्विच करें या अनुलग्नक हटा दें।",
   "composerPdfAttachmentUnavailable": "इस फ़ाइल के लिए पीडीएफ पाठ निष्कर्षण उपलब्ध नहीं है।",
   "composerPdfAttachmentNoText": "इस पीडीएफ में कोई निकालने योग्य पाठ नहीं है और अंतर्निहित ओसीआर पढ़ने योग्य पाठ का पता नहीं लगा सका। स्पष्ट रूप से स्कैन करने का प्रयास करें या प्रासंगिक पृष्ठों को चिपकाएँ।",
@@ -1583,8 +1584,8 @@
   "composerPlanPlaceholder": "कार्यान्वयन से पहले लक्ष्य को तोड़ें, चरणों की रूपरेखा तैयार करें और दायरे में बदलाव करें...",
   "composerSlashHint": "कमांड के लिए / टाइप करें",
   "workingDirectory": "कार्यशील निर्देशिका",
-  "emptyHeroTitle": "एक नई बातचीत शुरू करें",
-  "emptyHeroSub": "कोई कार्य चुनें, या बस अपना प्रश्न टाइप करें",
+  "emptyHeroTitle": "आज Kun के साथ क्या करना चाहेंगे?",
+  "emptyHeroSub": "अपना विचार बताएं या कोई नया काम शुरू करें",
   "emptyHeroSubNoWorkspace": "पहले एक स्थानीय कार्यशील निर्देशिका चुनें, फिर अपना पहला थ्रेड शुरू करें।",
   "usageHeatmapBadge": "कुन उपयोग",
   "usageHeatmapTitle": "आपकी हालिया एजेंट लय",
@@ -1743,6 +1744,9 @@
   "queuedMessagesTitle": "{{count}} queued",
   "queuedMessagesHint": "वर्तमान उत्तर समाप्त होने के बाद ये संदेश स्वचालित रूप से भेजे जाएंगे।",
   "queuedMessageRemove": "पंक्तिबद्ध संदेश हटाएँ",
+  "queuedMessageMoreActions": "पंक्तिबद्ध संदेश की और कार्रवाइयाँ",
+  "queuedMessageEdit": "संदेश संपादित करें",
+  "queuedMessageReorder": "कतार का क्रम बदलने के लिए खींचें",
   "guideQueuedMessage": "मार्गदर्शक",
   "guideQueuedMessagePending": "मार्गदर्शन",
   "guideQueuedMessageHint": "इस इनपुट को एजेंट के अगले मॉडल इंटरैक्शन में जोड़ें",
@@ -1833,6 +1837,11 @@
   "sidePanelTitle": "शाखा वार्तालाप",
   "sidePanelOpen": "शाखा वार्तालाप खोलें",
   "sidePanelNew": "नई शाखा वार्तालाप",
+  "sidePanelTabTitle": "शाखा वार्तालाप {{index}}",
+  "sidePanelNewTabTitle": "नई शाखा",
+  "sidePanelOriginMeta": "“{{title}}” से · {{time}}",
+  "sidePanelDraftOrigin": "“{{title}}” से नई शाखा",
+  "sidePanelSwitch": "शाखा वार्तालाप बदलें",
   "sidePanelParentLabel": "From \"{{title}}\"",
   "sidePanelParentMissing": "शाखा वार्तालाप",
   "sidePanelHide": "शाखा पैनल छिपाएँ",
@@ -1863,7 +1872,6 @@
   "rightPanelRuntime": "रनटाइम",
   "rightPanelPlan": "योजना",
   "rightPanelFiles": "फ़ाइलें",
-  "rightPanelTodo": "टोडो",
   "rightPanelCanvas": "कैनवास",
   "rightPanelWhiteboard": "व्हाइटबोर्ड",
   "canvasPanelNeedsThread": "कैनवास का उपयोग करने के लिए बातचीत खोलें या प्रारंभ करें.",
@@ -1874,7 +1882,6 @@
   "rightPanelBrowserTool": "ब्राउज़र",
   "rightPanelNewBrowserTab": "नया टैब",
   "rightPanelSideConversations": "शाखा वार्तालाप",
-  "rightPanelTodoTool": "टोडो",
   "rightPanelChangesReview": "परिवर्तन/समीक्षा",
   "rightPanelTabs": "सही कार्यस्थान टैब",
   "rightPanelCloseTab": "Close {{title}}",
@@ -2139,15 +2146,6 @@
   },
   "goalUpdatedTimeline": "Goal {{status}}: {{objective}}",
   "goalClearedTimeline": "लक्ष्य साफ़ हो गया",
-  "todoPanelTitle": "थ्रेड टोडो",
-  "todoClear": "कार्य साफ़ करें",
-  "todoEmptyTitle": "अभी तक कोई कार्य नहीं",
-  "todoEmptyDescription": "इस थ्रेड के लिए योजना जांच सूचियां और मॉडल-लिखित कार्य यहां दिखाई देंगे।",
-  "todoStatusPending": "लंबित",
-  "todoStatusInProgress": "सक्रिय",
-  "todoStatusCompleted": "हो गया",
-  "todoMarkPending": "लंबित चिह्नित करें",
-  "todoMarkCompleted": "पूर्ण चिह्नित करें",
   "todoProgressStep": "Step {{current}} / {{total}}",
   "todoProgressAria": "Todo progress: step {{current}} of {{total}}",
   "todoProgressDetails": "कार्य विवरण",
@@ -2165,6 +2163,18 @@
   "sidebarEmptySubOffline": "पहले रनटाइम कनेक्ट करें, फिर ऊपर से अपना पहला थ्रेड बनाएं।",
   "sidebarWorkspaceEmpty": "अभी तक कोई सूत्र नहीं",
   "sidebarWorkspaceNewThread": "नया सूत्र",
+  "sidebarFolderCreate": "नया फ़ोल्डर",
+  "sidebarFolderCreatePrompt": "फ़ोल्डर का नाम दें। यह केवल साइडबार व्यवस्थित करता है और डिस्क पर फ़ोल्डर नहीं बनाता।",
+  "sidebarFolderRename": "फ़ोल्डर का नाम बदलें",
+  "sidebarFolderRenamePrompt": "फ़ोल्डर का नया नाम दर्ज करें",
+  "sidebarFolderNameExists": "इस प्रोजेक्ट में इस नाम का फ़ोल्डर पहले से मौजूद है।",
+  "sidebarFolderDelete": "फ़ोल्डर हटाएँ",
+  "sidebarFolderDeleteDialogTitle": "“{{name}}” हटाएँ?",
+  "sidebarFolderDeleteDialogDescription": "केवल साइडबार फ़ोल्डर हटेगा। कोई बातचीत या प्रोजेक्ट फ़ाइल नहीं हटेगी।",
+  "sidebarFolderDeleteDialogDetail": "इस फ़ोल्डर के {{count}} थ्रेड प्रोजेक्ट रूट में वापस आ जाएँगे।",
+  "sidebarFolderDeleteConfirmButton": "फ़ोल्डर हटाएँ",
+  "sidebarFolderAriaLabel": "{{name}}, {{count}} थ्रेड",
+  "sidebarFolderEmpty": "थ्रेड यहाँ खींचें",
   "sidebarWorkspaceShowMore": "Show more ({{count}} more)",
   "sidebarWorkspaceShowLess": "कम दिखाओ",
   "sidebarWorkspaceArchiveThreads": "इस प्रोजेक्ट में सभी थ्रेड्स को संग्रहीत करें",
@@ -2691,6 +2701,8 @@
   "groupEditedFile": "1 फ़ाइल संपादित की गई",
   "turnChangeFilesOne": "1 फ़ाइल संपादित की गई",
   "turnChangeFilesMany": "Edited {{count}} files",
+  "turnChangeShowMore": "{{count}} और फ़ाइलें दिखाएँ",
+  "turnChangeShowFewer": "कम फ़ाइलें दिखाएँ",
   "groupRanCommands": "Ran {{count}} commands",
   "groupRanCommand": "1 कमांड चलाएँ",
   "groupRanBackgroundCommands": "Ran {{count}} background commands",
@@ -2770,6 +2782,9 @@
   "componentPrototypeIterate": "समायोजन जारी रखें",
   "componentPrototypeAdopt": "डिज़ाइन अपनाएं",
   "subagentDefaultName": "उपएजेंट",
+  "subagentAgentLabel": "एजेंट",
+  "subagentModelLabel": "मॉडल",
+  "subagentNotRecorded": "दर्ज नहीं",
   "subagentStatusQueued": "कतारबद्ध",
   "subagentStatusRunning": "चल रहा है",
   "subagentStatusDone": "हो गया",
@@ -2906,6 +2921,110 @@
   "expandSidebar": "साइडबार का विस्तार करें",
   "rightPanelSubagents": "उप-एजेंट",
   "rightPanelMcpSkills": "एमसीपी और कौशल",
+  "rightPanelAgentPerspective": "एजेंट परिप्रेक्ष्य",
+  "agentPerspectiveTitle": "एजेंट परिप्रेक्ष्य",
+  "agentPerspectiveSubtitle": "इस वार्तालाप में {{count}} मॉडल अनुरोध",
+  "agentPerspectiveRefresh": "अनुरोध रीफ़्रेश करें",
+  "agentPerspectiveLoading": "लोड हो रहा है…",
+  "agentPerspectiveEmpty": "इस वार्तालाप के लिए अभी कोई मॉडल HTTP अनुरोध कैप्चर नहीं हुआ है।",
+  "agentPerspectiveUnsupported": "मॉडल अनुरोध देखने के लिए Code वार्तालाप चुनें।",
+  "agentPerspectiveLoadError": "मॉडल अनुरोध लोड नहीं हो सके: {{error}}",
+  "agentPerspectiveLoadOlder": "पुराने अनुरोध लोड करें",
+  "agentPerspectiveDetailSections": "अनुरोध विवरण अनुभाग",
+  "agentPerspectiveOverview": "अवलोकन",
+  "agentPerspectiveRequest": "अनुरोध",
+  "agentPerspectiveResponse": "प्रतिक्रिया",
+  "agentPerspectiveDecoded": "डिकोड परिणाम",
+  "agentPerspectiveHeaders": "हेडर",
+  "agentPerspectiveBody": "अनुरोध बॉडी",
+  "agentPerspectiveRawResponse": "मूल प्रतिक्रिया",
+  "agentPerspectiveRaw": "मूल",
+  "agentPerspectivePretty": "सुव्यवस्थित",
+  "agentPerspectiveCopy": "कॉपी करें",
+  "agentPerspectiveCopied": "कॉपी हुआ",
+  "agentPerspectiveRedacted": "इस ट्रेस को सहेजने से पहले क्रेडेंशियल मान छिपाए गए।",
+  "agentPerspectiveTruncated": "काटा गया",
+  "agentPerspectiveTruncationNotice": "कैप्चर सीमा पूरी हुई। प्रदाता को भेजा गया अनुरोध बदला नहीं गया।",
+  "agentPerspectiveNoResponse": "इस प्रयास के लिए HTTP प्रतिक्रिया नहीं मिली।",
+  "agentPerspectiveNoDecoded": "इस प्रयास के लिए डिकोड किया मॉडल आउटपुट उपलब्ध नहीं है।",
+  "agentPerspectiveAttempt": "प्रयास",
+  "agentPerspectiveInitial": "प्रारंभिक",
+  "agentPerspectiveTransportRetry": "परिवहन पुनः प्रयास",
+  "agentPerspectiveStreamFallback": "स्ट्रीम फ़ॉलबैक",
+  "agentPerspectivePending": "जारी",
+  "agentPerspectiveCompleted": "पूर्ण",
+  "agentPerspectiveTransportError": "परिवहन त्रुटि",
+  "agentPerspectiveCaptureError": "कैप्चर त्रुटि",
+  "agentPerspectiveDuration": "अवधि",
+  "agentPerspectiveTimeToHeaders": "हेडर तक समय",
+  "agentPerspectiveProvider": "प्रदाता",
+  "agentPerspectiveModel": "मॉडल",
+  "agentPerspectiveEndpointFormat": "एंडपॉइंट प्रारूप",
+  "agentPerspectiveStartedAt": "शुरू हुआ",
+  "agentPerspectiveStatus": "स्थिति",
+  "agentPerspectiveUrl": "अंतिम अनुरोध URL",
+  "agentPerspectiveEventSubtitle": "{{events}} चरण · {{requests}} मॉडल अनुरोध",
+  "agentPerspectiveSearch": "चरण खोजें",
+  "agentPerspectiveSearchPlaceholder": "मॉडल, टूल या शीर्षक खोजें…",
+  "agentPerspectiveFilterAll": "सभी",
+  "agentPerspectiveFilterLlm": "LLM",
+  "agentPerspectiveFilterTools": "टूल",
+  "agentPerspectiveFilterTitles": "शीर्षक",
+  "agentPerspectiveNoMatchingEvents": "कोई मेल खाता चरण नहीं",
+  "agentPerspectiveSemanticRequest": "अर्थपूर्ण अनुरोध",
+  "agentPerspectiveRawRequest": "मूल अनुरोध",
+  "agentPerspectiveStreamEvents": "स्ट्रीम इवेंट",
+  "agentPerspectiveTiming": "समय",
+  "agentPerspectiveLlmRequest": "LLM अनुरोध",
+  "agentPerspectiveToolCall": "टूल कॉल",
+  "agentPerspectiveTitleGeneration": "शीर्षक निर्माण",
+  "agentPerspectiveTokens": "{{count}} tokens",
+  "agentPerspectiveCacheHit": "कैश हिट {{rate}}%",
+  "agentPerspectiveRequestComposition": "अनुरोध संरचना (अनुमानित)",
+  "agentPerspectiveSystemPrompt": "सिस्टम प्रॉम्प्ट",
+  "agentPerspectiveSkills": "Skills",
+  "agentPerspectiveToolDefinitions": "टूल परिभाषाएँ",
+  "agentPerspectiveMessages": "संदेश",
+  "agentPerspectiveParameters": "पैरामीटर",
+  "agentPerspectiveNoSkills": "इस अनुरोध में कोई Skill नहीं जोड़ा गया",
+  "agentPerspectiveNoTools": "कोई टूल परिभाषा नहीं भेजी गई",
+  "agentPerspectiveNoMessages": "कोई संदेश नहीं",
+  "agentPerspectiveToolCompleted": "टूल परिणाम मिला",
+  "agentPerspectiveToolPending": "टूल परिणाम की प्रतीक्षा",
+  "agentPerspectiveCallId": "कॉल ID",
+  "agentPerspectiveParentRequest": "मूल अनुरोध",
+  "agentPerspectiveToolArguments": "टूल आर्गुमेंट",
+  "agentPerspectiveToolResult": "टूल परिणाम",
+  "agentPerspectiveToolResultPending": "टूल का अनुरोध हुआ है, लेकिन परिणाम अभी अगले अनुरोध में नहीं आया।",
+  "agentPerspectiveGeneratedTitle": "बनाया गया शीर्षक",
+  "agentPerspectiveResponseOutput": "मॉडल आउटपुट",
+  "agentPerspectiveReasoningOutput": "रीज़निंग आउटपुट",
+  "agentPerspectiveToolCalls": "टूल कॉल",
+  "agentPerspectiveUsage": "उपयोग",
+  "agentPerspectiveResponseStartedAt": "प्रतिक्रिया शुरू",
+  "agentPerspectiveFinishedAt": "समाप्त",
+  "agentPerspectivePrivacyNotice": "क्रेडेंशियल छिपाए गए हैं; सामग्री केवल इस डिवाइस पर रहती है।",
+  "agentPerspectiveSkillActive": "सक्रिय",
+  "agentPerspectiveToolSourceSummary": "{{groups}} स्रोत · {{tools}} टूल",
+  "agentPerspectiveSourceKun": "Kun सिस्टम",
+  "agentPerspectiveSourceMcp": "MCP",
+  "agentPerspectiveSourceExtension": "एक्सटेंशन",
+  "agentPerspectiveSourceUnclassified": "अवर्गीकृत",
+  "agentPerspectiveKunCore": "सामान्य कोर",
+  "agentPerspectiveKunGui": "केवल GUI",
+  "agentPerspectiveKunRuntime": "रनटाइम क्षमताएँ",
+  "agentPerspectiveMcpServer": "MCP सर्वर",
+  "agentPerspectiveExtensionProvider": "एक्सटेंशन Provider",
+  "agentPerspectiveProviderUnknown": "अज्ञात स्रोत",
+  "agentPerspectiveKunManaged": "Kun प्रबंधित",
+  "agentPerspectiveMcpDiscovery": "खोज क्षमता",
+  "agentPerspectiveHistoricalInference": "इतिहास से अनुमान",
+  "agentPerspectiveToolSource": "टूल स्रोत",
+  "agentPerspectiveExpandToolSource": "{{source}} टूल टॉगल करें",
+  "agentPerspectiveExpandToolProvider": "{{provider}} समूह टॉगल करें",
+  "agentPerspectiveExpandTool": "{{tool}} विवरण टॉगल करें",
+  "agentPerspectiveNoToolDescription": "कोई विवरण नहीं",
+  "agentPerspectiveToolSchema": "{{tool}} इनपुट स्कीमा",
   "mcpSkillsPanel": {
     "projectScope": "वर्तमान परियोजना",
     "globalScope": "वैश्विक",
@@ -2946,11 +3065,80 @@
     "system": "सिस्टम · आंतरिक",
     "global": "वैश्विक · साझा किया गया",
     "newSubagent": "नया उपएजेंट",
+    "delegatableCount": "{{count}} सौंपने योग्य भूमिकाएँ",
+    "configuredCount": "{{count}} कॉन्फ़िगर किए गए",
+    "showingCount": "{{visible}} / {{total}} दिखाए जा रहे हैं",
+    "policySummary": "कतार और सत्र सीमाएँ",
+    "search": "उप-एजेंट खोजें",
+    "searchPlaceholder": "नाम, क्षमता या परिदृश्य खोजें",
+    "clearSearch": "खोज साफ़ करें",
+    "toggleCategory": "{{category}} श्रेणी खोलें या बंद करें",
+    "batchModel": "बैच मॉडल",
+    "mixedModels": "मिश्रित मॉडल",
+    "mixedConfiguration": "कई कॉन्फ़िगरेशन",
+    "categoryConfiguration": "श्रेणी की डिफ़ॉल्ट कॉन्फ़िगरेशन",
+    "categoryConfigurationDesc": "इस श्रेणी के हर एजेंट पर समान डिफ़ॉल्ट लागू करें",
+    "resetCategoryConfiguration": "डिफ़ॉल्ट रीसेट करें",
+    "effectiveModel": "प्रभावी मॉडल",
+    "batchModelAria": "{{category}} में {{count}} एजेंटों के लिए एक ही मॉडल सेट करें",
+    "reasoning": "रीज़निंग तीव्रता",
+    "mixedReasoning": "मिश्रित रीज़निंग",
+    "batchReasoningAria": "{{category}} में {{count}} एजेंटों के लिए एक ही रीज़निंग तीव्रता सेट करें",
+    "capabilities": "क्षमताएँ",
+    "emptyTitle": "कोई मेल खाता उप-एजेंट नहीं",
+    "emptySearch": "कोई दूसरा नाम, क्षमता या परिदृश्य आज़माएँ।",
+    "emptyCategory": "ब्राउज़ करने के लिए दूसरी श्रेणी चुनें।",
+    "surface": {
+      "shared": "आधार",
+      "code": "Code",
+      "write": "लेखन",
+      "design": "डिज़ाइन"
+    },
+    "surfaceInherited": "आधार से मिला",
+    "surfaceAssigned": "इस मोड में उपलब्ध",
+    "surfaceUnassigned": "इस मोड में उपलब्ध नहीं",
+    "pagination": "Agent पृष्ठ",
+    "pageSummary": "पृष्ठ {{page}} / {{pages}} · {{count}} Agent",
+    "previousPage": "पिछला पृष्ठ",
+    "nextPage": "अगला पृष्ठ",
+    "extensionAgents": {
+      "title": "विस्तार एजेंट",
+      "description": "आधार सेट के अतिरिक्त एजेंट · {{count}}",
+      "enabled": "चालू",
+      "disabled": "बंद",
+      "toggle": "विस्तार एजेंट टॉगल करें",
+      "keepBaseOnly": "केवल आधार एजेंट रखें",
+      "enableExtensions": "विस्तार एजेंट चालू करें",
+      "baseAlwaysAvailable": "आधार एजेंट हमेशा उपलब्ध रहते हैं"
+    },
+    "category": {
+      "all": "सभी",
+      "baseAgent": "आधार एजेंट",
+      "development": "विकास",
+      "review": "समीक्षा",
+      "quality": "गुणवत्ता",
+      "planning": "योजना",
+      "operations": "संचालन",
+      "research": "शोध",
+      "custom": "कस्टम"
+    },
     "smallModel": {
       "name": "छोटा मॉडल",
       "desc": "शीर्षक और सारांश के लिए डिफ़ॉल्ट"
     },
     "role": {
+      "general": {
+        "name": "सामान्य",
+        "desc": "पूर्ण उपकरण · बहु-चरणीय कार्य"
+      },
+      "explore": {
+        "name": "अन्वेषण करें",
+        "desc": "केवल पढ़ने के लिए · कोड ढूंढें और खोजें"
+      },
+      "component-designer": {
+        "name": "Component Designer",
+        "desc": "Focused interactive component prototype"
+      },
       "design-reviewer": {
         "name": "डिज़ाइन समीक्षा",
         "desc": "डिज़ाइन-समीक्षक · केवल-पढ़ने के लिए"
@@ -2958,6 +3146,166 @@
       "over-engineering-reviewer": {
         "name": "ओवर-इंजीनियरिंग समीक्षा",
         "desc": "ओवर-इंजीनियरिंग-समीक्षक · केवल पढ़ने के लिए"
+      },
+      "code-reviewer": {
+        "name": "कोड समीक्षक",
+        "desc": "पाँच-आयामी समीक्षा · केवल पढ़ने के लिए"
+      },
+      "test-engineer": {
+        "name": "टेस्ट इंजीनियर",
+        "desc": "परीक्षण रणनीति · परीक्षण लिख और चला सकता है"
+      },
+      "security-auditor": {
+        "name": "सुरक्षा ऑडिटर",
+        "desc": "खतरे और OWASP जोखिम · केवल पढ़ने के लिए"
+      },
+      "web-performance-auditor": {
+        "name": "वेब प्रदर्शन ऑडिटर",
+        "desc": "Core Web Vitals · साक्ष्य-आधारित"
+      },
+      "api-and-interface-design": {
+        "name": "API & Interface Architect",
+        "desc": "Stable public contracts · compatibility and validation"
+      },
+      "browser-testing-with-devtools": {
+        "name": "Web QA Planner",
+        "desc": "Browser and accessibility verification plans · read-only"
+      },
+      "ci-cd-and-automation": {
+        "name": "CI/CD Engineer",
+        "desc": "Pipelines, quality gates, and rollback-safe releases"
+      },
+      "code-review-and-quality": {
+        "name": "Code Quality Reviewer",
+        "desc": "Multi-axis correctness and architecture review · read-only"
+      },
+      "code-simplification": {
+        "name": "Code Simplification Engineer",
+        "desc": "Reduce complexity · preserve behavior"
+      },
+      "context-engineering": {
+        "name": "Context Engineer",
+        "desc": "Minimal authoritative context pack · read-only"
+      },
+      "debugging-and-error-recovery": {
+        "name": "Root Cause Debugger",
+        "desc": "Reproduce, localize, fix, and regression-test"
+      },
+      "deprecation-and-migration": {
+        "name": "Migration Engineer",
+        "desc": "Staged compatibility, data migration, and rollback"
+      },
+      "documentation-and-adrs": {
+        "name": "Documentation & ADR Engineer",
+        "desc": "Architecture decisions, guides, and API docs"
+      },
+      "doubt-driven-development": {
+        "name": "Doubt-Driven Reviewer",
+        "desc": "Challenge assumptions and designs · read-only"
+      },
+      "frontend-ui-engineering": {
+        "name": "Frontend UI Engineer",
+        "desc": "Accessible, responsive, product-quality interfaces"
+      },
+      "git-workflow-and-versioning": {
+        "name": "Git Workflow Engineer",
+        "desc": "Branches, atomic commits, and history safety"
+      },
+      "idea-refine": {
+        "name": "Idea Refinement Partner",
+        "desc": "Compare options, MVP bounds, and validation · read-only"
+      },
+      "incremental-implementation": {
+        "name": "Incremental Implementation Engineer",
+        "desc": "Thin, buildable, continuously verified slices"
+      },
+      "interview-me": {
+        "name": "Requirements Interviewer",
+        "desc": "Find gaps and high-information questions · read-only"
+      },
+      "observability-and-instrumentation": {
+        "name": "Observability Engineer",
+        "desc": "Logs, metrics, traces, and actionable alerts"
+      },
+      "performance-optimization": {
+        "name": "Performance Engineer",
+        "desc": "Measure bottlenecks and prove before/after impact"
+      },
+      "planning-and-task-breakdown": {
+        "name": "Implementation Planner",
+        "desc": "Dependency-aware, acceptance-driven tasks · read-only"
+      },
+      "security-and-hardening": {
+        "name": "Security Hardening Engineer",
+        "desc": "Threat-model and implement scoped security fixes"
+      },
+      "shipping-and-launch": {
+        "name": "Release Readiness Engineer",
+        "desc": "Go/no-go, rollout, and rollback plans · read-only"
+      },
+      "source-driven-development": {
+        "name": "Source-Driven Researcher",
+        "desc": "Ground guidance in version-matched sources · read-only"
+      },
+      "spec-driven-development": {
+        "name": "Specification Engineer",
+        "desc": "Scenarios, interfaces, and acceptance criteria · read-only"
+      },
+      "test-driven-development": {
+        "name": "TDD Engineer",
+        "desc": "Red-green-refactor with behavior-focused proof"
+      },
+      "using-agent-skills": {
+        "name": "Engineering Workflow Advisor",
+        "desc": "Map work to the smallest suitable agent sequence · read-only"
+      },
+      "write-outline-architect": {
+        "name": "Outline Architect",
+        "desc": "Structure, arguments, and narrative progression · read-only"
+      },
+      "write-draft-author": {
+        "name": "Draft Author",
+        "desc": "Long-form drafts and focused section writing"
+      },
+      "write-developmental-editor": {
+        "name": "Developmental Editor",
+        "desc": "Improve logic, structure, pacing, and clarity"
+      },
+      "write-copy-editor": {
+        "name": "Copy Editor",
+        "desc": "Polish tone, terminology, and grammar"
+      },
+      "write-fact-checker": {
+        "name": "Fact Checker",
+        "desc": "Verify claims, figures, and uncertainty · read-only"
+      },
+      "write-citation-researcher": {
+        "name": "Citation Researcher",
+        "desc": "Authoritative sources and traceable citations · read-only"
+      },
+      "design-product-planner": {
+        "name": "Product Design Planner",
+        "desc": "Direction, goals, flows, and tradeoffs · read-only"
+      },
+      "design-ux-researcher": {
+        "name": "UX Researcher",
+        "desc": "User journeys and usability research · read-only"
+      },
+      "design-screen-designer": {
+        "name": "Screen Designer",
+        "desc": "Complete responsive screens and interaction states"
+      },
+      "design-system-architect": {
+        "name": "Design System Architect",
+        "desc": "Semantic tokens, components, and variant constraints"
+      },
+      "design-code-binder": {
+        "name": "Design Code Binder",
+        "desc": "Map design nodes to routes and source files"
+      },
+      "design-handoff-specialist": {
+        "name": "Design Handoff Specialist",
+        "desc": "DESIGN.md, implementation notes, and handoff assets"
       },
       "compaction": {
         "name": "संघनन",
@@ -2978,17 +3326,12 @@
       "summary": {
         "name": "सारांश",
         "desc": "एलएलएम · छोटे मॉडल के लिए डिफ़ॉल्ट"
-      },
-      "general": {
-        "name": "सामान्य",
-        "desc": "पूर्ण उपकरण · बहु-चरणीय कार्य"
-      },
-      "explore": {
-        "name": "अन्वेषण करें",
-        "desc": "केवल पढ़ने के लिए · कोड ढूंढें और खोजें"
       }
     },
-    "builtin": "अंतर्निर्मित"
+    "builtin": "अंतर्निर्मित",
+    "customTag": "कस्टम",
+    "workspaceFile": "{{path}} में परिभाषित",
+    "workspaceReadOnly": "इस भूमिका को .kun/agents/*.md में संपादित करें"
   },
   "summarizeSession": "संक्षेप करें",
   "summarizing": "संक्षेप में...",

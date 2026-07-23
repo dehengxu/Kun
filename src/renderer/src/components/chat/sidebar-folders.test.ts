@@ -1,0 +1,159 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  SIDEBAR_FOLDERS_STORAGE_KEY,
+  createSidebarFolder,
+  deleteSidebarFolder,
+  emptySidebarFolderRegistry,
+  moveThreadToSidebarFolder,
+  normalizeSidebarFolderRegistry,
+  readSidebarFolderRegistry,
+  removeSidebarThreadAssignments,
+  renameSidebarFolder,
+  saveSidebarFolderRegistry,
+  sidebarFolderIdForThread,
+  sidebarFolderNameExists,
+  sidebarFoldersForWorkspace
+} from './sidebar-folders'
+
+function createMemoryStorage(): Storage {
+  const items = new Map<string, string>()
+  return {
+    get length() {
+      return items.size
+    },
+    clear: () => items.clear(),
+    getItem: (key) => items.get(key) ?? null,
+    key: (index) => [...items.keys()][index] ?? null,
+    removeItem: (key) => items.delete(key),
+    setItem: (key, value) => items.set(key, value)
+  }
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('sidebar virtual folder registry', () => {
+  it('falls back safely and removes duplicate folder and thread assignments', () => {
+    expect(normalizeSidebarFolderRegistry({ version: 2 })).toEqual(emptySidebarFolderRegistry())
+    expect(normalizeSidebarFolderRegistry({
+      version: 1,
+      foldersByScope: {
+        '/tmp/app': [
+          { id: 'one', name: 'One', threadIds: ['thread-a', 'thread-a'] },
+          { id: 'two', name: 'Two', threadIds: ['thread-a', 'thread-b'] },
+          { id: 'two', name: 'Duplicate id', threadIds: ['thread-c'] },
+          { id: '', name: 'Missing id', threadIds: [] }
+        ]
+      }
+    })).toEqual({
+      version: 1,
+      foldersByScope: {
+        '/tmp/app': [
+          { id: 'one', name: 'One', threadIds: ['thread-a'] },
+          { id: 'two', name: 'Two', threadIds: ['thread-b'] }
+        ]
+      }
+    })
+  })
+
+  it('persists folders by normalized workspace scope', () => {
+    const storage = createMemoryStorage()
+    vi.stubGlobal('localStorage', storage)
+    const registry = createSidebarFolder(
+      readSidebarFolderRegistry(),
+      '/Users/zxy/project-a/',
+      { id: 'folder-one', name: 'Research' }
+    )
+
+    saveSidebarFolderRegistry(registry)
+
+    expect(storage.getItem(SIDEBAR_FOLDERS_STORAGE_KEY)).toBeTruthy()
+    expect(sidebarFoldersForWorkspace(readSidebarFolderRegistry(), '/Users/zxy/project-a')).toEqual([
+      { id: 'folder-one', name: 'Research', threadIds: [] }
+    ])
+  })
+
+  it('creates, renames, and deletes folders without deleting their threads', () => {
+    let registry = createSidebarFolder(
+      emptySidebarFolderRegistry(),
+      '/tmp/app',
+      { id: 'folder-one', name: 'Research' }
+    )
+    registry = moveThreadToSidebarFolder(registry, '/tmp/app', 'thread-a', 'folder-one')
+    registry = renameSidebarFolder(registry, '/tmp/app', 'folder-one', 'References')
+
+    expect(sidebarFoldersForWorkspace(registry, '/tmp/app')).toEqual([
+      { id: 'folder-one', name: 'References', threadIds: ['thread-a'] }
+    ])
+
+    registry = deleteSidebarFolder(registry, '/tmp/app', 'folder-one')
+    expect(sidebarFoldersForWorkspace(registry, '/tmp/app')).toEqual([])
+    expect(sidebarFolderIdForThread(sidebarFoldersForWorkspace(registry, '/tmp/app'), 'thread-a')).toBeNull()
+  })
+
+  it('keeps names unique within a workspace', () => {
+    const registry = createSidebarFolder(
+      emptySidebarFolderRegistry(),
+      '/tmp/app',
+      { id: 'folder-one', name: 'Research' }
+    )
+    const duplicate = createSidebarFolder(
+      registry,
+      '/tmp/app',
+      { id: 'folder-two', name: 'research' }
+    )
+
+    expect(sidebarFoldersForWorkspace(duplicate, '/tmp/app')).toHaveLength(1)
+    expect(sidebarFolderNameExists(
+      sidebarFoldersForWorkspace(duplicate, '/tmp/app'),
+      'RESEARCH'
+    )).toBe(true)
+  })
+
+  it('moves a thread between folders, around a target, and back to the project root', () => {
+    let registry = createSidebarFolder(
+      emptySidebarFolderRegistry(),
+      '/tmp/app',
+      { id: 'folder-one', name: 'One' }
+    )
+    registry = createSidebarFolder(registry, '/tmp/app', { id: 'folder-two', name: 'Two' })
+    registry = moveThreadToSidebarFolder(registry, '/tmp/app', 'thread-a', 'folder-one')
+    registry = moveThreadToSidebarFolder(registry, '/tmp/app', 'thread-b', 'folder-two')
+    registry = moveThreadToSidebarFolder(
+      registry,
+      '/tmp/app',
+      'thread-a',
+      'folder-two',
+      'thread-b',
+      'before'
+    )
+
+    expect(sidebarFoldersForWorkspace(registry, '/tmp/app')).toEqual([
+      { id: 'folder-one', name: 'One', threadIds: [] },
+      { id: 'folder-two', name: 'Two', threadIds: ['thread-a', 'thread-b'] }
+    ])
+
+    registry = moveThreadToSidebarFolder(registry, '/tmp/app', 'thread-a', null)
+    expect(sidebarFolderIdForThread(
+      sidebarFoldersForWorkspace(registry, '/tmp/app'),
+      'thread-a'
+    )).toBeNull()
+  })
+
+  it('removes stale assignments across every workspace', () => {
+    let registry = createSidebarFolder(
+      emptySidebarFolderRegistry(),
+      '/tmp/a',
+      { id: 'folder-a', name: 'A' }
+    )
+    registry = createSidebarFolder(registry, '/tmp/b', { id: 'folder-b', name: 'B' })
+    registry = moveThreadToSidebarFolder(registry, '/tmp/a', 'thread-a', 'folder-a')
+    registry = moveThreadToSidebarFolder(registry, '/tmp/b', 'thread-b', 'folder-b')
+
+    registry = removeSidebarThreadAssignments(registry, ['thread-a', 'thread-b'])
+
+    expect(sidebarFoldersForWorkspace(registry, '/tmp/a')[0]?.threadIds).toEqual([])
+    expect(sidebarFoldersForWorkspace(registry, '/tmp/b')[0]?.threadIds).toEqual([])
+  })
+})

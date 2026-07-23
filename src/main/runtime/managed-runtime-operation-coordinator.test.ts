@@ -55,4 +55,26 @@ describe('ManagedRuntimeOperationCoordinator', () => {
     expect(trace).toEqual(['first-start', 'first-end', 'second:2'])
     expect(coordinator.hasPendingOperation()).toBe(false)
   })
+
+  it('keeps only the latest pending settings apply while one is running', async () => {
+    const coordinator = new ManagedRuntimeOperationCoordinator<{ value: number }>()
+    const trace: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+
+    coordinator.enqueueSettingsApply(async () => {
+      trace.push('first-start')
+      await gate
+      trace.push('first-end')
+    }, vi.fn())
+    await vi.waitFor(() => expect(trace).toEqual(['first-start']))
+
+    coordinator.enqueueSettingsApply(async () => { trace.push('stale-second') }, vi.fn())
+    coordinator.enqueueSettingsApply(async () => { trace.push('latest-third') }, vi.fn())
+    release()
+
+    await coordinator.waitForSettingsApply()
+    expect(trace).toEqual(['first-start', 'first-end', 'latest-third'])
+    expect(coordinator.hasPendingOperation()).toBe(false)
+  })
 })

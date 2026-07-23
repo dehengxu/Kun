@@ -24,6 +24,7 @@ import {
 import type { ClawImChannelV1 } from '@shared/app-settings'
 import { isBackgroundShellNoticeUserMessage } from '@shared/background-shell-notice'
 import type { ChatState } from './chat-store-types'
+import { isPendingQueuedMessage } from './queued-message-persistence'
 import { hydrateBlockModelLabels, isClawThread } from './chat-store-helpers'
 import {
   collectAssistantTextForTurn,
@@ -1015,7 +1016,7 @@ export function buildThreadEventSink(
         mirrorText: pendingMirror && assistantMirrorText ? assistantMirrorText : undefined,
         mirrorThreadId: pendingMirror?.threadId,
         reconcile: shouldReconcileCompletion,
-        releaseWorktree: get().queuedMessages.length === 0
+        releaseWorktree: !get().queuedMessages.some(isPendingQueuedMessage)
       }))
     },
     onError: (err, options) => {
@@ -1032,7 +1033,7 @@ export function buildThreadEventSink(
       if (terminal) {
         runEffects(terminalFailureProjectionEffects(
           state.activeThreadId,
-          get().queuedMessages.length === 0
+          !get().queuedMessages.some(isPendingQueuedMessage)
         ))
         return
       }

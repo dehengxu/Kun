@@ -290,6 +290,28 @@ describe('chat-store-side-actions', () => {
     expect(side.input).toBe('')
   })
 
+  it('applies draft model and reasoning controls before sending the first side turn', async () => {
+    const { actions, state, provider } = buildHarness()
+    const id = await actions.spawnSideConversation('use the draft controls', {
+      model: 'custom-side-model',
+      reasoningEffort: 'low'
+    })
+
+    expect(id).toBe('side_thr_main')
+    expect(state.sideConversations[id!]).toMatchObject({
+      model: 'custom-side-model',
+      reasoningEffort: 'low'
+    })
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      id,
+      'use the draft controls',
+      expect.objectContaining({
+        model: 'custom-side-model',
+        reasoningEffort: 'low'
+      })
+    )
+  })
+
   it('sends the selected side reasoning effort with side turns', async () => {
     const { actions, state, provider } = buildHarness()
     const id = (await actions.spawnSideConversation())!

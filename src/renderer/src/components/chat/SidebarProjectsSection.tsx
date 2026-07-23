@@ -40,14 +40,18 @@ import {
 } from './SidebarProjectRows'
 export { SddDraftHistoryRows, ThreadRow } from './SidebarProjectRows'
 import {
+  FolderContextMenu,
   MoveThreadDialog,
   SidebarActionDialog,
+  SidebarFolderDialog,
   ThreadContextMenu,
   ThreadRenameDialog,
   WorkspaceContextMenu,
+  type FolderContextMenuState,
   type MoveThreadDialogState,
   type RenameThreadDialogState,
   type SidebarActionDialogState,
+  type SidebarFolderDialogState,
   type ThreadContextMenuState,
   type WorkspaceContextMenuState
 } from './SidebarProjectOverlays'
@@ -89,6 +93,20 @@ import {
   type SidebarDropPosition,
   type SidebarOrderRegistry
 } from './sidebar-order'
+import {
+  createSidebarFolder,
+  deleteSidebarFolder,
+  moveThreadToSidebarFolder,
+  readSidebarFolderRegistry,
+  removeSidebarThreadAssignments,
+  renameSidebarFolder,
+  saveSidebarFolderRegistry,
+  sidebarFolderIdForThread,
+  sidebarFolderNameExists,
+  sidebarFoldersForWorkspace,
+  type SidebarFolderRegistry,
+  type SidebarVirtualFolder
+} from './sidebar-folders'
 export {
   buildSidebarDraftWorkspacePaths,
   buildSidebarThreadMoveTargets,
@@ -140,6 +158,12 @@ type WorkspaceOrderDropTarget = {
 
 type ThreadOrderDropTarget = WorkspaceOrderDropTarget & {
   threadId: string
+  folderId: string | null
+}
+
+type FolderDropTarget = {
+  workspacePath: string
+  folderId: string
 }
 
 export function SidebarProjectsSection({
@@ -178,15 +202,20 @@ export function SidebarProjectsSection({
   const [searchOpen, setSearchOpen] = useState(false)
   const [threadContextMenu, setThreadContextMenu] = useState<ThreadContextMenuState | null>(null)
   const [workspaceContextMenu, setWorkspaceContextMenu] = useState<WorkspaceContextMenuState | null>(null)
+  const [folderContextMenu, setFolderContextMenu] = useState<FolderContextMenuState | null>(null)
   const [actionDialog, setActionDialog] = useState<SidebarActionDialogState | null>(null)
   const [renameThreadDialog, setRenameThreadDialog] = useState<RenameThreadDialogState | null>(null)
   const [moveThreadDialog, setMoveThreadDialog] = useState<MoveThreadDialogState | null>(null)
+  const [folderDialog, setFolderDialog] = useState<SidebarFolderDialogState | null>(null)
   const [sidebarOrder, setSidebarOrder] = useState<SidebarOrderRegistry>(() => readSidebarOrderRegistry())
+  const [sidebarFolders, setSidebarFolders] = useState<SidebarFolderRegistry>(() => readSidebarFolderRegistry())
+  const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({})
   const [draggingWorkspacePath, setDraggingWorkspacePath] = useState<string | null>(null)
   const [workspaceOrderDropTarget, setWorkspaceOrderDropTarget] = useState<WorkspaceOrderDropTarget | null>(null)
   const [draggingThreadId, setDraggingThreadId] = useState<string | null>(null)
   const [threadOrderDropTarget, setThreadOrderDropTarget] = useState<ThreadOrderDropTarget | null>(null)
   const [dragOverWorkspace, setDragOverWorkspace] = useState<string | null>(null)
+  const [folderDropTarget, setFolderDropTarget] = useState<FolderDropTarget | null>(null)
   const [draftHistoryByWorkspace, setDraftHistoryByWorkspace] = useState<Record<string, SddDraftHistoryItem[]>>({})
   const [threadWorktrees, setThreadWorktrees] = useState<SidebarThreadWorktrees>(() => readThreadWorktreeRegistry().worktrees)
   const activeSddDraftId = useSddDraftStore((s) => s.activeDraft?.id ?? '')
@@ -325,10 +354,11 @@ export function SidebarProjectsSection({
   }, [draftHistoryRefreshVersion, workspaceHistoryKey])
 
   useEffect(() => {
-    if (!threadContextMenu && !workspaceContextMenu) return
+    if (!threadContextMenu && !workspaceContextMenu && !folderContextMenu) return
     const close = (): void => {
       setThreadContextMenu(null)
       setWorkspaceContextMenu(null)
+      setFolderContextMenu(null)
     }
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') close()
@@ -341,7 +371,7 @@ export function SidebarProjectsSection({
       window.removeEventListener('scroll', close, true)
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [threadContextMenu, workspaceContextMenu])
+  }, [folderContextMenu, threadContextMenu, workspaceContextMenu])
 
   const toggleAllGroups = (): void => {
     if (displayGroups.length === 0) return
@@ -385,6 +415,7 @@ export function SidebarProjectsSection({
         setDeletingThreadIds((prev) => ({ ...prev, [threadId]: true }))
         try {
           await onDeleteThread(threadId)
+          persistSidebarFolders((current) => removeSidebarThreadAssignments(current, [threadId]))
         } finally {
           setDeletingThreadIds((prev) => {
             const next = { ...prev }
@@ -559,6 +590,7 @@ export function SidebarProjectsSection({
     setDeletingThreadIds((prev) => ({ ...prev, [threadId]: true }))
     try {
       await provider.updateThreadWorkspace(threadId, normalizedTarget)
+      persistSidebarFolders((current) => removeSidebarThreadAssignments(current, [threadId]))
       useChatStore.setState((state) => ({
         codeWorkspaceRoots: rememberCodeWorkspaceRoots(state.codeWorkspaceRoots, [normalizedTarget]),
         threads: state.threads.map((item) =>
@@ -647,6 +679,84 @@ export function SidebarProjectsSection({
     setSidebarOrder(next)
   }
 
+  const persistSidebarFolders = (
+    update: (current: SidebarFolderRegistry) => SidebarFolderRegistry
+  ): void => {
+    const next = update(readSidebarFolderRegistry())
+    saveSidebarFolderRegistry(next)
+    setSidebarFolders(next)
+  }
+
+  const openCreateFolderDialog = (workspacePath: string): void => {
+    setFolderDialog({
+      mode: 'create',
+      workspacePath,
+      value: ''
+    })
+    setWorkspaceContextMenu(null)
+  }
+
+  const openRenameFolderDialog = (
+    workspacePath: string,
+    folder: SidebarVirtualFolder
+  ): void => {
+    setFolderDialog({
+      mode: 'rename',
+      workspacePath,
+      folder,
+      value: folder.name
+    })
+    setFolderContextMenu(null)
+  }
+
+  const submitFolderDialog = (event: FormEvent<HTMLFormElement>): void => {
+    event.preventDefault()
+    const dialog = folderDialog
+    const name = dialog?.value.trim() ?? ''
+    if (!dialog || !name) return
+    const folders = sidebarFoldersForWorkspace(sidebarFolders, dialog.workspacePath)
+    if (sidebarFolderNameExists(folders, name, dialog.folder?.id)) {
+      setFolderDialog((current) => current ? {
+        ...current,
+        value: name,
+        error: t('sidebarFolderNameExists')
+      } : current)
+      return
+    }
+    if (dialog.mode === 'create') {
+      const folderId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `folder-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+      persistSidebarFolders((current) =>
+        createSidebarFolder(current, dialog.workspacePath, { id: folderId, name })
+      )
+    } else if (dialog.folder) {
+      persistSidebarFolders((current) =>
+        renameSidebarFolder(current, dialog.workspacePath, dialog.folder?.id ?? '', name)
+      )
+    }
+    setFolderDialog(null)
+  }
+
+  const handleDeleteFolder = (
+    workspacePath: string,
+    folder: SidebarVirtualFolder
+  ): void => {
+    openActionDialog({
+      title: t('sidebarFolderDeleteDialogTitle', { name: folder.name }),
+      description: t('sidebarFolderDeleteDialogDescription'),
+      detail: t('sidebarFolderDeleteDialogDetail', { count: folder.threadIds.length }),
+      confirmLabel: t('sidebarFolderDeleteConfirmButton'),
+      danger: true,
+      onConfirm: async () => {
+        persistSidebarFolders((current) =>
+          deleteSidebarFolder(current, workspacePath, folder.id)
+        )
+      }
+    })
+    setFolderContextMenu(null)
+  }
+
   const handleWorkspaceDragStart = (
     event: ReactDragEvent<HTMLDivElement>,
     workspacePath: string
@@ -658,12 +768,14 @@ export function SidebarProjectsSection({
     setDraggingThreadId(null)
     setThreadOrderDropTarget(null)
     setDragOverWorkspace(null)
+    setFolderDropTarget(null)
   }
 
   const handleWorkspaceDragEnd = (): void => {
     setDraggingWorkspacePath(null)
     setWorkspaceOrderDropTarget(null)
     setDragOverWorkspace(null)
+    setFolderDropTarget(null)
   }
 
   const handleThreadDragStart = (
@@ -681,25 +793,27 @@ export function SidebarProjectsSection({
     setDraggingWorkspacePath(null)
     setWorkspaceOrderDropTarget(null)
     setDragOverWorkspace(null)
+    setFolderDropTarget(null)
   }
 
   const handleThreadDragEnd = (): void => {
     setDraggingThreadId(null)
     setThreadOrderDropTarget(null)
     setDragOverWorkspace(null)
+    setFolderDropTarget(null)
   }
 
   const handleWorkspaceDragOver = (
     event: ReactDragEvent<HTMLDivElement>,
     workspacePath: string
   ): void => {
-    const sourceWorkspace = draggingWorkspacePath || event.dataTransfer.getData(SIDEBAR_WORKSPACE_DRAG_DATA_KEY)
-    if (sourceWorkspace) {
+    const sourceWorkspacePath = draggingWorkspacePath || event.dataTransfer.getData(SIDEBAR_WORKSPACE_DRAG_DATA_KEY)
+    if (sourceWorkspacePath) {
       event.preventDefault()
       event.dataTransfer.dropEffect = 'move'
       setDragOverWorkspace(null)
       setWorkspaceOrderDropTarget(
-        workspaceRootIdentityKey(sourceWorkspace) === workspaceRootIdentityKey(workspacePath)
+        workspaceRootIdentityKey(sourceWorkspacePath) === workspaceRootIdentityKey(workspacePath)
           ? null
           : {
               workspacePath,
@@ -716,6 +830,18 @@ export function SidebarProjectsSection({
     if (!threadId) return
     const thread = threads.find((item) => item.id === threadId)
     if (!thread) return
+    const candidatePaths = allProjectGroups.map(([path]) => path)
+    const sourceWorkspace = sidebarWorkspacePathForThread(thread, threadWorktrees, candidatePaths)
+    if (workspaceRootIdentityKey(sourceWorkspace) === workspaceRootIdentityKey(workspacePath)) {
+      const folders = sidebarFoldersForWorkspace(sidebarFolders, workspacePath)
+      if (!sidebarFolderIdForThread(folders, threadId)) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      setWorkspaceOrderDropTarget(null)
+      setFolderDropTarget(null)
+      setDragOverWorkspace(workspacePath)
+      return
+    }
     const worktreeRecord = worktreeRecordForSidebarThread(thread, threadWorktrees)
     if (threadMoveDisabledReason(thread, worktreeRecord)) return
     const targets = moveTargetsForThread(thread)
@@ -725,6 +851,7 @@ export function SidebarProjectsSection({
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
     setWorkspaceOrderDropTarget(null)
+    setFolderDropTarget(null)
     setDragOverWorkspace(workspacePath)
   }
 
@@ -753,12 +880,12 @@ export function SidebarProjectsSection({
     workspacePath: string
   ): void => {
     event.preventDefault()
-    const sourceWorkspace = draggingWorkspacePath || event.dataTransfer.getData(SIDEBAR_WORKSPACE_DRAG_DATA_KEY)
-    if (sourceWorkspace) {
+    const sourceWorkspacePath = draggingWorkspacePath || event.dataTransfer.getData(SIDEBAR_WORKSPACE_DRAG_DATA_KEY)
+    if (sourceWorkspacePath) {
       const rect = event.currentTarget.getBoundingClientRect()
       const nextWorkspacePaths = reorderSidebarWorkspacePaths({
         workspacePaths: workspacePathsForOrder,
-        sourcePath: sourceWorkspace,
+        sourcePath: sourceWorkspacePath,
         targetPath: workspacePath,
         position: sidebarDropPosition(event.clientY, rect.top, rect.height)
       })
@@ -766,15 +893,25 @@ export function SidebarProjectsSection({
       setDraggingWorkspacePath(null)
       setWorkspaceOrderDropTarget(null)
       setDragOverWorkspace(null)
+      setFolderDropTarget(null)
       return
     }
     const threadId = draggingThreadId || event.dataTransfer.getData(SIDEBAR_THREAD_DRAG_DATA_KEY)
     setDraggingThreadId(null)
     setThreadOrderDropTarget(null)
     setDragOverWorkspace(null)
+    setFolderDropTarget(null)
     if (!threadId) return
     const thread = threads.find((item) => item.id === threadId)
     if (!thread) return
+    const candidatePaths = allProjectGroups.map(([path]) => path)
+    const sourceWorkspace = sidebarWorkspacePathForThread(thread, threadWorktrees, candidatePaths)
+    if (workspaceRootIdentityKey(sourceWorkspace) === workspaceRootIdentityKey(workspacePath)) {
+      persistSidebarFolders((current) =>
+        moveThreadToSidebarFolder(current, workspacePath, threadId, null)
+      )
+      return
+    }
     confirmThreadWorkspaceMove(
       thread,
       workspacePath,
@@ -785,7 +922,8 @@ export function SidebarProjectsSection({
   const handleThreadDragOver = (
     event: ReactDragEvent<HTMLDivElement>,
     targetThread: NormalizedThread,
-    workspacePath: string
+    workspacePath: string,
+    folderId: string | null
   ): void => {
     const sourceId = draggingThreadId || event.dataTransfer.getData(SIDEBAR_THREAD_DRAG_DATA_KEY)
     if (!sourceId || sourceId === targetThread.id) return
@@ -801,9 +939,11 @@ export function SidebarProjectsSection({
     setThreadOrderDropTarget({
       workspacePath,
       threadId: targetThread.id,
+      folderId,
       position: sidebarDropPosition(event.clientY, rect.top, rect.height)
     })
     setDragOverWorkspace(null)
+    setFolderDropTarget(null)
   }
 
   const handleThreadDragLeave = (
@@ -820,7 +960,8 @@ export function SidebarProjectsSection({
   const handleThreadDrop = (
     event: ReactDragEvent<HTMLDivElement>,
     targetThread: NormalizedThread,
-    workspacePath: string
+    workspacePath: string,
+    folderId: string | null
   ): void => {
     const sourceId = draggingThreadId || event.dataTransfer.getData(SIDEBAR_THREAD_DRAG_DATA_KEY)
     if (!sourceId || sourceId === targetThread.id) return
@@ -831,23 +972,107 @@ export function SidebarProjectsSection({
     if (workspaceRootIdentityKey(sourceWorkspace) !== workspaceRootIdentityKey(workspacePath)) return
     event.preventDefault()
     event.stopPropagation()
+    const position = sidebarDropPosition(
+      event.clientY,
+      event.currentTarget.getBoundingClientRect().top,
+      event.currentTarget.getBoundingClientRect().height
+    )
+    persistSidebarFolders((current) =>
+      moveThreadToSidebarFolder(
+        current,
+        workspacePath,
+        sourceId,
+        folderId,
+        targetThread.id,
+        position
+      )
+    )
+    if (folderId) {
+      setDraggingThreadId(null)
+      setThreadOrderDropTarget(null)
+      setDragOverWorkspace(null)
+      setFolderDropTarget(null)
+      return
+    }
     const scope = sidebarThreadOrderScope(workspacePath)
     const baseIds = allThreadIdsByScope[scope] ?? []
     const orderedIds = reconcileSidebarThreadOrder(
       baseIds.map((id) => ({ id })),
       sidebarOrder.threadIdsByScope[scope] ?? []
     ).map(({ id }) => id)
-    const rect = event.currentTarget.getBoundingClientRect()
     const nextIds = reorderSidebarThreadIds({
       threadIds: orderedIds,
       sourceId,
       targetId: targetThread.id,
-      position: sidebarDropPosition(event.clientY, rect.top, rect.height)
+      position
     })
     persistSidebarOrder((current) => setSidebarThreadOrder(current, workspacePath, nextIds))
     setDraggingThreadId(null)
     setThreadOrderDropTarget(null)
     setDragOverWorkspace(null)
+    setFolderDropTarget(null)
+  }
+
+  const handleFolderDragOver = (
+    event: ReactDragEvent<HTMLDivElement>,
+    workspacePath: string,
+    folderId: string
+  ): void => {
+    const threadId = draggingThreadId || event.dataTransfer.getData(SIDEBAR_THREAD_DRAG_DATA_KEY)
+    if (!threadId) return
+    const thread = threads.find((item) => item.id === threadId)
+    if (!thread) return
+    const candidatePaths = allProjectGroups.map(([path]) => path)
+    const sourceWorkspace = sidebarWorkspacePathForThread(thread, threadWorktrees, candidatePaths)
+    if (workspaceRootIdentityKey(sourceWorkspace) !== workspaceRootIdentityKey(workspacePath)) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'move'
+    setThreadOrderDropTarget(null)
+    setDragOverWorkspace(null)
+    setFolderDropTarget({ workspacePath, folderId })
+  }
+
+  const handleFolderDragLeave = (
+    event: ReactDragEvent<HTMLDivElement>,
+    workspacePath: string,
+    folderId: string
+  ): void => {
+    if (
+      event.relatedTarget instanceof Node
+      && event.currentTarget.contains(event.relatedTarget)
+    ) return
+    setFolderDropTarget((current) =>
+      current
+      && current.folderId === folderId
+      && workspaceRootIdentityKey(current.workspacePath) === workspaceRootIdentityKey(workspacePath)
+        ? null
+        : current
+    )
+  }
+
+  const handleFolderDrop = (
+    event: ReactDragEvent<HTMLDivElement>,
+    workspacePath: string,
+    folderId: string
+  ): void => {
+    const threadId = draggingThreadId || event.dataTransfer.getData(SIDEBAR_THREAD_DRAG_DATA_KEY)
+    if (!threadId) return
+    const thread = threads.find((item) => item.id === threadId)
+    if (!thread) return
+    const candidatePaths = allProjectGroups.map(([path]) => path)
+    const sourceWorkspace = sidebarWorkspacePathForThread(thread, threadWorktrees, candidatePaths)
+    if (workspaceRootIdentityKey(sourceWorkspace) !== workspaceRootIdentityKey(workspacePath)) return
+    event.preventDefault()
+    event.stopPropagation()
+    persistSidebarFolders((current) =>
+      moveThreadToSidebarFolder(current, workspacePath, threadId, folderId)
+    )
+    setCollapsedFolders((current) => ({ ...current, [folderId]: false }))
+    setDraggingThreadId(null)
+    setThreadOrderDropTarget(null)
+    setDragOverWorkspace(null)
+    setFolderDropTarget(null)
   }
 
   const openThreadContextMenu = (
@@ -858,6 +1083,7 @@ export function SidebarProjectsSection({
     event.stopPropagation()
     const worktreeRecord = worktreeRecordForSidebarThread(thread, threadWorktrees)
     setWorkspaceContextMenu(null)
+    setFolderContextMenu(null)
     setThreadContextMenu({
       thread,
       ...(worktreeRecord ? { worktreeRecord } : {}),
@@ -873,10 +1099,28 @@ export function SidebarProjectsSection({
     event.preventDefault()
     event.stopPropagation()
     setThreadContextMenu(null)
+    setFolderContextMenu(null)
     setWorkspaceContextMenu({
       workspacePath,
       x: Math.min(event.clientX, window.innerWidth - 220),
       y: Math.min(event.clientY, window.innerHeight - 210)
+    })
+  }
+
+  const openFolderContextMenu = (
+    event: ReactMouseEvent<HTMLDivElement>,
+    workspacePath: string,
+    folder: SidebarVirtualFolder
+  ): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    setThreadContextMenu(null)
+    setWorkspaceContextMenu(null)
+    setFolderContextMenu({
+      workspacePath,
+      folder,
+      x: Math.min(event.clientX, window.innerWidth - 190),
+      y: Math.min(event.clientY, window.innerHeight - 130)
     })
   }
 
@@ -1005,6 +1249,52 @@ export function SidebarProjectsSection({
     })
   }
 
+  const renderThreadRow = (
+    thread: NormalizedThread,
+    workspacePath: string,
+    folderId: string | null
+  ): ReactElement => (
+    <ThreadRow
+      key={thread.id}
+      thread={thread}
+      worktreeRecord={worktreeRecordForSidebarThread(thread, threadWorktrees)}
+      active={(activeView === 'chat' || activeView === 'write') && activeThreadId === thread.id}
+      deleting={deletingThreadIds[thread.id] === true}
+      locale={locale}
+      showRunning={
+        thread.status?.trim().toLowerCase() === 'running' ||
+        (activeThreadId === thread.id && busy) ||
+        watchTurnCompletion[thread.id] === true
+      }
+      showUnread={
+        unreadThreadIds[thread.id] === true && activeThreadId !== thread.id
+      }
+      onSelect={() => onSelectThread(thread.id)}
+      onContextMenu={(event) => openThreadContextMenu(event, thread)}
+      onPreviewOpen={openThreadPreview}
+      onPreviewClose={closeThreadPreview}
+      draggable={deletingThreadIds[thread.id] !== true}
+      dragging={draggingThreadId === thread.id}
+      dropPosition={
+        threadOrderDropTarget?.threadId === thread.id
+        && threadOrderDropTarget.folderId === folderId
+        && workspaceRootIdentityKey(threadOrderDropTarget.workspacePath) === workspaceRootIdentityKey(workspacePath)
+          ? threadOrderDropTarget.position
+          : null
+      }
+      onDragStart={(event) => handleThreadDragStart(event, thread)}
+      onDragEnd={handleThreadDragEnd}
+      onDragOver={(event) => handleThreadDragOver(event, thread, workspacePath, folderId)}
+      onDragLeave={(event) => handleThreadDragLeave(event, thread.id)}
+      onDrop={(event) => handleThreadDrop(event, thread, workspacePath, folderId)}
+      onPin={() => void handlePinThread(thread, thread.pinned !== true)}
+      onRename={() => openRenameThreadDialog(thread)}
+      onArchive={() => void handleArchiveThread(thread)}
+      onDelete={() => void handleDeleteThread(thread)}
+      onRestore={() => void handleRestoreThread(thread)}
+    />
+  )
+
   return (
     <div className="ds-no-drag flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-[38px] items-center justify-between px-2 pb-1.5 pt-3">
@@ -1082,11 +1372,27 @@ export function SidebarProjectsSection({
             sortSidebarThreads(filterEmptySddAssistantThreadsFromSidebar(list, draftHistory)),
             sidebarOrder.threadIdsByScope[threadOrderScope] ?? []
           )
+          const workspaceFolders = sidebarFoldersForWorkspace(sidebarFolders, workspacePath)
+          const assignedThreadIds = new Set(
+            workspaceFolders.flatMap((folder) => folder.threadIds)
+          )
+          const rootThreads = sortedThreads.filter((thread) => !assignedThreadIds.has(thread.id))
+          const threadsById = new Map(sortedThreads.map((thread) => [thread.id, thread] as const))
+          const folderEntries = workspaceFolders.map((folder) => ({
+            folder,
+            threads: folder.threadIds.flatMap((threadId) => {
+              const thread = threadsById.get(threadId)
+              return thread ? [thread] : []
+            })
+          }))
+          const visibleFolderEntries = searchQuery.trim() || showArchived
+            ? folderEntries.filter((entry) => entry.threads.length > 0)
+            : folderEntries
           const workspaceExpanded = expandedWorkspaces[workspacePath] === true
-          const hasOverflow = sortedThreads.length > 5
+          const hasOverflow = rootThreads.length > 5
           const visibleThreads = workspaceExpanded
-            ? sortedThreads
-            : sortedThreads.slice(0, 5)
+            ? rootThreads
+            : rootThreads.slice(0, 5)
           return (
             <div
               key={workspacePath}
@@ -1126,6 +1432,15 @@ export function SidebarProjectsSection({
                 actions={
                   <>
                     <SidebarIconButton
+                      onClick={() => openCreateFolderDialog(workspacePath)}
+                      title={t('sidebarFolderCreate')}
+                      ariaLabel={t('sidebarFolderCreate')}
+                      className="h-6 w-6"
+                      stopPropagation
+                    >
+                      <FolderPlus className="h-3.5 w-3.5" strokeWidth={1.8} />
+                    </SidebarIconButton>
+                    <SidebarIconButton
                       onClick={() => onCreateThreadInWorkspace(workspacePath)}
                       title={t('sidebarWorkspaceNewThread')}
                       ariaLabel={t('sidebarWorkspaceNewThread')}
@@ -1161,7 +1476,64 @@ export function SidebarProjectsSection({
                     onDelete={(draft) => void handleDeleteRequirementDraft(draft)}
                     t={t}
                   />
-                  {sortedThreads.length === 0 && draftHistory.length === 0 ? (
+                  {visibleFolderEntries.map(({ folder, threads: folderThreads }) => {
+                    const folderCollapsed = collapsedFolders[folder.id] === true
+                    const isFolderDragOver =
+                      folderDropTarget?.folderId === folder.id
+                      && workspaceRootIdentityKey(folderDropTarget.workspacePath) === workspaceRootIdentityKey(workspacePath)
+                    return (
+                      <div key={folder.id}>
+                        <SidebarTreeRow
+                          title={folder.name}
+                          ariaLabel={t('sidebarFolderAriaLabel', {
+                            name: folder.name,
+                            count: folderThreads.length
+                          })}
+                          onClick={() =>
+                            setCollapsedFolders((current) => ({
+                              ...current,
+                              [folder.id]: !current[folder.id]
+                            }))
+                          }
+                          onContextMenu={(event) => openFolderContextMenu(event, workspacePath, folder)}
+                          onDragOver={(event) => handleFolderDragOver(event, workspacePath, folder.id)}
+                          onDragLeave={(event) => handleFolderDragLeave(event, workspacePath, folder.id)}
+                          onDrop={(event) => handleFolderDrop(event, workspacePath, folder.id)}
+                          className={`min-h-[32px] ${
+                            isFolderDragOver
+                              ? 'bg-accent/10 shadow-[inset_0_0_0_1px_rgba(79,124,255,0.32)]'
+                              : ''
+                          }`}
+                          buttonClassName="items-center gap-1.5 px-2 py-1.5"
+                        >
+                          {folderCollapsed
+                            ? <ChevronRight className="h-3 w-3 shrink-0 text-ds-faint" strokeWidth={2} />
+                            : <ChevronDown className="h-3 w-3 shrink-0 text-ds-faint" strokeWidth={2} />}
+                          {folderCollapsed
+                            ? <Folder className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.8} />
+                            : <FolderOpen className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.8} />}
+                          <span className="min-w-0 flex-1 truncate text-[13px] text-ds-ink">
+                            {folder.name}
+                          </span>
+                          <span className="shrink-0 rounded-md bg-ds-card/70 px-1.5 py-0.5 text-[10.5px] text-ds-faint tabular-nums">
+                            {folderThreads.length}
+                          </span>
+                        </SidebarTreeRow>
+                        {!folderCollapsed ? (
+                          <div className="space-y-[3px] pl-4 pt-[3px]">
+                            {folderThreads.length > 0
+                              ? folderThreads.map((thread) => renderThreadRow(thread, workspacePath, folder.id))
+                              : (
+                                  <div className="px-2.5 py-1.5 text-[12px] leading-5 text-ds-faint">
+                                    {t('sidebarFolderEmpty')}
+                                  </div>
+                                )}
+                          </div>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                  {rootThreads.length === 0 && visibleFolderEntries.length === 0 && draftHistory.length === 0 ? (
                     <div className="flex items-center justify-between gap-2 px-2.5 py-1.5">
                       <div className="text-[12.5px] leading-5 text-ds-faint">
                         {searchQuery.trim()
@@ -1181,48 +1553,7 @@ export function SidebarProjectsSection({
                         </button>
                       ) : null}
                     </div>
-                  ) : (
-                    visibleThreads.map((thread) => (
-                      <ThreadRow
-                        key={thread.id}
-                        thread={thread}
-                        worktreeRecord={worktreeRecordForSidebarThread(thread, threadWorktrees)}
-                        active={(activeView === 'chat' || activeView === 'write') && activeThreadId === thread.id}
-                        deleting={deletingThreadIds[thread.id] === true}
-                        locale={locale}
-                        showRunning={
-                          thread.status?.trim().toLowerCase() === 'running' ||
-                          (activeThreadId === thread.id && busy) ||
-                          watchTurnCompletion[thread.id] === true
-                        }
-                        showUnread={
-                          unreadThreadIds[thread.id] === true && activeThreadId !== thread.id
-                        }
-                        onSelect={() => onSelectThread(thread.id)}
-                        onContextMenu={(event) => openThreadContextMenu(event, thread)}
-                        onPreviewOpen={openThreadPreview}
-                        onPreviewClose={closeThreadPreview}
-                        draggable={deletingThreadIds[thread.id] !== true}
-                        dragging={draggingThreadId === thread.id}
-                        dropPosition={
-                          threadOrderDropTarget?.threadId === thread.id
-                          && workspaceRootIdentityKey(threadOrderDropTarget.workspacePath) === workspaceRootIdentityKey(workspacePath)
-                            ? threadOrderDropTarget.position
-                            : null
-                        }
-                        onDragStart={(event) => handleThreadDragStart(event, thread)}
-                        onDragEnd={handleThreadDragEnd}
-                        onDragOver={(event) => handleThreadDragOver(event, thread, workspacePath)}
-                        onDragLeave={(event) => handleThreadDragLeave(event, thread.id)}
-                        onDrop={(event) => handleThreadDrop(event, thread, workspacePath)}
-                        onPin={() => void handlePinThread(thread, thread.pinned !== true)}
-                        onRename={() => openRenameThreadDialog(thread)}
-                        onArchive={() => void handleArchiveThread(thread)}
-                        onDelete={() => void handleDeleteThread(thread)}
-                        onRestore={() => void handleRestoreThread(thread)}
-                      />
-                    ))
-                  )}
+                  ) : visibleThreads.map((thread) => renderThreadRow(thread, workspacePath, null))}
                   {hasOverflow ? (
                     <button
                       type="button"
@@ -1238,7 +1569,7 @@ export function SidebarProjectsSection({
                       {workspaceExpanded
                         ? t('sidebarWorkspaceShowLess')
                         : t('sidebarWorkspaceShowMore', {
-                            count: sortedThreads.length - 5
+                            count: rootThreads.length - 5
                           })}
                     </button>
                   ) : null}
@@ -1272,10 +1603,25 @@ export function SidebarProjectsSection({
           state={workspaceContextMenu}
           onClose={() => setWorkspaceContextMenu(null)}
           onNewThread={() => onCreateThreadInWorkspace(workspaceContextMenu.workspacePath)}
+          onNewFolder={() => openCreateFolderDialog(workspaceContextMenu.workspacePath)}
           onOpenInSystem={() => void openWorkspaceInSystem(workspaceContextMenu.workspacePath)}
           onArchiveThreads={() => void handleArchiveWorkspaceThreads(workspaceContextMenu.workspacePath)}
           onRemove={() => void handleRemoveWorkspace(workspaceContextMenu.workspacePath)}
           archiveDisabled={archivableWorkspaceThreads(workspaceContextMenu.workspacePath).length === 0}
+          t={t}
+        />
+      ) : null}
+
+      {folderContextMenu ? (
+        <FolderContextMenu
+          state={folderContextMenu}
+          onClose={() => setFolderContextMenu(null)}
+          onRename={() =>
+            openRenameFolderDialog(folderContextMenu.workspacePath, folderContextMenu.folder)
+          }
+          onDelete={() =>
+            handleDeleteFolder(folderContextMenu.workspacePath, folderContextMenu.folder)
+          }
           t={t}
         />
       ) : null}
@@ -1288,6 +1634,18 @@ export function SidebarProjectsSection({
             setRenameThreadDialog((current) => current ? { ...current, value } : current)
           }
           onSubmit={(event) => void submitRenameThreadDialog(event)}
+          t={t}
+        />
+      ) : null}
+
+      {folderDialog ? (
+        <SidebarFolderDialog
+          state={folderDialog}
+          onClose={() => setFolderDialog(null)}
+          onValueChange={(value) =>
+            setFolderDialog((current) => current ? { ...current, value, error: '' } : current)
+          }
+          onSubmit={submitFolderDialog}
           t={t}
         />
       ) : null}

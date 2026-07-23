@@ -11,7 +11,8 @@ const context = {
     cleared || !goal ? 'Goal cleared' : `Goal ${goal.status}: ${goal.objective}`,
   runtimeStatusText: () => 'Runtime status',
   runtimeErrorView: (event: { message: string; code?: string }) => ({
-    summary: event.message,
+    summary: `Summary: ${event.message}`,
+    message: event.message,
     ...(event.code ? { code: event.code } : {})
   }),
   upsertRuntimeError: (blocks: ChatState['blocks'], block: ChatState['blocks'][number]) => {
@@ -99,6 +100,28 @@ describe('chat projection reducer', () => {
     }
     const projected = project(state(), [approval, input, approval, input])
     expect(projected.blocks).toHaveLength(2)
+  })
+
+  it('projects the sanitized runtime message as a durable conversation error', () => {
+    const projected = project(state(), [{
+      type: 'runtime_error_received',
+      payload: {
+        itemId: 'error_1',
+        message: 'provider returned HTTP 429',
+        code: 'http_429',
+        severity: 'error'
+      }
+    }])
+
+    expect(projected.blocks).toContainEqual(expect.objectContaining({
+      kind: 'system',
+      id: 'error_1',
+      text: 'provider returned HTTP 429',
+      code: 'http_429',
+      severity: 'error',
+      runtimeError: true
+    }))
+    expect(projected.blocks[0]).not.toMatchObject({ text: 'Summary: provider returned HTTP 429' })
   })
 
   it('reconciles a delayed stable user event with its optimistic bubble', () => {

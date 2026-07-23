@@ -29,6 +29,9 @@ class CompatMessageProjector {
   project(request: ModelRequest): CompatChatMessage[] {
     const out: CompatChatMessage[] = []
     if (request.systemPrompt) out.push({ role: 'system', content: request.systemPrompt })
+    if (request.threadProfileInstruction) {
+      out.push({ role: 'system', content: request.threadProfileInstruction })
+    }
     if (request.modeInstruction) out.push({ role: 'system', content: request.modeInstruction })
     const history = this.options.historyLimit
       ? limitHistoryPreservingCompaction(request.history, this.options.historyLimit)

@@ -5,6 +5,7 @@ import type { InteractiveToolBridge } from './interactive-tool-bridge.js'
 
 export type ToolExecutionContextFactoryDeps = {
   memoryEnabled: boolean
+  allowedProviderIds?: readonly string[]
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -29,10 +30,12 @@ export function createToolExecutionContext(
     ...(input.activePlanContext ? { guiPlan: input.activePlanContext } : {}),
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(input.guiDesignMode ? { guiDesignMode: true } : {}),
+    agentSurface: input.agentSurface ?? 'code',
     ...(input.guiDesignArtifact ? { guiDesignArtifact: input.guiDesignArtifact } : {}),
     ...(input.imContext ? { imContext: true } : {}),
     model: input.modelCapabilities,
     ...(input.modelProviderId ? { modelProviderId: input.modelProviderId } : {}),
+    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     activeSkillIds: input.activeSkillIds,
     memoryPolicy: { enabled: deps.memoryEnabled },
     delegationPolicy: { enabled: false },
@@ -40,6 +43,7 @@ export function createToolExecutionContext(
     ...(input.extensionToolCatalogEpoch
       ? { extensionToolCatalogEpoch: input.extensionToolCatalogEpoch }
       : {}),
+    ...(deps.allowedProviderIds ? { allowedProviderIds: deps.allowedProviderIds } : {}),
     ...(deps.blockedProviderIds ? { blockedProviderIds: deps.blockedProviderIds } : {}),
     ...(deps.blockedToolNames ? { blockedToolNames: deps.blockedToolNames } : {}),
     ...(deps.blockedSkillIds ? { blockedSkillIds: deps.blockedSkillIds } : {}),

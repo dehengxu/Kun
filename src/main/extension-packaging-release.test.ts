@@ -25,6 +25,7 @@ function packContext(root: string, platform: 'darwin' | 'win32' | 'linux') {
   return {
     appOutDir: join(root, platform),
     electronPlatformName: platform,
+    arch: platform === 'win32' ? 'x64' : 'arm64',
     packager: { appInfo: { productFilename: 'Kun' } }
   }
 }
@@ -122,6 +123,10 @@ describe('Extension Platform packaged release resources', () => {
       for (const relativePath of afterPack.KUN_RUNTIME_REQUIRED_PATHS) {
         touch(join(unpackedRoot, relativePath))
       }
+      touch(join(
+        unpackedRoot,
+        `kun/node_modules/@cursor/sdk-${platform}-${context.arch}/package.json`
+      ))
       touch(join(unpackedRoot, 'node_modules/better-sqlite3/package.json'))
       writeBundledExtensionResources(context)
 

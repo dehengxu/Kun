@@ -12,7 +12,6 @@ import {
 } from 'react'
 import {
   BarChart3,
-  FileEdit,
   FileText,
   Folder,
   GitBranch,
@@ -27,7 +26,6 @@ import {
   Plus,
   Puzzle,
   PlayCircle,
-  SearchCode,
   Send,
   Sparkles,
   Square,
@@ -43,10 +41,7 @@ import { useChatStore } from '../../store/chat-store'
 import type { AppRoute } from '../../store/chat-store-types'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import {
-  COMPOSER_FILE_REFERENCE_DRAG_MIME,
-  composerFileReferenceFromPath,
   isComposerDirectoryReference,
-  parseComposerFileReferenceDragData,
   type ComposerFileReference
 } from '../../lib/composer-file-references'
 import {
@@ -92,12 +87,7 @@ import {
 } from './FloatingComposerExecutionPicker'
 import {
   FloatingComposerAttachments,
-  composerImageMimeTypeFromFileName as imageMimeTypeFromFileName,
-  handleComposerImagePaste,
-  imageFilesFromTransfer,
-  imageTransferHasImages,
-  isComposerImageMimeType as isImageMimeType,
-  isComposerPdfFile as isPdfFile
+  handleComposerImagePaste
 } from './FloatingComposerAttachments'
 export {
   handleComposerImagePaste,
@@ -111,7 +101,6 @@ export type {
 import { useComposerDraft } from './use-composer-draft'
 import { usePromptOptimizationSettings, useSpeechToTextSettings, useVoiceDictation } from './use-voice-dictation'
 import { VoiceRecordingStrip } from './VoiceRecordingStrip'
-import type { ComposerChangedFile } from '../../lib/composer-change-summary'
 import type { DesignComposerContext } from '../../design/design-composer-context'
 export { calculateComposerMenuScrollTop } from './composer-menu-scroll'
 import { useComposerFileMentions } from './use-composer-file-mentions'
@@ -120,9 +109,23 @@ import { FloatingComposerFileMentionMenu } from './FloatingComposerFileMentionMe
 import { useComposerSlashCommandMenu } from './use-composer-slash-command-menu'
 import { FloatingComposerSlashCommandMenu } from './FloatingComposerSlashCommandMenu'
 import { FloatingComposerTodoProgress } from './FloatingComposerTodoProgress'
+import {
+  canAcceptComposerFileDrop,
+  routeComposerFileDrop,
+  type ComposerFileDropOptions
+} from './composer-file-drop'
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 export type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
+
+export function returnQueuedMessageToComposer(
+  message: QueuedComposerMessage,
+  onRemove: (id: string) => void,
+  setInput: (value: string) => void
+): void {
+  onRemove(message.id)
+  setInput(message.displayText ?? message.text)
+}
 
 export function shouldSurfaceComposerUserInput(route: AppRoute, compact: boolean): boolean {
   // Write owns a single compact composer in its assistant rail, so it must
@@ -134,8 +137,10 @@ export function shouldSurfaceComposerUserInput(route: AppRoute, compact: boolean
 export type { DesignComposerContext } from '../../design/design-composer-context'
 
 type Props = {
-  variant?: 'default' | 'compact'
+  variant?: 'default' | 'compact' | 'side'
   workspaceRootOverride?: string
+  /** Use a non-active thread for compact side-conversation usage. */
+  activeThreadIdOverride?: string | null
   input: string
   setInput: (v: string) => void
   mode: 'plan' | 'agent'
@@ -168,8 +173,6 @@ type Props = {
   webAccessAvailable?: boolean
   executionSettings?: ComposerExecutionSettings | null
   executionSettingsApplying?: boolean
-  changedFiles?: ComposerChangedFile[]
-  changedFileStats?: { added: number; removed: number } | null
   skillCommands?: Array<{
     id: string
     name: string
@@ -204,9 +207,6 @@ type Props = {
   onToggleWorktreeMode?: () => void
   onReviewCommand?: (target: ReviewTarget) => void
   onExecutionSettingsChange?: (patch: Partial<ComposerExecutionSettings>) => void
-  onOpenChanges?: () => void
-  onReviewChanges?: () => void
-  reviewChangesDisabled?: boolean
   /**
    * When set, the `/btw` slash command is offered. It is omitted from
    * side-conversation composers (non-goal: no nested `/btw`).
@@ -228,7 +228,6 @@ const EMPTY_MODEL_GROUPS: ModelProviderModelGroup[] = []
 const EMPTY_ATTACHMENTS: AttachmentReference[] = []
 const EMPTY_CONTEXT_CHIPS: DesignComposerContext[] = []
 const EMPTY_FILE_REFERENCES: ComposerFileReference[] = []
-const EMPTY_CHANGED_FILES: ComposerChangedFile[] = []
 const EMPTY_SKILL_COMMANDS: NonNullable<Props['skillCommands']> = []
 
 export function formatGoalElapsedSeconds(seconds: number): string {
@@ -267,6 +266,7 @@ export function shouldShowGoalFloater({
 export function FloatingComposer({
   variant = 'default',
   workspaceRootOverride,
+  activeThreadIdOverride,
   input,
   setInput,
   mode,
@@ -298,8 +298,6 @@ export function FloatingComposer({
   extraFileMentionCandidates = EMPTY_FILE_REFERENCES,
   executionSettings = null,
   executionSettingsApplying = false,
-  changedFiles = EMPTY_CHANGED_FILES,
-  changedFileStats = null,
   skillCommands = EMPTY_SKILL_COMMANDS,
   disabledSkillIds,
   onPickAttachments,
@@ -321,9 +319,6 @@ export function FloatingComposer({
   onToggleWorktreeMode,
   onReviewCommand,
   onExecutionSettingsChange,
-  onOpenChanges,
-  onReviewChanges,
-  reviewChangesDisabled = false,
   onBtwCommand,
   hideBtwCommand = false,
   contextWindowTokens,
@@ -333,7 +328,10 @@ export function FloatingComposer({
   const { t, i18n } = useTranslation('common')
   const route = useChatStore((s) => s.route)
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
-  const activeThreadId = useChatStore((s) => s.activeThreadId)
+  const storeActiveThreadId = useChatStore((s) => s.activeThreadId)
+  const activeThreadId = activeThreadIdOverride === undefined
+    ? storeActiveThreadId
+    : activeThreadIdOverride
   const usageRefreshKey = useChatStore((s) => s.usageRefreshKey)
   const lastTurnUsage = useChatStore((s) => s.lastTurnUsage)
   const threads = useChatStore((s) => s.threads)
@@ -349,7 +347,9 @@ export function FloatingComposer({
   const activeClawChannelId = useChatStore((s) => s.activeClawChannelId)
   const blocks = useChatStore((s) => s.blocks)
   const resolveUserInput = useChatStore((s) => s.resolveUserInput)
-  const compact = variant === 'compact'
+  const reorderQueuedMessage = useChatStore((s) => s.reorderQueuedMessage)
+  const compact = variant !== 'default'
+  const side = variant === 'side'
   // The pending ask-user request for the active thread, surfaced as a panel
   // docked above this composer. The main Chat and Design composers host it, as
   // does Write's only (compact) composer. Other compact side composers would
@@ -452,16 +452,6 @@ export function FloatingComposer({
   const showExecutionSettingsPicker = showIntentToolbar
     && Boolean(executionSettings)
     && Boolean(onExecutionSettingsChange)
-  const showChangeSummary = !compact && route === 'chat' && changedFiles.length > 0
-  const effectiveChangedFileStats = changedFileStats ?? changedFiles.reduce(
-    (stats, file) => ({
-      added: stats.added + file.added,
-      removed: stats.removed + file.removed
-    }),
-    { added: 0, removed: 0 }
-  )
-  const visibleChangedFiles = changedFiles.slice(0, 3)
-  const hiddenChangedFileCount = Math.max(0, changedFiles.length - visibleChangedFiles.length)
   const stretchModelPicker =
     compact && modelPickerMode === 'combobox' && !showToolbarStartControls && !hideModelPicker
   const draft = useComposerDraft({ input, canCompose: canEditComposer })
@@ -1046,51 +1036,25 @@ export function FloatingComposer({
     })
   }
 
+  const composerFileDropOptions: ComposerFileDropOptions = {
+    canPickAttachment,
+    canPickLocalFileReference,
+    canAddFileReference,
+    workspaceRoot: effectiveWorkspaceRoot,
+    onPickAttachments,
+    onAddFileReference,
+    getPathForFile: (file) => window.kunGui.getPathForFile(file)
+  }
+
   const handleComposerDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
-    const dataTransferTypes = Array.from(event.dataTransfer.types ?? [])
-    const canAcceptFileReference = canAddFileReference && dataTransferTypes.includes(COMPOSER_FILE_REFERENCE_DRAG_MIME)
-    const canAcceptImages = canPickAttachment && imageTransferHasImages(event.dataTransfer)
-    const canAcceptPdf = canPickAttachment && Array.from(event.dataTransfer.files ?? []).some(isPdfFile)
-    if (!dataTransferTypes.includes('Files') && !canAcceptImages && !canAcceptPdf && !canAcceptFileReference) return
+    if (!canAcceptComposerFileDrop(event.dataTransfer, composerFileDropOptions)) return
     event.preventDefault()
     event.dataTransfer.dropEffect = 'copy'
   }
 
   const handleComposerDrop = (event: ReactDragEvent<HTMLDivElement>): void => {
-    const draggedReference = canAddFileReference
-      ? parseComposerFileReferenceDragData(
-          event.dataTransfer.getData(COMPOSER_FILE_REFERENCE_DRAG_MIME),
-          effectiveWorkspaceRoot
-        )
-      : null
-    const imageFiles = canPickAttachment ? imageFilesFromTransfer(event.dataTransfer) : []
-    const rawFiles = Array.from(event.dataTransfer.files ?? [])
-    const isImageLike = (file: File): boolean =>
-      isImageMimeType(file.type) || Boolean(imageMimeTypeFromFileName(file.name))
-    const pdfFiles = canPickAttachment ? rawFiles.filter(isPdfFile) : []
-    const pathFiles = canPickLocalFileReference && onAddFileReference
-      ? rawFiles.filter((file) => !isImageLike(file) && !isPdfFile(file))
-      : []
-    if (!draggedReference && imageFiles.length === 0 && pdfFiles.length === 0 && pathFiles.length === 0) return
+    if (!routeComposerFileDrop(event.dataTransfer, composerFileDropOptions)) return
     event.preventDefault()
-    if (draggedReference) onAddFileReference?.(draggedReference)
-    if ((imageFiles.length > 0 || pdfFiles.length > 0) && onPickAttachments) {
-      onPickAttachments([...imageFiles, ...pdfFiles])
-    }
-    if (pathFiles.length > 0) {
-      const paths: string[] = []
-      for (const file of pathFiles) {
-        try {
-          const path = window.kunGui.getPathForFile(file)
-          if (path) paths.push(path)
-        } catch {
-          // ignore files we cannot resolve a filesystem path for
-        }
-      }
-      for (const path of paths) {
-        onAddFileReference?.(composerFileReferenceFromPath(path, effectiveWorkspaceRoot))
-      }
-    }
     draft.focusComposer()
   }
 
@@ -1101,14 +1065,11 @@ export function FloatingComposer({
         ? 'ds-floating-composer ds-no-drag pointer-events-auto w-full pb-0 pt-0'
         : 'ds-floating-composer ds-no-drag ds-chat-column-inset ds-chat-content-max-width pointer-events-auto w-full pb-3 pt-0'}
     >
-      <FloatingComposerQueuedMessages
-        messages={queuedMessages}
-        onRemove={onRemoveQueuedMessage}
-        onGuide={onGuideQueuedMessage}
-      />
-
-      <div className="relative">
-        <div className="pointer-events-none absolute inset-x-0 bottom-full z-30 mb-2 flex flex-col items-center gap-2">
+      <div className="relative" data-composer-stack>
+        <div
+          data-composer-floaters
+          className="pointer-events-none absolute inset-x-0 bottom-full z-30 mb-2 flex flex-col items-center gap-2"
+        >
           {runtimeReady ? <BackgroundShellOverlay /> : null}
           {showGoalFloater && activeThreadGoal && !pendingUserInputBlock ? (
             <div className="pointer-events-auto flex min-h-11 w-full max-w-[46rem] items-center gap-2 rounded-full border border-ds-border bg-white px-3 py-1.5 text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card">
@@ -1170,6 +1131,17 @@ export function FloatingComposer({
             <FloatingComposerTodoProgress todos={activeThreadTodos} />
           ) : null}
         </div>
+
+        <FloatingComposerQueuedMessages
+          messages={queuedMessages}
+          onRemove={onRemoveQueuedMessage}
+          onGuide={onGuideQueuedMessage}
+          onReorder={reorderQueuedMessage}
+          onEdit={(message) => {
+            returnQueuedMessageToComposer(message, onRemoveQueuedMessage, setInput)
+            draft.focusComposer()
+          }}
+        />
 
         {composerMenuOpen && slashQuery == null ? (
           <div
@@ -1419,66 +1391,12 @@ export function FloatingComposer({
         <div
           className={`ds-composer-shell ds-chat-composer ds-frosted ds-no-drag flex flex-col gap-1 px-3 pb-2 pt-2 transition ${
             draft.focused ? 'ds-chat-composer-focus' : ''
-          } ${compact ? 'rounded-[24px] px-3 py-2 shadow-none' : ''}`}
+          } ${compact ? `rounded-[24px] px-3 py-2 ${side ? 'shadow-[0_14px_38px_rgba(20,47,95,0.10)]' : 'shadow-none'}` : ''}`}
           onMouseDown={handleComposerShellMouseDown}
           onPaste={handleComposerPaste}
           onDragOver={handleComposerDragOver}
           onDrop={handleComposerDrop}
         >
-          {showChangeSummary ? (
-            <div className="ds-no-drag mb-1 rounded-2xl border border-ds-border-muted bg-ds-card px-3 py-2 shadow-sm">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-ds-hover text-ds-muted">
-                  <FileEdit className="h-4 w-4" strokeWidth={1.8} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] font-semibold text-ds-ink">
-                    <span className="truncate">{t('composerChangedFilesTitle', { count: changedFiles.length })}</span>
-                    <span className="font-mono text-[12px] text-ds-diff-added">
-                      +{effectiveChangedFileStats.added}
-                    </span>
-                    <span className="font-mono text-[12px] text-ds-diff-removed">
-                      -{effectiveChangedFileStats.removed}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ds-muted">
-                    {visibleChangedFiles.map((file) => (
-                      <span key={file.path} className="max-w-[220px] truncate" title={file.path}>
-                        {file.path}
-                      </span>
-                    ))}
-                    {hiddenChangedFileCount > 0 ? (
-                      <span className="text-ds-faint">
-                        {t('composerChangedFilesMore', { count: hiddenChangedFileCount })}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {onOpenChanges ? (
-                    <button
-                      type="button"
-                      onClick={onOpenChanges}
-                      className="rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover"
-                    >
-                      {t('composerOpenChanges')}
-                    </button>
-                  ) : null}
-                  {onReviewChanges ? (
-                    <button
-                      type="button"
-                      disabled={reviewChangesDisabled}
-                      onClick={onReviewChanges}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
-                    >
-                      <SearchCode className="h-3.5 w-3.5" strokeWidth={1.8} />
-                      {t('composerReviewChanges')}
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          ) : null}
           {contextChips.length > 0 ? (
             <div className="flex flex-wrap items-center gap-2 px-1">
               {contextChips.map((chip) => {
@@ -1659,7 +1577,9 @@ export function FloatingComposer({
             ) : null}
             <div
               className={`ds-composer-toolbar-actions flex min-w-0 items-center justify-end gap-1.5 ${
-                showToolbarStartControls || stretchModelPicker || dictation.status === 'recording' ? 'flex-1' : 'shrink-0'
+                showToolbarStartControls || stretchModelPicker || dictation.status === 'recording' || side
+                  ? 'flex-1'
+                  : 'shrink-0'
               }`}
             >
               {dictation.status === 'recording' ? (
@@ -1689,15 +1609,17 @@ export function FloatingComposer({
                 </>
               ) : (
                 <>
-                  <FloatingComposerContextCapacity
-                    compact={compact}
-                    route={route}
-                    activeThreadId={activeThreadId}
-                    lastTurnInputTokens={lastTurnInputTokens}
-                    contextWindowTokens={contextWindowTokens}
-                    runtimeToolCount={runtimeToolCount}
-                    runtimeSkillCount={runtimeSkillCount}
-                  />
+                  {side ? null : (
+                    <FloatingComposerContextCapacity
+                      compact={compact}
+                      route={route}
+                      activeThreadId={activeThreadId}
+                      lastTurnInputTokens={lastTurnInputTokens}
+                      contextWindowTokens={contextWindowTokens}
+                      runtimeToolCount={runtimeToolCount}
+                      runtimeSkillCount={runtimeSkillCount}
+                    />
+                  )}
                   {hideModelPicker ? null : (
                     <FloatingComposerModelPicker
                       compact={compact}
@@ -1715,10 +1637,10 @@ export function FloatingComposer({
                       onConfigureProviders={onConfigureProviders}
                     />
                   )}
-                  {hideModelPicker ? null : (
+                  {hideModelPicker || side ? null : (
                     <FloatingComposerAgentPicker compact={compact} disabled={!canCompose || busy} />
                   )}
-                  {showVoiceDictation ? (
+                  {!side && showVoiceDictation ? (
                     <button
                       type="button"
                       disabled={dictation.status === 'transcribing' || !canEditComposer}
@@ -1742,7 +1664,7 @@ export function FloatingComposer({
                       )}
                     </button>
                   ) : null}
-                  {promptOptimizationSettings?.enabled === true ? (
+                  {!side && promptOptimizationSettings?.enabled === true ? (
                     <button
                       type="button"
                       disabled={!canOptimizePrompt}

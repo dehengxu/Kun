@@ -26,6 +26,7 @@ type PromptOptimizationRequestPayload = {
   endpointFormat: ModelEndpointFormat
   headers: Record<string, string>
   body: Record<string, unknown>
+  expectsSse: boolean
 }
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 1600
@@ -119,13 +120,16 @@ function buildPromptOptimizationRequest(input: {
   }
   if (endpointFormat === 'responses') {
     if (responsesLite) {
+      headers.Accept = 'text/event-stream'
       return {
         url: buildModelEndpointUrl(input.baseUrl, input.endpointFormat),
         endpointFormat,
         headers,
+        expectsSse: true,
         body: {
           model: input.model,
           input: codexResponsesLiteInput(input.systemPrompt, [{ role: 'user', content: input.sourceText }]),
+          stream: true,
           store: false,
           tool_choice: 'auto',
           parallel_tool_calls: false,
@@ -137,6 +141,7 @@ function buildPromptOptimizationRequest(input: {
       url: buildModelEndpointUrl(input.baseUrl, input.endpointFormat),
       endpointFormat,
       headers,
+      expectsSse: false,
       body: {
         model: input.model,
         instructions: input.systemPrompt,
@@ -150,6 +155,7 @@ function buildPromptOptimizationRequest(input: {
       url: buildModelEndpointUrl(input.baseUrl, input.endpointFormat),
       endpointFormat,
       headers,
+      expectsSse: false,
       body: {
         model: input.model,
         system: input.systemPrompt,
@@ -162,6 +168,7 @@ function buildPromptOptimizationRequest(input: {
     url: buildModelEndpointUrl(input.baseUrl, input.endpointFormat),
     endpointFormat,
     headers,
+    expectsSse: false,
     body: {
       model: input.model,
       messages: [
@@ -173,24 +180,28 @@ function buildPromptOptimizationRequest(input: {
   }
 }
 
+function extractResponsesContent(parsed: Record<string, unknown>): string {
+  if (typeof parsed.output_text === 'string') return parsed.output_text.trim()
+  const output = parsed.output
+  if (!Array.isArray(output)) return ''
+  return output.map((item) => {
+    if (!item || typeof item !== 'object') return ''
+    const content = (item as { content?: unknown }).content
+    if (!Array.isArray(content)) return ''
+    return content.map((block) => {
+      if (!block || typeof block !== 'object') return ''
+      const text = (block as { text?: unknown }).text
+      if (typeof text === 'string') return text
+      const outputText = (block as { output_text?: unknown }).output_text
+      return typeof outputText === 'string' ? outputText : ''
+    }).join('')
+  }).join('').trim()
+}
+
 function extractPromptOptimizationContent(rawJson: string, endpointFormat: ModelEndpointFormat): string {
   const parsed = JSON.parse(rawJson) as Record<string, unknown>
   if (endpointFormat === 'responses') {
-    if (typeof parsed.output_text === 'string') return parsed.output_text.trim()
-    const output = parsed.output
-    if (!Array.isArray(output)) return ''
-    return output.map((item) => {
-      if (!item || typeof item !== 'object') return ''
-      const content = (item as { content?: unknown }).content
-      if (!Array.isArray(content)) return ''
-      return content.map((block) => {
-        if (!block || typeof block !== 'object') return ''
-        const text = (block as { text?: unknown }).text
-        if (typeof text === 'string') return text
-        const outputText = (block as { output_text?: unknown }).output_text
-        return typeof outputText === 'string' ? outputText : ''
-      }).join('')
-    }).join('').trim()
+    return extractResponsesContent(parsed)
   }
   if (endpointFormat === 'messages') {
     const content = parsed.content
@@ -207,6 +218,69 @@ function extractPromptOptimizationContent(rawJson: string, endpointFormat: Model
   return first && typeof first === 'object'
     ? String((first as { message?: { content?: unknown } }).message?.content ?? '').trim()
     : ''
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function promptOptimizationStreamError(payload: Record<string, unknown>): string {
+  const error = recordValue(payload.error)
+  if (typeof error?.message === 'string' && error.message.trim()) return error.message.trim()
+  const response = recordValue(payload.response)
+  const responseError = recordValue(response?.error)
+  if (typeof responseError?.message === 'string' && responseError.message.trim()) {
+    return responseError.message.trim()
+  }
+  if (typeof payload.message === 'string' && payload.message.trim()) return payload.message.trim()
+  return 'Prompt optimization stream failed.'
+}
+
+function extractPromptOptimizationSseContent(rawSse: string): string {
+  let deltaText = ''
+  let finalText = ''
+  const frames = rawSse.replace(/\r\n?/g, '\n').split(/\n\n+/)
+  for (const frame of frames) {
+    const data = frame
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n')
+      .trim()
+    if (!data || data === '[DONE]') continue
+    const payload = recordValue(JSON.parse(data))
+    if (!payload) continue
+    const type = typeof payload.type === 'string' ? payload.type : ''
+    if (type === 'response.output_text.delta' && typeof payload.delta === 'string') {
+      deltaText += payload.delta
+      continue
+    }
+    if (type === 'response.output_text.done' && typeof payload.text === 'string') {
+      finalText = payload.text
+      continue
+    }
+    if (type === 'response.content_part.done') {
+      const part = recordValue(payload.part)
+      if (typeof part?.text === 'string') finalText += part.text
+      continue
+    }
+    if (type === 'response.output_item.done') {
+      const item = recordValue(payload.item)
+      if (item) finalText = extractResponsesContent({ output: [item] }) || finalText
+      continue
+    }
+    if (type === 'response.completed') {
+      const response = recordValue(payload.response) ?? payload
+      finalText = extractResponsesContent(response) || finalText
+      continue
+    }
+    if (type === 'response.failed' || type === 'error') {
+      throw new Error(promptOptimizationStreamError(payload))
+    }
+  }
+  return (deltaText || finalText).trim()
 }
 
 export async function optimizePrompt(
@@ -259,7 +333,9 @@ export async function optimizePrompt(
     }
   }
   try {
-    const optimized = extractPromptOptimizationContent(bodyText, request.endpointFormat).trim()
+    const optimized = request.expectsSse
+      ? extractPromptOptimizationSseContent(bodyText)
+      : extractPromptOptimizationContent(bodyText, request.endpointFormat).trim()
     if (!optimized) return { ok: false, message: 'Prompt optimization returned empty text.' }
     return {
       ok: true,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -7,6 +7,7 @@ import {
   createAesEncryptor,
   createSecretEncryptor,
   DISABLE_OS_CREDENTIAL_STORE_ENV,
+  hasPersistedSecretKeyMaterial,
   isEncryptedEnvelope
 } from './secret-store.js'
 
@@ -53,6 +54,93 @@ describe('createAesEncryptor', () => {
 })
 
 describe('createSecretEncryptor', () => {
+  it('bootstraps a local key for a pre-secret-store Linux profile when Secret Service is unavailable', async () => {
+    const run = vi.fn(async (_command: string, args: string[]) => {
+      if (args[0] === 'lookup') {
+        return { code: 1, stdout: '', stderr: 'Cannot autolaunch D-Bus without X11 $DISPLAY' }
+      }
+      throw new Error(`unexpected Secret Service command: ${args.join(' ')}`)
+    })
+    const dir = await mkdtemp(join(tmpdir(), 'kun-secret-'))
+    const keyPath = join(dir, 'secret.key')
+    try {
+      const result = await createSecretEncryptor({
+        keyFilePath: keyPath,
+        platform: 'linux',
+        run,
+        ...explicitOsCredentialStore,
+        canBootstrapKeyFileFallback: async () => !(await hasPersistedSecretKeyMaterial(dir))
+      })
+
+      expect(result.osKeychain).toBe(false)
+      expect(result.reason).toContain('Linux secret service lookup failed')
+      expect(run).toHaveBeenCalledTimes(1)
+      expect(await readFile(keyPath, 'utf8')).toBeTruthy()
+      if (process.platform !== 'win32') {
+        expect((await stat(keyPath)).mode & 0o777).toBe(0o600)
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves fail-closed behavior when encrypted extension credentials exist', async () => {
+    const run = vi.fn(async (_command: string, args: string[]) => {
+      if (args[0] === 'lookup') {
+        return { code: -1, stdout: '', stderr: 'Secret Service is unavailable' }
+      }
+      throw new Error(`unexpected Secret Service command: ${args.join(' ')}`)
+    })
+    const dir = await mkdtemp(join(tmpdir(), 'kun-secret-'))
+    const keyPath = join(dir, 'secret.key')
+    try {
+      await mkdir(join(dir, 'credentials'), { recursive: true })
+      await writeFile(join(dir, 'credentials', 'credentials.enc.json'), JSON.stringify({
+        schemaVersion: 1,
+        profileId: 'default',
+        credentials: {
+          cred_existing: {
+            algorithm: 'aes-256-gcm', nonce: 'nonce', ciphertext: 'ciphertext', tag: 'tag', updatedAt: '2026-07-23T00:00:00.000Z'
+          }
+        }
+      }))
+
+      await expect(createSecretEncryptor({
+        keyFilePath: keyPath,
+        platform: 'linux',
+        run,
+        ...explicitOsCredentialStore,
+        canBootstrapKeyFileFallback: async () => !(await hasPersistedSecretKeyMaterial(dir))
+      })).rejects.toThrow(/refusing to replace/)
+
+      expect(run).toHaveBeenCalledTimes(1)
+      await expect(readFile(keyPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('detects encrypted MCP OAuth state but permits legacy plaintext OAuth state', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-secret-'))
+    const oauthDirectory = join(dir, 'mcp-oauth')
+    const oauthPath = join(oauthDirectory, 'remote-server.json')
+    try {
+      await mkdir(oauthDirectory, { recursive: true })
+      await writeFile(oauthPath, JSON.stringify({
+        tokens: { access_token: 'legacy-plaintext-token', token_type: 'bearer' }
+      }))
+      await expect(hasPersistedSecretKeyMaterial(dir)).resolves.toBe(false)
+
+      await writeFile(oauthPath, JSON.stringify({ __enc: 'enc:v1:nonce:tag:ciphertext' }))
+      await expect(hasPersistedSecretKeyMaterial(dir)).resolves.toBe(true)
+
+      await writeFile(oauthPath, '{ invalid json')
+      await expect(hasPersistedSecretKeyMaterial(dir)).resolves.toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('uses a persistent owner-only key file without invoking OS helpers when automation isolation is enabled', async () => {
     const run = vi.fn(async () => ({ code: 0, stdout: 'unexpected', stderr: '' }))
     const dir = await mkdtemp(join(tmpdir(), 'kun-secret-'))

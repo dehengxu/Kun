@@ -1558,6 +1558,7 @@
   "composerVoiceFailed": "语音转写失败：{{message}}",
   "composerImageUnavailable": "当前运行时暂不可用图片输入。",
   "composerAttachmentUnavailable": "当前暂不可上传附件。",
+  "composerDropFilesHere": "松开以添加文件到当前对话",
   "composerAttachmentModelUnsupported": "当前选择的模型不能读取图片，请切换到识图模型或移除图片附件。",
   "composerPdfAttachmentUnavailable": "当前无法读取这个 PDF。",
   "composerPdfAttachmentNoText": "这个 PDF 没有可提取文本，内置 OCR 也没有识别到可读文字，请尝试更清晰的扫描件或粘贴相关页面。",
@@ -1583,8 +1584,8 @@
   "composerPlanPlaceholder": "先拆解目标、列步骤、评估改动，再进入执行…",
   "composerSlashHint": "输入 / 打开命令",
   "workingDirectory": "工作目录",
-  "emptyHeroTitle": "开始一个新对话",
-  "emptyHeroSub": "选择一个任务，或直接输入你的问题",
+  "emptyHeroTitle": "今天想和 Kun 一起做什么？",
+  "emptyHeroSub": "描述你的想法，或从一个新任务开始",
   "emptyHeroSubNoWorkspace": "先选择一个本地工作目录，然后再开始第一轮会话。",
   "usageHeatmapBadge": "Kun 用量",
   "usageHeatmapTitle": "最近的智能体节奏",
@@ -1743,6 +1744,9 @@
   "queuedMessagesTitle": "已排队 {{count}} 条",
   "queuedMessagesHint": "当前回复结束后会按顺序自动发送",
   "queuedMessageRemove": "移除排队消息",
+  "queuedMessageMoreActions": "更多排队消息操作",
+  "queuedMessageEdit": "编辑消息",
+  "queuedMessageReorder": "拖动调整排队顺序",
   "guideQueuedMessage": "引导",
   "guideQueuedMessagePending": "引导中",
   "guideQueuedMessageHint": "在 Agent 的下一次模型交互中加入这条输入",
@@ -1833,6 +1837,11 @@
   "sidePanelTitle": "分支对话",
   "sidePanelOpen": "打开分支对话",
   "sidePanelNew": "新建分支对话",
+  "sidePanelTabTitle": "分支对话 {{index}}",
+  "sidePanelNewTabTitle": "新分支",
+  "sidePanelOriginMeta": "来自：{{title}} · {{time}}",
+  "sidePanelDraftOrigin": "从“{{title}}”新建分支",
+  "sidePanelSwitch": "切换分支对话",
   "sidePanelParentLabel": "来自 “{{title}}”",
   "sidePanelParentMissing": "分支对话",
   "sidePanelHide": "隐藏分支面板",
@@ -1863,7 +1872,6 @@
   "rightPanelRuntime": "运行时",
   "rightPanelPlan": "计划",
   "rightPanelFiles": "文件",
-  "rightPanelTodo": "Todo",
   "rightPanelCanvas": "画布",
   "rightPanelWhiteboard": "白板",
   "canvasPanelNeedsThread": "打开或新建一个对话即可使用画布。",
@@ -1874,7 +1882,6 @@
   "rightPanelBrowserTool": "浏览器",
   "rightPanelNewBrowserTab": "新标签页",
   "rightPanelSideConversations": "子会话",
-  "rightPanelTodoTool": "待办",
   "rightPanelChangesReview": "变更/审查",
   "rightPanelTabs": "右侧工作区标签",
   "rightPanelCloseTab": "关闭{{title}}",
@@ -2139,15 +2146,6 @@
   },
   "goalUpdatedTimeline": "目标{{status}}：{{objective}}",
   "goalClearedTimeline": "目标已清除",
-  "todoPanelTitle": "线程 Todo",
-  "todoClear": "清空 Todo",
-  "todoEmptyTitle": "暂无 Todo",
-  "todoEmptyDescription": "计划清单和模型写入的线程 Todo 会显示在这里。",
-  "todoStatusPending": "待处理",
-  "todoStatusInProgress": "进行中",
-  "todoStatusCompleted": "已完成",
-  "todoMarkPending": "标为待处理",
-  "todoMarkCompleted": "标为完成",
   "todoProgressStep": "第 {{current}} / {{total}} 步",
   "todoProgressAria": "Todo 进度：第 {{current}} 步，共 {{total}} 步",
   "todoProgressDetails": "Todo 详情",
@@ -2165,6 +2163,18 @@
   "sidebarEmptySubOffline": "先连接运行时，随后从上方创建第一条会话。",
   "sidebarWorkspaceEmpty": "还没有会话",
   "sidebarWorkspaceNewThread": "新建会话",
+  "sidebarFolderCreate": "新建目录",
+  "sidebarFolderCreatePrompt": "为目录命名。它只用于整理侧边栏，不会在磁盘上创建真实目录。",
+  "sidebarFolderRename": "重命名目录",
+  "sidebarFolderRenamePrompt": "输入新的目录名称",
+  "sidebarFolderNameExists": "当前项目中已存在同名目录。",
+  "sidebarFolderDelete": "删除目录",
+  "sidebarFolderDeleteDialogTitle": "删除“{{name}}”？",
+  "sidebarFolderDeleteDialogDescription": "这只会移除侧边栏目录，不会删除任何会话或项目文件。",
+  "sidebarFolderDeleteDialogDetail": "目录中的 {{count}} 个会话会回到项目根层级。",
+  "sidebarFolderDeleteConfirmButton": "删除目录",
+  "sidebarFolderAriaLabel": "{{name}}，{{count}} 个会话",
+  "sidebarFolderEmpty": "将会话拖到这里",
   "sidebarWorkspaceShowMore": "展开显示（还有 {{count}} 条）",
   "sidebarWorkspaceShowLess": "收起",
   "sidebarWorkspaceArchiveThreads": "归档当前项目中的所有会话",
@@ -2691,6 +2701,8 @@
   "groupEditedFile": "修改了 1 个文件",
   "turnChangeFilesOne": "已编辑 1 个文件",
   "turnChangeFilesMany": "已编辑 {{count}} 个文件",
+  "turnChangeShowMore": "再显示 {{count}} 个文件",
+  "turnChangeShowFewer": "收起文件",
   "groupRanCommands": "运行了 {{count}} 条命令",
   "groupRanCommand": "运行了 1 条命令",
   "groupRanBackgroundCommands": "运行了 {{count}} 条后台命令",
@@ -2770,6 +2782,9 @@
   "componentPrototypeIterate": "继续调整",
   "componentPrototypeAdopt": "采纳方案",
   "subagentDefaultName": "子代理",
+  "subagentAgentLabel": "代理",
+  "subagentModelLabel": "模型",
+  "subagentNotRecorded": "未记录",
   "subagentStatusQueued": "排队中",
   "subagentStatusRunning": "运行中",
   "subagentStatusDone": "完成",
@@ -2906,6 +2921,110 @@
   "expandSidebar": "展开侧边栏",
   "rightPanelSubagents": "子代理",
   "rightPanelMcpSkills": "MCP 与 Skills",
+  "rightPanelAgentPerspective": "Agent 视角",
+  "agentPerspectiveTitle": "Agent 视角",
+  "agentPerspectiveSubtitle": "当前对话共 {{count}} 个模型请求",
+  "agentPerspectiveRefresh": "刷新请求",
+  "agentPerspectiveLoading": "正在加载…",
+  "agentPerspectiveEmpty": "当前对话尚未捕获到模型请求。",
+  "agentPerspectiveUnsupported": "请选择一个 Code 对话以查看模型请求。",
+  "agentPerspectiveLoadError": "无法加载模型请求：{{error}}",
+  "agentPerspectiveLoadOlder": "加载更早的请求",
+  "agentPerspectiveDetailSections": "请求详情分区",
+  "agentPerspectiveOverview": "概览",
+  "agentPerspectiveRequest": "请求",
+  "agentPerspectiveResponse": "响应",
+  "agentPerspectiveDecoded": "解析结果",
+  "agentPerspectiveHeaders": "请求头",
+  "agentPerspectiveBody": "请求体",
+  "agentPerspectiveRawResponse": "原始响应",
+  "agentPerspectiveRaw": "原文",
+  "agentPerspectivePretty": "格式化",
+  "agentPerspectiveCopy": "复制",
+  "agentPerspectiveCopied": "已复制",
+  "agentPerspectiveRedacted": "凭据值已在此追踪记录落盘前脱敏。",
+  "agentPerspectiveTruncated": "已截断",
+  "agentPerspectiveTruncationNotice": "此记录已达到捕获上限，实际发送给提供商的请求未被修改。",
+  "agentPerspectiveNoResponse": "本次尝试没有可用的原始响应。",
+  "agentPerspectiveNoDecoded": "本次尝试没有可用的模型解析结果。",
+  "agentPerspectiveAttempt": "尝试",
+  "agentPerspectiveInitial": "首次请求",
+  "agentPerspectiveTransportRetry": "传输重试",
+  "agentPerspectiveStreamFallback": "流式兼容回退",
+  "agentPerspectivePending": "进行中",
+  "agentPerspectiveCompleted": "已完成",
+  "agentPerspectiveTransportError": "传输错误",
+  "agentPerspectiveCaptureError": "捕获错误",
+  "agentPerspectiveDuration": "总耗时",
+  "agentPerspectiveTimeToHeaders": "首部耗时",
+  "agentPerspectiveProvider": "提供商",
+  "agentPerspectiveModel": "模型",
+  "agentPerspectiveEndpointFormat": "端点格式",
+  "agentPerspectiveStartedAt": "开始时间",
+  "agentPerspectiveStatus": "状态",
+  "agentPerspectiveUrl": "请求目标",
+  "agentPerspectiveEventSubtitle": "{{events}} 个步骤 · {{requests}} 个模型请求",
+  "agentPerspectiveSearch": "搜索步骤",
+  "agentPerspectiveSearchPlaceholder": "搜索模型、工具或标题…",
+  "agentPerspectiveFilterAll": "全部",
+  "agentPerspectiveFilterLlm": "LLM",
+  "agentPerspectiveFilterTools": "工具",
+  "agentPerspectiveFilterTitles": "标题",
+  "agentPerspectiveNoMatchingEvents": "没有匹配的步骤",
+  "agentPerspectiveSemanticRequest": "语义请求",
+  "agentPerspectiveRawRequest": "原始请求",
+  "agentPerspectiveStreamEvents": "流事件",
+  "agentPerspectiveTiming": "时序",
+  "agentPerspectiveLlmRequest": "LLM 请求",
+  "agentPerspectiveToolCall": "工具调用",
+  "agentPerspectiveTitleGeneration": "标题生成",
+  "agentPerspectiveTokens": "{{count}} tokens",
+  "agentPerspectiveCacheHit": "缓存命中 {{rate}}%",
+  "agentPerspectiveRequestComposition": "请求构成（估算）",
+  "agentPerspectiveSystemPrompt": "System Prompt",
+  "agentPerspectiveSkills": "Skills",
+  "agentPerspectiveToolDefinitions": "工具定义",
+  "agentPerspectiveMessages": "Messages",
+  "agentPerspectiveParameters": "请求参数",
+  "agentPerspectiveNoSkills": "本次请求未注入 Skill",
+  "agentPerspectiveNoTools": "本次请求未提供工具定义",
+  "agentPerspectiveNoMessages": "本次请求没有消息",
+  "agentPerspectiveToolCompleted": "已获得工具结果",
+  "agentPerspectiveToolPending": "等待工具结果",
+  "agentPerspectiveCallId": "调用 ID",
+  "agentPerspectiveParentRequest": "来源请求",
+  "agentPerspectiveToolArguments": "工具参数",
+  "agentPerspectiveToolResult": "工具结果",
+  "agentPerspectiveToolResultPending": "模型已发起工具调用，结果尚未出现在后续请求上下文中。",
+  "agentPerspectiveGeneratedTitle": "生成的标题",
+  "agentPerspectiveResponseOutput": "模型输出",
+  "agentPerspectiveReasoningOutput": "推理输出",
+  "agentPerspectiveToolCalls": "工具调用结果",
+  "agentPerspectiveUsage": "用量",
+  "agentPerspectiveResponseStartedAt": "响应开始时间",
+  "agentPerspectiveFinishedAt": "完成时间",
+  "agentPerspectivePrivacyNotice": "请求凭据已脱敏；内容仅保存在本机。",
+  "agentPerspectiveSkillActive": "已激活",
+  "agentPerspectiveToolSourceSummary": "{{groups}} 个来源 · {{tools}} 个工具",
+  "agentPerspectiveSourceKun": "Kun 系统工具",
+  "agentPerspectiveSourceMcp": "MCP 工具",
+  "agentPerspectiveSourceExtension": "扩展工具",
+  "agentPerspectiveSourceUnclassified": "未分类",
+  "agentPerspectiveKunCore": "通用核心工具",
+  "agentPerspectiveKunGui": "GUI 专属工具",
+  "agentPerspectiveKunRuntime": "运行时能力工具",
+  "agentPerspectiveMcpServer": "MCP Server",
+  "agentPerspectiveExtensionProvider": "扩展 Provider",
+  "agentPerspectiveProviderUnknown": "来源未知",
+  "agentPerspectiveKunManaged": "Kun 管理",
+  "agentPerspectiveMcpDiscovery": "发现能力",
+  "agentPerspectiveHistoricalInference": "历史推断",
+  "agentPerspectiveToolSource": "工具来源",
+  "agentPerspectiveExpandToolSource": "展开或收起 {{source}}",
+  "agentPerspectiveExpandToolProvider": "展开或收起 {{provider}} 分组",
+  "agentPerspectiveExpandTool": "展开或收起 {{tool}} 详情",
+  "agentPerspectiveNoToolDescription": "暂无描述",
+  "agentPerspectiveToolSchema": "{{tool}} 输入 Schema",
   "mcpSkillsPanel": {
     "projectScope": "当前项目",
     "globalScope": "全局",
@@ -2946,18 +3065,238 @@
     "system": "系统 · 内部用途",
     "global": "全局 · 共享",
     "newSubagent": "新建子代理",
+    "delegatableCount": "{{count}} 个可委派角色",
+    "configuredCount": "已配置 {{count}}",
+    "showingCount": "显示 {{visible}} / {{total}}",
+    "policySummary": "队列与会话上限",
+    "search": "搜索子代理",
+    "searchPlaceholder": "搜索名称、能力或场景",
+    "clearSearch": "清除搜索",
+    "toggleCategory": "展开或收起{{category}}分类",
+    "batchModel": "批量模型",
+    "mixedModels": "多种模型",
+    "mixedConfiguration": "多种配置",
+    "categoryConfiguration": "分类默认配置",
+    "categoryConfigurationDesc": "为该分类下的全部代理应用相同默认值",
+    "resetCategoryConfiguration": "恢复默认",
+    "effectiveModel": "生效模型",
+    "batchModelAria": "将{{category}}下{{count}}个代理设为同一模型",
+    "reasoning": "推理强度",
+    "mixedReasoning": "多种推理",
+    "batchReasoningAria": "将{{category}}下{{count}}个代理设为同一推理强度",
+    "capabilities": "能力标签",
+    "emptyTitle": "没有匹配的子代理",
+    "emptySearch": "试试其他名称、能力或使用场景。",
+    "emptyCategory": "选择其他分类继续浏览。",
+    "surface": { "shared": "基础", "code": "Code", "write": "写作", "design": "设计" },
+    "surfaceInherited": "继承自基础池",
+    "surfaceAssigned": "当前模式可用",
+    "surfaceUnassigned": "当前模式不可用",
+    "pagination": "Agent 分页",
+    "pageSummary": "第 {{page}} / {{pages}} 页 · 共 {{count}} 个 Agent",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "extensionAgents": {
+      "title": "扩展代理", "description": "基础代理以外的角色 · {{count}}",
+      "enabled": "已启用", "disabled": "已关闭", "toggle": "开关扩展代理",
+      "keepBaseOnly": "仅保留基础代理", "enableExtensions": "启用扩展代理",
+      "baseAlwaysAvailable": "基础代理始终可用"
+    },
+    "category": {
+      "all": "全部",
+      "baseAgent": "基础代理",
+      "development": "开发",
+      "review": "审查",
+      "quality": "质量",
+      "planning": "规划",
+      "operations": "运维",
+      "research": "研究",
+      "custom": "自定义"
+    },
     "smallModel": {
       "name": "小模型",
       "desc": "标题与摘要默认使用"
     },
     "role": {
+      "general": {
+        "name": "通用代理",
+        "desc": "全工具 · 多步骤任务,可改文件"
+      },
+      "explore": {
+        "name": "探索代理",
+        "desc": "只读 · 查找文件、搜索代码"
+      },
+      "component-designer": {
+        "name": "组件设计师",
+        "desc": "聚焦交互组件原型"
+      },
       "design-reviewer": {
         "name": "设计审查",
-        "desc": "design-reviewer · 只读"
+        "desc": "视觉层级与可访问性 · 只读"
       },
       "over-engineering-reviewer": {
         "name": "过度设计审查",
-        "desc": "over-engineering-reviewer · 只读"
+        "desc": "发现可删复杂度 · 只读"
+      },
+      "code-reviewer": {
+        "name": "代码审查专家",
+        "desc": "五维审查 · 只读"
+      },
+      "test-engineer": {
+        "name": "测试工程师",
+        "desc": "测试策略 · 可编写和运行测试"
+      },
+      "security-auditor": {
+        "name": "安全审计专家",
+        "desc": "威胁与 OWASP 风险 · 只读"
+      },
+      "web-performance-auditor": {
+        "name": "Web 性能审计专家",
+        "desc": "Core Web Vitals · 证据驱动"
+      },
+      "api-and-interface-design": {
+        "name": "API 与接口架构师",
+        "desc": "稳定公共契约 · 兼容与校验"
+      },
+      "browser-testing-with-devtools": {
+        "name": "Web QA 规划师",
+        "desc": "浏览器与无障碍验证计划 · 只读"
+      },
+      "ci-cd-and-automation": {
+        "name": "CI/CD 工程师",
+        "desc": "流水线、门禁与可回滚发布"
+      },
+      "code-review-and-quality": {
+        "name": "代码质量审查",
+        "desc": "正确性与架构多维审查 · 只读"
+      },
+      "code-simplification": {
+        "name": "代码简化工程师",
+        "desc": "降低复杂度 · 保持行为不变"
+      },
+      "context-engineering": {
+        "name": "上下文工程师",
+        "desc": "最小权威上下文包 · 只读"
+      },
+      "debugging-and-error-recovery": {
+        "name": "根因调试工程师",
+        "desc": "复现、定位、修复与回归验证"
+      },
+      "deprecation-and-migration": {
+        "name": "迁移工程师",
+        "desc": "分阶段兼容、数据迁移与回滚"
+      },
+      "documentation-and-adrs": {
+        "name": "文档与 ADR 工程师",
+        "desc": "架构决策、运维指南与 API 文档"
+      },
+      "doubt-driven-development": {
+        "name": "质疑驱动审查",
+        "desc": "挑战假设与设计 · 只读"
+      },
+      "frontend-ui-engineering": {
+        "name": "前端 UI 工程师",
+        "desc": "可访问、响应式、产品级界面"
+      },
+      "git-workflow-and-versioning": {
+        "name": "Git 工作流工程师",
+        "desc": "分支、原子提交与历史安全"
+      },
+      "idea-refine": {
+        "name": "创意打磨伙伴",
+        "desc": "方案比较、MVP 边界与验证 · 只读"
+      },
+      "incremental-implementation": {
+        "name": "增量实现工程师",
+        "desc": "薄切片、可构建、持续验证"
+      },
+      "interview-me": {
+        "name": "需求访谈官",
+        "desc": "找缺口并产出高信息问题 · 只读"
+      },
+      "observability-and-instrumentation": {
+        "name": "可观测性工程师",
+        "desc": "日志、指标、链路与告警"
+      },
+      "performance-optimization": {
+        "name": "性能优化工程师",
+        "desc": "测瓶颈、优化主成本并验证收益"
+      },
+      "planning-and-task-breakdown": {
+        "name": "实现规划师",
+        "desc": "依赖感知、可验收任务拆解 · 只读"
+      },
+      "security-and-hardening": {
+        "name": "安全加固工程师",
+        "desc": "威胁建模与范围化安全修复"
+      },
+      "shipping-and-launch": {
+        "name": "发布就绪工程师",
+        "desc": "上线决策、灰度与回滚计划 · 只读"
+      },
+      "source-driven-development": {
+        "name": "源码驱动研究员",
+        "desc": "对照权威版本来源指导实现 · 只读"
+      },
+      "spec-driven-development": {
+        "name": "规格工程师",
+        "desc": "场景、接口与验收标准 · 只读"
+      },
+      "test-driven-development": {
+        "name": "TDD 工程师",
+        "desc": "红绿重构 · 行为驱动回归证明"
+      },
+      "using-agent-skills": {
+        "name": "工程工作流顾问",
+        "desc": "映射最小合适代理序列 · 只读"
+      },
+      "write-outline-architect": {
+        "name": "大纲架构师",
+        "desc": "结构、论证与章节推进 · 只读"
+      },
+      "write-draft-author": {
+        "name": "初稿作者",
+        "desc": "长文初稿与聚焦段落写作"
+      },
+      "write-developmental-editor": {
+        "name": "发展编辑",
+        "desc": "提升逻辑、结构与可读性"
+      },
+      "write-copy-editor": {
+        "name": "文案润色编辑",
+        "desc": "语气、术语与语法一致性"
+      },
+      "write-fact-checker": {
+        "name": "事实核查员",
+        "desc": "核对主张、数据与不确定性 · 只读"
+      },
+      "write-citation-researcher": {
+        "name": "引文研究员",
+        "desc": "权威来源与可追溯引用 · 只读"
+      },
+      "design-product-planner": {
+        "name": "产品设计规划师",
+        "desc": "方向、目标、流程与取舍 · 只读"
+      },
+      "design-ux-researcher": {
+        "name": "UX 研究员",
+        "desc": "用户旅程与可用性研究 · 只读"
+      },
+      "design-screen-designer": {
+        "name": "页面设计师",
+        "desc": "完整响应式页面与交互状态"
+      },
+      "design-system-architect": {
+        "name": "设计系统架构师",
+        "desc": "语义令牌、组件与变体约束"
+      },
+      "design-code-binder": {
+        "name": "设计代码绑定师",
+        "desc": "设计节点到源码与路由映射"
+      },
+      "design-handoff-specialist": {
+        "name": "设计交付专家",
+        "desc": "DESIGN.md、实现说明与交付物"
       },
       "compaction": {
         "name": "上下文压缩",
@@ -2978,17 +3317,12 @@
       "summary": {
         "name": "摘要",
         "desc": "LLM · 默认小模型"
-      },
-      "general": {
-        "name": "通用代理",
-        "desc": "全工具 · 多步骤任务,可改文件"
-      },
-      "explore": {
-        "name": "探索代理",
-        "desc": "只读 · 查找文件、搜索代码"
       }
     },
-    "builtin": "内置"
+    "builtin": "内置",
+    "customTag": "自定义",
+    "workspaceFile": "定义于 {{path}}",
+    "workspaceReadOnly": "请在 .kun/agents/*.md 中编辑此角色"
   },
   "summarizeSession": "总结此会话",
   "summarizing": "总结中…",

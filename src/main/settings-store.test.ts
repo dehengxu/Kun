@@ -275,6 +275,91 @@ describe('JsonSettingsStore', () => {
     expect(secondLoaded.agents.kun.providerId).toBe('custom-provider-2')
   })
 
+  it('preserves route pools, local gateway state, and account sources across restart and unrelated patches', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-routes-'))
+    const initialStore = new JsonSettingsStore(userDataDir)
+    const initial = await initialStore.load()
+    const provider = {
+      id: 'kimi-code',
+      name: 'Kimi Code',
+      presetSource: { presetId: 'kimi-code', mode: 'api' as const },
+      apiKey: 'sk-kimi',
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      endpointFormat: 'chat_completions' as const,
+      models: ['kimi-for-coding'],
+      modelProfiles: {}
+    }
+    const routePool = {
+      id: 'kimi-route',
+      name: 'Kimi Route',
+      modelId: 'kimi-auto',
+      enabled: true,
+      strategy: 'priority' as const,
+      targets: [{ id: 'kimi-primary', providerId: provider.id, modelId: provider.models[0], enabled: true, weight: 1 }],
+      failurePolicy: { failoverHttpStatusCodes: [429, 503], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
+      healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
+    }
+
+    await initialStore.save({
+      ...initial,
+      provider: {
+        ...initial.provider,
+        providers: [...initial.provider.providers, provider],
+        routePools: [routePool],
+        localGateway: { enabled: true, name: 'Team Relay' }
+      }
+    })
+
+    const restarted = new JsonSettingsStore(userDataDir)
+    const loaded = await restarted.load()
+    expect(loaded.provider.routePools).toEqual([routePool])
+    expect(loaded.provider.localGateway).toEqual({ enabled: true, name: 'Team Relay' })
+    expect(loaded.provider.providers.find((item) => item.id === provider.id)?.presetSource)
+      .toEqual(provider.presetSource)
+
+    await restarted.patch({ theme: 'dark' })
+    const afterUnrelatedPatch = await new JsonSettingsStore(userDataDir).load()
+    expect(afterUnrelatedPatch.provider.routePools).toEqual([routePool])
+    expect(afterUnrelatedPatch.provider.localGateway).toEqual({ enabled: true, name: 'Team Relay' })
+  })
+
+  it('preserves current routing extensions while migrating mixed legacy settings', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'ds-gui-settings-routes-legacy-'))
+    const provider = {
+      id: 'kimi-code',
+      name: 'Kimi Code',
+      presetSource: { presetId: 'kimi-code', mode: 'api' },
+      apiKey: 'sk-kimi',
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      endpointFormat: 'chat_completions',
+      models: ['kimi-for-coding'],
+      modelProfiles: {}
+    }
+    const routePool = {
+      id: 'mixed-route', name: 'Mixed Route', modelId: 'mixed-auto', enabled: true, strategy: 'priority',
+      targets: [{ id: 'mixed-target', providerId: provider.id, modelId: provider.models[0], enabled: true, weight: 1 }],
+      failurePolicy: { failoverHttpStatusCodes: [429], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
+      healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
+    }
+    await writeFile(join(userDataDir, 'deepseek-gui-settings.json'), JSON.stringify({
+      version: 1,
+      agentProvider: 'deepseek-runtime',
+      deepseek: { autoStart: false },
+      provider: {
+        providers: [provider],
+        routePools: [routePool],
+        localGateway: { enabled: true, name: 'Legacy Relay' }
+      }
+    }), 'utf8')
+
+    const loaded = await new JsonSettingsStore(userDataDir).load()
+    expect(loaded.agents.kun.autoStart).toBe(false)
+    expect(loaded.provider.routePools).toEqual([routePool])
+    expect(loaded.provider.localGateway).toEqual({ enabled: true, name: 'Legacy Relay' })
+    expect(loaded.provider.providers.find((item) => item.id === provider.id)?.presetSource)
+      .toEqual(provider.presetSource)
+  })
+
   it('loads settings from the legacy lowercase userData directory and writes them into the current path', async () => {
     const supportRoot = await mkdtemp(join(tmpdir(), 'ds-gui-settings-compat-'))
     const legacyUserDataDir = join(supportRoot, 'deepseek-gui')

@@ -1,6 +1,5 @@
 import { useMemo, type Dispatch, type SetStateAction } from 'react'
 import type { CoreRuntimeInfoJson } from '../../agent/kun-contract'
-import type { ComposerChangeSummary } from '../../lib/composer-change-summary'
 import type { QueuedUserMessage } from '../../store/chat-store-types'
 import { canGuideQueuedMessage } from '../../store/queued-message-guidance'
 import type { WorkbenchChatStageProps } from './WorkbenchChatStage'
@@ -42,7 +41,6 @@ type UseWorkbenchChatComposerPropsInput = {
   webAccessAvailable: boolean
   composerExecutionSettings: ComposerProps['executionSettings']
   composerExecutionApplying: boolean
-  composerChangeSummary: ComposerChangeSummary | null
   runtimeSkills: ComposerProps['skillCommands']
   disabledSkillIds: ComposerProps['disabledSkillIds']
   handlePickAttachments: NonNullable<ComposerProps['onPickAttachments']>
@@ -66,8 +64,6 @@ type UseWorkbenchChatComposerPropsInput = {
   activeSkillWorkspace: string
   reviewActiveThread: NonNullable<ComposerProps['onReviewCommand']>
   updateComposerExecutionSettings: NonNullable<ComposerProps['onExecutionSettingsChange']>
-  openChangesPanel: () => void
-  runtimeConnectionReady: boolean
   spawnSideConversation: (seedText: string) => void | Promise<unknown>
   openSideConversationDraft: () => void
 }
@@ -107,7 +103,6 @@ export function useWorkbenchChatComposerProps({
   webAccessAvailable,
   composerExecutionSettings,
   composerExecutionApplying,
-  composerChangeSummary,
   runtimeSkills,
   disabledSkillIds,
   handlePickAttachments,
@@ -131,8 +126,6 @@ export function useWorkbenchChatComposerProps({
   activeSkillWorkspace,
   reviewActiveThread,
   updateComposerExecutionSettings,
-  openChangesPanel,
-  runtimeConnectionReady,
   spawnSideConversation,
   openSideConversationDraft
 }: UseWorkbenchChatComposerPropsInput): ComposerProps {
@@ -181,8 +174,6 @@ export function useWorkbenchChatComposerProps({
     webAccessAvailable,
     executionSettings: composerExecutionSettings,
     executionSettingsApplying: composerExecutionApplying,
-    changedFiles: composerChangeSummary?.files,
-    changedFileStats: composerChangeSummary,
     skillCommands: runtimeSkills,
     disabledSkillIds,
     onPickAttachments: (files) => void handlePickAttachments(files),
@@ -196,6 +187,8 @@ export function useWorkbenchChatComposerProps({
     queuedMessages: queuedMessages.map((message) => ({
       id: message.id,
       text: message.text,
+      ...(message.deliveryState ? { deliveryState: message.deliveryState } : {}),
+      ...(message.deliveryTurnId ? { deliveryTurnId: message.deliveryTurnId } : {}),
       ...(message.displayText ? { displayText: message.displayText } : {}),
       guidanceEligible: canGuideQueuedMessage(message)
     })),
@@ -210,9 +203,6 @@ export function useWorkbenchChatComposerProps({
     onNewCommand: () => void createThread({ workspaceRoot: activeSkillWorkspace, forceNew: true }),
     onReviewCommand: reviewActiveThread,
     onExecutionSettingsChange: updateComposerExecutionSettings,
-    onOpenChanges: openChangesPanel,
-    onReviewChanges: () => void reviewActiveThread({ kind: 'uncommittedChanges' }),
-    reviewChangesDisabled: busy || !runtimeConnectionReady,
     onBtwCommand: (seedText) => {
       if (seedText?.trim()) {
         void spawnSideConversation(seedText)
@@ -233,7 +223,6 @@ export function useWorkbenchChatComposerProps({
     busy,
     composerAttachments,
     contextChips,
-    composerChangeSummary,
     composerExecutionApplying,
     composerExecutionSettings,
     extraFileMentionCandidates,
@@ -253,7 +242,6 @@ export function useWorkbenchChatComposerProps({
     guideQueuedMessage,
     input,
     interrupt,
-    openChangesPanel,
     openDesignFileTreeSidePanel,
     openFileTreeSidePanel,
     openProvidersSettings,
@@ -267,7 +255,6 @@ export function useWorkbenchChatComposerProps({
     reviewActiveThread,
     route,
     runtimeReady,
-    runtimeConnectionReady,
     runtimeInfo,
     runtimeSkills,
     selectedContextWindowTokens,

@@ -44,6 +44,7 @@ type FetchModelsResult =
 function buildHarness(fetchModelsResult: FetchModelsResult): {
   actions: ReturnType<typeof createAppActions>
   state: ChatState
+  fetchUpstreamModels: ReturnType<typeof vi.fn>
 } {
   let state = {
     activeThreadId: null,
@@ -62,41 +63,54 @@ function buildHarness(fetchModelsResult: FetchModelsResult): {
   }
   const get: ChatStoreGet = () => state
 
+  const fetchUpstreamModels = vi.fn(async () => fetchModelsResult)
   vi.stubGlobal('window', {
     kunGui: {
-      fetchUpstreamModels: vi.fn(async () => fetchModelsResult),
+      fetchUpstreamModels,
       saveSettingsSilent: vi.fn(async () => state)
     }
   })
 
+  const actions = createAppActions({
+    set,
+    get,
+    i18n: { t: (key: string) => key, changeLanguage: vi.fn(async () => undefined) } as unknown as typeof i18next,
+    persistComposerModel,
+    persistComposerMode,
+    persistComposerReasoningEffort,
+    rememberThreadComposerMode,
+    readStoredComposerModel,
+    mergeComposerPickList,
+    fallbackComposerModel,
+    getComposerModelLoadPromise: () => loadPromise,
+    setComposerModelLoadPromise: (promise) => {
+      loadPromise = promise
+    },
+    applyTheme: () => undefined,
+    applyUiFontScale: () => undefined,
+    applyChatContentMaxWidth: () => undefined,
+    applyCursorSpotlight: () => undefined,
+    applyCursorSpotlightColor: () => undefined,
+    applyWriteTypography: () => undefined,
+    applyDocumentLocale: () => undefined,
+    workspaceLabelFromPath: (workspaceRoot) => workspaceRoot,
+    normalizeWorkspaceRoot: (workspaceRoot) => workspaceRoot?.trim() ?? ''
+  })
+  Object.assign(state, actions)
+
   return {
     state,
-    actions: createAppActions({
-      set,
-      get,
-      i18n: { t: (key: string) => key, changeLanguage: vi.fn(async () => undefined) } as unknown as typeof i18next,
-      persistComposerModel,
-      persistComposerMode,
-      persistComposerReasoningEffort,
-      rememberThreadComposerMode,
-      readStoredComposerModel,
-      mergeComposerPickList,
-      fallbackComposerModel,
-      getComposerModelLoadPromise: () => loadPromise,
-      setComposerModelLoadPromise: (promise) => {
-        loadPromise = promise
-      },
-      applyTheme: () => undefined,
-      applyUiFontScale: () => undefined,
-      applyChatContentMaxWidth: () => undefined,
-      applyCursorSpotlight: () => undefined,
-      applyCursorSpotlightColor: () => undefined,
-      applyWriteTypography: () => undefined,
-      applyDocumentLocale: () => undefined,
-      workspaceLabelFromPath: (workspaceRoot) => workspaceRoot,
-      normalizeWorkspaceRoot: (workspaceRoot) => workspaceRoot?.trim() ?? ''
-    })
+    fetchUpstreamModels,
+    actions
   }
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((accept) => {
+    resolve = accept
+  })
+  return { promise, resolve }
 }
 
 describe('chat-store app actions composer model loading', () => {
@@ -127,6 +141,51 @@ describe('chat-store app actions composer model loading', () => {
     expect(state.composerProviderId).toBe('minimax')
     expect(localStorage.getItem(COMPOSER_MODEL_STORAGE_KEY)).toBe('MiniMax-M2')
     expect(localStorage.getItem(COMPOSER_PROVIDER_STORAGE_KEY)).toBe('minimax')
+  })
+
+  it('reloads the composer list after settings change during an in-flight model read', async () => {
+    const firstRead = deferred<FetchModelsResult>()
+    const { actions, state, fetchUpstreamModels } = buildHarness({
+      ok: true,
+      modelIds: ['gemini-3.1-pro'],
+      modelGroups: [{
+        providerId: 'gemini-subscription',
+        label: 'Gemini subscription',
+        modelIds: ['gemini-3.1-pro']
+      }]
+    })
+    fetchUpstreamModels
+      .mockImplementationOnce(async () => firstRead.promise)
+      .mockResolvedValueOnce({
+        ok: true,
+        modelIds: ['gemini-3.1-pro', 'gemini-3.5-flash', 'gemini-3.6-flash'],
+        modelGroups: [{
+          providerId: 'gemini-subscription',
+          label: 'Gemini subscription',
+          modelIds: ['gemini-3.1-pro', 'gemini-3.5-flash', 'gemini-3.6-flash']
+        }]
+      })
+
+    const initialLoad = actions.loadComposerModels()
+    const refreshAfterSettingsSave = actions.loadComposerModels()
+    firstRead.resolve({
+      ok: true,
+      modelIds: ['gemini-3.1-pro'],
+      modelGroups: [{
+        providerId: 'gemini-subscription',
+        label: 'Gemini subscription',
+        modelIds: ['gemini-3.1-pro']
+      }]
+    })
+
+    await Promise.all([initialLoad, refreshAfterSettingsSave])
+
+    expect(fetchUpstreamModels).toHaveBeenCalledTimes(2)
+    expect(state.composerModelGroups).toEqual([{
+      providerId: 'gemini-subscription',
+      label: 'Gemini subscription',
+      modelIds: ['gemini-3.1-pro', 'gemini-3.5-flash', 'gemini-3.6-flash']
+    }])
   })
 
   it('updates the composer provider when the picker supplies a provider id', () => {

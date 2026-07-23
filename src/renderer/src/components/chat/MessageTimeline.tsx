@@ -1,13 +1,13 @@
 import type { ReactElement, RefObject } from 'react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { GitCommitHorizontal, Hash } from 'lucide-react'
+import { CircleAlert, GitCommitHorizontal, Hash } from 'lucide-react'
 import type { ChatBlock, RuntimeConnectionStatus } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-helpers'
 import { useTimelineStores } from './use-timeline-stores'
 import { useTimelineScroll } from './use-timeline-scroll'
-import { deriveTurnSections } from './derive-turn-sections'
+import { deriveTurnSections, type TurnRuntimeErrorBlock } from './derive-turn-sections'
 import { MessageTimelineEmptyHero, ThreadForkBanner, ThreadForkPoint } from './message-timeline-empty'
 import { GeneratedFilesPanel, MessageBubble } from './message-timeline-bubbles'
 import { PresentationFilesPanel } from './PresentationFilesPanel'
@@ -77,6 +77,11 @@ type Props = {
   onBuildPlan?: () => void
   /** Opens/focuses the Plan panel (Open button on the inline card). */
   onOpenPlan?: () => void
+  /** Opens the current workspace changes panel from a turn summary. */
+  onOpenChanges?: () => void
+  /** Starts a review of the current workspace changes from a turn summary. */
+  onReviewChanges?: () => void
+  reviewChangesDisabled?: boolean
   compactCards?: boolean
   onOpenChildThread?: OpenChildThreadHandler
   onComponentPrototypePrompt?: (prompt: string) => void
@@ -239,6 +244,23 @@ export function timelineJumpWaveDistance(index: number, hoveredIndex: number): n
   return Math.min(Math.abs(index - hoveredIndex), 3)
 }
 
+export function TimelineJumpPreviewTitle({
+  index,
+  title
+}: {
+  index: number
+  title: string
+}): ReactElement {
+  return (
+    <div className="timeline-jump-rail-preview-title">
+      <span className="timeline-jump-rail-preview-turn-index" aria-hidden="true">
+        {index}
+      </span>
+      <span className="timeline-jump-rail-preview-title-text">{title}</span>
+    </div>
+  )
+}
+
 function processBlockHasError(block: ChatBlock): boolean {
   return (
     (block.kind === 'tool' && block.status === 'error') ||
@@ -342,6 +364,37 @@ function CompactionDivider({ block }: { block: CompactionTimelineBlock }): React
   )
 }
 
+/** Non-interactive runtime error rendered directly in the conversation flow. */
+export function TimelineRuntimeError({ block }: { block: TurnRuntimeErrorBlock }): ReactElement {
+  const message = block.text.trim() || block.detail?.trim() || block.code?.trim() || ''
+  const code = block.code?.trim() ?? ''
+  const showCode = Boolean(code && !message.toLowerCase().includes(code.toLowerCase()))
+
+  return (
+    <div
+      role="alert"
+      data-testid="timeline-runtime-error"
+      className="flex min-w-0 items-start gap-3 border-l-2 border-orange-300/80 py-1 pl-4 dark:border-orange-700/70"
+    >
+      <CircleAlert
+        aria-hidden="true"
+        className="mt-1 h-4 w-4 shrink-0 text-orange-600 dark:text-orange-300"
+        strokeWidth={1.9}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="whitespace-pre-wrap break-words font-mono text-[13.5px] leading-6 text-orange-900 dark:text-orange-100">
+          {message}
+        </p>
+        {showCode ? (
+          <p className="mt-1 font-mono text-[11.5px] leading-5 text-orange-700/75 dark:text-orange-300/75">
+            {code}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export function MessageTimeline({
   blocks,
   liveReasoning,
@@ -357,6 +410,9 @@ export function MessageTimeline({
   planActionsBusy,
   onBuildPlan,
   onOpenPlan,
+  onOpenChanges,
+  onReviewChanges,
+  reviewChangesDisabled = false,
   compactCards = false,
   onOpenChildThread,
   onComponentPrototypePrompt,
@@ -400,6 +456,7 @@ export function MessageTimeline({
   } | null>(null)
   const [jumpRailPreview, setJumpRailPreview] = useState<{
     key: string
+    index: number
     title: string
     prompt: string
     fileLabels: string[]
@@ -446,6 +503,7 @@ export function MessageTimeline({
     () => {
       const anchors: Array<{
         key: string
+        index: number
         title: string
         prompt: string
         fileLabels: string[]
@@ -464,6 +522,7 @@ export function MessageTimeline({
         const metadata = timelineJumpPreviewMetadata(turn)
         anchors.push({
           key,
+          index: questionIndex,
           title: turnPreview(turn, t('timelineJumpTurn', { index: questionIndex })),
           prompt: turnResponsePreview(turn, t('timelineJumpTurn', { index: questionIndex })),
           ...metadata
@@ -556,6 +615,7 @@ export function MessageTimeline({
   const showJumpRailPreview = (
     anchor: {
       key: string
+      index: number
       title: string
       prompt: string
       fileLabels: string[]
@@ -568,6 +628,7 @@ export function MessageTimeline({
     const railAnchorTop = railAnchor?.getBoundingClientRect().top ?? nodeRect.top
     setJumpRailPreview({
       key: anchor.key,
+      index: anchor.index,
       title: anchor.title,
       prompt: anchor.prompt || anchor.title,
       fileLabels: anchor.fileLabels,
@@ -602,7 +663,7 @@ export function MessageTimeline({
                   type="button"
                   className={`timeline-jump-rail-button${activeTurnKey === anchor.key ? ' is-active' : ''}`}
                   data-wave-distance={waveDistance ?? undefined}
-                  aria-label={anchor.title}
+                  aria-label={`${t('timelineJumpTurn', { index: anchor.index })}: ${anchor.title}`}
                   aria-current={activeTurnKey === anchor.key ? 'true' : undefined}
                   onMouseEnter={(event) => showJumpRailPreview(anchor, event.currentTarget)}
                   onFocus={(event) => showJumpRailPreview(anchor, event.currentTarget)}
@@ -621,7 +682,10 @@ export function MessageTimeline({
               }}
               role="tooltip"
             >
-              <div className="timeline-jump-rail-preview-title">{jumpRailPreview.title}</div>
+              <TimelineJumpPreviewTitle
+                index={jumpRailPreview.index}
+                title={jumpRailPreview.title}
+              />
               <div className="timeline-jump-rail-preview-text">{jumpRailPreview.prompt}</div>
               {jumpRailPreview.fileLabels.length > 0 || jumpRailPreview.hasCommit ? (
                 <div className="timeline-jump-rail-preview-meta" aria-hidden="true">
@@ -759,6 +823,9 @@ export function MessageTimeline({
                 planActionsBusy={planActionsBusy}
                 onBuildPlan={onBuildPlan}
                 onOpenPlan={onOpenPlan}
+                onOpenChanges={onOpenChanges}
+                onReviewChanges={onReviewChanges}
+                reviewChangesDisabled={reviewChangesDisabled}
                 onOpenChildThread={onOpenChildThread}
                 onComponentPrototypePrompt={onComponentPrototypePrompt}
                 filePreviewWorkspaceRoot={filePreviewWorkspaceRoot}
@@ -862,23 +929,7 @@ export function MessageTimeline({
   )
 }
 
-function MessageTurn({
-  turn,
-  isProcessing,
-  liveReasoning,
-  live,
-  durationMs,
-  reasoningDurationMs,
-  devPreviewCard,
-  planActionsBusy,
-  onBuildPlan,
-  onOpenPlan,
-  onOpenChildThread,
-  onComponentPrototypePrompt,
-  filePreviewWorkspaceRoot,
-  viewportRef,
-  compactCards = false
-}: {
+export type ConversationTurnProps = {
   turn: Turn
   isProcessing: boolean
   liveReasoning: string
@@ -889,12 +940,42 @@ function MessageTurn({
   planActionsBusy?: boolean
   onBuildPlan?: () => void
   onOpenPlan?: () => void
+  onOpenChanges?: () => void
+  onReviewChanges?: () => void
+  reviewChangesDisabled?: boolean
   onOpenChildThread?: OpenChildThreadHandler
   onComponentPrototypePrompt?: (prompt: string) => void
   filePreviewWorkspaceRoot: string
   viewportRef: RefObject<HTMLDivElement | null>
   compactCards?: boolean
-}): ReactElement {
+  /** Main-thread actions must stay disabled for isolated side conversations. */
+  allowMainThreadActions?: boolean
+  /** Side conversations must not inherit the active main thread's goal spacing. */
+  showActiveGoal?: boolean
+}
+
+export function ConversationTurn({
+  turn,
+  isProcessing,
+  liveReasoning,
+  live,
+  durationMs,
+  reasoningDurationMs,
+  devPreviewCard,
+  planActionsBusy,
+  onBuildPlan,
+  onOpenPlan,
+  onOpenChanges,
+  onReviewChanges,
+  reviewChangesDisabled = false,
+  onOpenChildThread,
+  onComponentPrototypePrompt,
+  filePreviewWorkspaceRoot,
+  viewportRef,
+  compactCards = false,
+  allowMainThreadActions = true,
+  showActiveGoal = true
+}: ConversationTurnProps): ReactElement {
   const activeThreadGoal = useChatStore((s) => s.activeThreadGoal)
   const forkThreadFromTurn = useChatStore((s) => s.forkThreadFromTurn)
   const rollbackWorkspaceToCheckpoint = useChatStore((s) => s.rollbackWorkspaceToCheckpoint)
@@ -917,7 +998,14 @@ function MessageTurn({
   const liveProcessText = [liveReasoning, liveThink].filter(Boolean).join('\n\n')
   const [workExpandedOverride, setWorkExpandedOverride] = useState<boolean | null>(null)
 
-  const { processBlocks, assistantContentBlocks, componentPrototypeBlocks, generatedFileBlocks, turnFileChanges } = useMemo(
+  const {
+    processBlocks,
+    assistantContentBlocks,
+    runtimeErrorBlocks,
+    componentPrototypeBlocks,
+    generatedFileBlocks,
+    turnFileChanges
+  } = useMemo(
     () =>
       deriveTurnSections({
         turn,
@@ -947,8 +1035,8 @@ function MessageTurn({
   )
   const onlyCompactionProcess = processBlocks.length > 0 && workProcessBlocks.length === 0
   const hasProcessError = workProcessBlocks.some(processBlockHasError)
-  // Keep active failures visible while a turn is still running, but fold
-  // completed failures into the normal work summary until the user opens it.
+  // Keep active process/tool failures visible while a turn is still running,
+  // then fold those execution details into the normal work summary.
   const forceExpandForError = isProcessing && hasProcessError
   const workExpanded = forceExpandForError || (workExpandedOverride ?? isProcessing)
   const reviewBlocks = useMemo(
@@ -980,22 +1068,25 @@ function MessageTurn({
     [...assistantContentBlocks].reverse().find((block) => block.turnId?.trim())?.turnId?.trim() ||
     ''
   const forkActionBlockId =
-    !isProcessing && forkTurnId
+    allowMainThreadActions && !isProcessing && forkTurnId
       ? assistantContentBlocks[assistantContentBlocks.length - 1]?.id
       : undefined
   const rollbackCheckpointId = turn.user?.meta?.workspaceCheckpointId?.trim() ?? ''
   const rollbackActionBlockId =
-    !isProcessing && rollbackCheckpointId
+    allowMainThreadActions && !isProcessing && rollbackCheckpointId
       ? assistantContentBlocks[assistantContentBlocks.length - 1]?.id
       : undefined
 
   // Keep completed reasoning/tool work tucked away, but make the active turn's
   // work visible unless the user explicitly collapses it.
 
-  const hasProcess = (isProcessing && !onlyCompactionProcess) || workProcessBlocks.length > 0
+  const hasProcess =
+    (isProcessing && !onlyCompactionProcess) ||
+    workProcessBlocks.length > 0 ||
+    (runtimeErrorBlocks.length > 0 && typeof durationMs === 'number')
   const showLiveProgress = isProcessing && !onlyCompactionProcess
   const forkFromTurn = async (): Promise<void> => {
-    if (!forkTurnId || forking) return
+    if (!allowMainThreadActions || !forkTurnId || forking) return
     setForking(true)
     try {
       await forkThreadFromTurn(forkTurnId)
@@ -1005,7 +1096,7 @@ function MessageTurn({
   }
   const rollbackWorkspace = async (checkpointId: string): Promise<void> => {
     const targetCheckpointId = checkpointId.trim()
-    if (!targetCheckpointId || rollingBackCheckpointId) return
+    if (!allowMainThreadActions || !targetCheckpointId || rollingBackCheckpointId) return
     setRollingBackCheckpointId(targetCheckpointId)
     try {
       await rollbackWorkspaceToCheckpoint(targetCheckpointId)
@@ -1016,7 +1107,9 @@ function MessageTurn({
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      {turn.user ? <MessageBubble block={turn.user} /> : null}
+      {turn.user ? (
+        <MessageBubble block={turn.user} allowThreadActions={allowMainThreadActions} />
+      ) : null}
 
       {hasProcess ? (
         <div className="flex flex-col gap-1 pb-2">
@@ -1026,7 +1119,7 @@ function MessageTurn({
             durationMs={durationMs}
             reasoningDurationMs={reasoningDurationMs}
             expanded={workExpanded}
-            collapsible={!forceExpandForError}
+            collapsible={workProcessBlocks.length > 0 && !forceExpandForError}
             onToggle={() => setWorkExpandedOverride((value) => !(value ?? isProcessing))}
           />
           {workExpanded && processSections.length > 0 ? (
@@ -1041,6 +1134,7 @@ function MessageTurn({
                   workspaceRoot={filePreviewWorkspaceRoot}
                   viewportRef={viewportRef}
                   onOpenChildThread={onOpenChildThread}
+                  allowThreadActions={allowMainThreadActions}
                 />
               ))}
             </div>
@@ -1061,6 +1155,7 @@ function MessageTurn({
         <MessageBubble
           key={block.id}
           block={block}
+          allowThreadActions={allowMainThreadActions}
           forkAction={
             block.id === forkActionBlockId
               ? {
@@ -1085,7 +1180,10 @@ function MessageTurn({
       ))}
 
       {showLiveAssistant ? (
-        <MessageBubble block={{ kind: 'assistant', id: 'live-assistant', text: liveContent }} />
+        <MessageBubble
+          block={{ kind: 'assistant', id: 'live-assistant', text: liveContent }}
+          allowThreadActions={allowMainThreadActions}
+        />
       ) : null}
 
       <GeneratedFilesPanel blocks={generatedFileBlocks} />
@@ -1096,7 +1194,13 @@ function MessageTurn({
         <ReviewSummaryCard key={review.id} review={review} />
       ))}
 
-      {showLiveProgress ? <LiveTurnProgressRow hasActiveGoal={Boolean(activeThreadGoal)} /> : null}
+      {runtimeErrorBlocks.map((block) => (
+        <TimelineRuntimeError key={block.id} block={block} />
+      ))}
+
+      {showLiveProgress ? (
+        <LiveTurnProgressRow hasActiveGoal={showActiveGoal && Boolean(activeThreadGoal)} />
+      ) : null}
 
       {!isProcessing && devPreviewCard ? devPreviewCard : null}
 
@@ -1111,7 +1215,14 @@ function MessageTurn({
       ) : null}
 
       {!isProcessing && turnFileChanges.length > 0 ? (
-        <TurnChangeSummary changes={turnFileChanges} viewportRef={viewportRef} compact={compactCards} />
+        <TurnChangeSummary
+          changes={turnFileChanges}
+          viewportRef={viewportRef}
+          compact={compactCards}
+          onOpenChanges={allowMainThreadActions ? onOpenChanges : undefined}
+          onReviewChanges={allowMainThreadActions ? onReviewChanges : undefined}
+          reviewChangesDisabled={reviewChangesDisabled}
+        />
       ) : null}
 
       {/* The compaction marker renders LAST so "已压缩上下文" sits at the very
@@ -1155,7 +1266,7 @@ function LiveTurnProgressRow({ hasActiveGoal }: { hasActiveGoal: boolean }): Rea
   )
 }
 
-const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
+const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
   sameTurnContent(prev.turn, next.turn) &&
   prev.isProcessing === next.isProcessing &&
   prev.liveReasoning === next.liveReasoning &&
@@ -1166,9 +1277,14 @@ const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
   prev.planActionsBusy === next.planActionsBusy &&
   prev.onBuildPlan === next.onBuildPlan &&
   prev.onOpenPlan === next.onOpenPlan &&
+  prev.onOpenChanges === next.onOpenChanges &&
+  prev.onReviewChanges === next.onReviewChanges &&
+  prev.reviewChangesDisabled === next.reviewChangesDisabled &&
   prev.onOpenChildThread === next.onOpenChildThread &&
   prev.onComponentPrototypePrompt === next.onComponentPrototypePrompt &&
   prev.filePreviewWorkspaceRoot === next.filePreviewWorkspaceRoot &&
   prev.compactCards === next.compactCards &&
+  prev.allowMainThreadActions === next.allowMainThreadActions &&
+  prev.showActiveGoal === next.showActiveGoal &&
   prev.viewportRef === next.viewportRef
 ))

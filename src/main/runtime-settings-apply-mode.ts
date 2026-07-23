@@ -1,4 +1,4 @@
-import type { AppSettingsV1 } from '../shared/app-settings-types'
+import type { AppSettingsPatch, AppSettingsV1 } from '../shared/app-settings-types'
 import {
   getKunRuntimeSettings,
   getModelProviderProfile,
@@ -8,6 +8,20 @@ import {
 import { clawScheduleMcpSettingsChanged } from './claw-schedule-mcp-config'
 
 export type RuntimeSettingsApplyMode = 'none' | 'hot' | 'restart'
+
+export function runtimeSettingsRollbackPatch(
+  previousWorking: AppSettingsV1,
+  desired: AppSettingsV1
+): AppSettingsPatch {
+  return {
+    agents: { kun: getKunRuntimeSettings(previousWorking) },
+    provider: {
+      ...previousWorking.provider,
+      routePools: desired.provider.routePools,
+      localGateway: desired.provider.localGateway
+    }
+  }
+}
 
 /**
  * Stable equality for the Kun runtime settings. Most fields are flat,
@@ -66,6 +80,8 @@ function modelProviderRuntimeConfigChanged(prev: AppSettingsV1, next: AppSetting
   const a = getModelProviderSettings(prev)
   const b = getModelProviderSettings(next)
   if (!stableSettingsValueEqual(a.proxy, b.proxy)) return true
+  if (!stableSettingsValueEqual(a.routePools, b.routePools)) return true
+  if (a.localGateway.enabled !== b.localGateway.enabled) return true
 
   const aProviders = new Map(a.providers.map((provider) => [provider.id.trim(), provider]))
   const bProviders = new Map(b.providers.map((provider) => [provider.id.trim(), provider]))

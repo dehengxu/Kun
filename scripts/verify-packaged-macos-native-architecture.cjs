@@ -31,6 +31,19 @@ function assertTargetManifest(path, arch, label) {
   }
 }
 
+function packagedSharpBinding(bindingPackage, arch) {
+  const libDirectory = requirePath(join(bindingPackage, 'lib'), 'Sharp binding directory')
+  const prefix = `sharp-darwin-${arch}`
+  const bindings = readdirSync(libDirectory)
+    .filter((name) => name.startsWith(prefix) && name.endsWith('.node'))
+  if (bindings.length !== 1) {
+    throw new Error(
+      `Packaged macOS app must contain exactly one ${prefix} native binding in ${libDirectory}`
+    )
+  }
+  return join(libDirectory, bindings[0])
+}
+
 function assertMachOArchitecture(path, arch, inspect = (candidate) =>
   execFileSync('file', ['-b', candidate], { encoding: 'utf8' }).trim()) {
   const description = String(inspect(path))
@@ -60,10 +73,7 @@ function verifyPackagedMacosNativeArchitecture({ resourcesDir, arch, inspect }) 
   assertTargetManifest(join(canvasPackage, 'package.json'), arch, 'Canvas binding')
 
   const mainExecutable = requirePath(join(contents, 'MacOS', 'Kun'), 'main executable')
-  const binding = requirePath(
-    join(bindingPackage, 'lib', `sharp-darwin-${arch}.node`),
-    'Sharp native binding'
-  )
+  const binding = packagedSharpBinding(bindingPackage, arch)
   const libvipsDirectory = join(libvipsPackage, 'lib')
   const libvipsName = readdirSync(requirePath(libvipsDirectory, 'Sharp libvips directory'))
     .find((name) => name.endsWith('.dylib'))
@@ -102,5 +112,6 @@ if (require.main === module) {
 
 module.exports = {
   assertMachOArchitecture,
+  packagedSharpBinding,
   verifyPackagedMacosNativeArchitecture
 }

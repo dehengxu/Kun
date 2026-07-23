@@ -7,12 +7,33 @@ import {
 } from '../shared/app-settings'
 import type { ModelProviderProbeRequest, ModelProviderProbeResult } from '../shared/kun-gui-api'
 import { upstreamOpenAiModelsUrl } from '../shared/openai-compat-url'
-import { CHATGPT_SUBSCRIPTION_MODEL_IDS } from '../shared/model-provider-presets'
+import {
+  CHATGPT_SUBSCRIPTION_MODEL_IDS,
+  GROK_SUBSCRIPTION_MODEL_IDS
+} from '../shared/model-provider-presets'
 import { fetchWithOptionalProxy } from './proxy-fetch'
 import { isCodexOAuthCredentials, parseCodexCredentials } from './codex-auth'
+import {
+  ensureFreshGrokCredentials,
+  isGrokOAuthCredentials,
+  parseGrokCredentials
+} from './grok-auth'
 
 function isCodexBaseUrl(url: string): boolean {
-  return url.includes('chatgpt.com/backend-api/codex')
+  return hasExpectedHttpsHost(url, 'chatgpt.com') && new URL(url).pathname.startsWith('/backend-api/codex')
+}
+
+function isGrokSubscriptionBaseUrl(url: string): boolean {
+  return hasExpectedHttpsHost(url, 'cli-chat-proxy.grok.com')
+}
+
+function hasExpectedHttpsHost(url: string, host: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' && parsed.hostname === host
+  } catch {
+    return false
+  }
 }
 
 const PROBE_TIMEOUT_MS = 10_000
@@ -72,6 +93,24 @@ export async function probeModelProvider(
       return { ok: false, message: 'ChatGPT 订阅凭据已过期，请重新登录。' }
     }
     return { ok: true, latencyMs: 0, modelIds: [...CHATGPT_SUBSCRIPTION_MODEL_IDS] }
+  }
+  if (isGrokSubscriptionBaseUrl(baseUrl)) {
+    const rawKey = request.apiKey.trim()
+    if (!rawKey) {
+      return { ok: false, message: 'Grok 订阅未登录，请先点击「登录 Grok」。' }
+    }
+    if (!isGrokOAuthCredentials(rawKey)) {
+      return { ok: false, message: 'Grok 订阅凭据格式无效，请重新登录。' }
+    }
+    const fresh = await ensureFreshGrokCredentials(rawKey)
+    const creds = fresh.credentials ?? parseGrokCredentials(fresh.apiKey)
+    if (!creds) {
+      return { ok: false, message: 'Grok 订阅凭据已损坏，请重新登录。' }
+    }
+    if (creds.expiresAt < Date.now()) {
+      return { ok: false, message: 'Grok 订阅凭据已过期，请重新登录。' }
+    }
+    return { ok: true, latencyMs: 0, modelIds: [...GROK_SUBSCRIPTION_MODEL_IDS] }
   }
   const endpointFormat = normalizeModelEndpointFormat(request.endpointFormat)
   if (isCustomModelEndpointFormat(endpointFormat)) {

@@ -6,7 +6,6 @@ import {
   extractLatestTurnAutoOpenDevPreviewUrls,
   extractLatestTurnDevPreviewUrls
 } from '../../lib/dev-preview-detection'
-import { collectComposerChangeSummary } from '../../lib/composer-change-summary'
 import { resolveCodeCanvasWorkspaceRoot } from '../../design/canvas/code-canvas'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import { readDesignThreadRegistry } from '../../design/design-thread-registry'
@@ -76,10 +75,6 @@ export function useWorkbenchDerivedState({
       ),
     [activeThreadId, threads, workspaceRoot]
   )
-  const composerChangeSummary = useMemo(
-    () => collectComposerChangeSummary(timelineBlocks, activeSkillWorkspace),
-    [activeSkillWorkspace, timelineBlocks]
-  )
   const currentSideConversations = useMemo(
     () =>
       Object.values(sideConversations)
@@ -107,7 +102,6 @@ export function useWorkbenchDerivedState({
     activeCodeCanvasWorkspace,
     activeSkillWorkspace,
     codeThreads,
-    composerChangeSummary,
     currentSideConversations,
     currentSideRunningCount,
     devPreviewBlocks,

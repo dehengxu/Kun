@@ -27,6 +27,7 @@ const KUN_RUNTIME_REQUIRED_PATHS = [
   'kun/node_modules/semver/package.json',
   'kun/node_modules/yauzl/package.json',
   'kun/node_modules/yazl/package.json',
+  'kun/node_modules/@cursor/sdk/package.json',
   'kun/node_modules/@modelcontextprotocol/sdk/package.json',
   'kun/node_modules/@kun/extension-api/package.json',
   'kun/node_modules/@kun/extension-api/dist/index.js',
@@ -94,6 +95,20 @@ function npmCommand(args, platform = process.platform) {
   return { command: 'npm', args }
 }
 
+function packedKunPruneArgs(context) {
+  // The pack host may differ from the target architecture. npm 11 otherwise
+  // prunes Cursor's target-specific optional SDK package based on the host,
+  // leaving a package that cannot start its bundled runtime.
+  return [
+    'prune',
+    '--omit=dev',
+    '--ignore-scripts',
+    '--force',
+    `--os=${normalizePlatform(context.electronPlatformName)}`,
+    `--cpu=${normalizeArch(context.arch)}`
+  ]
+}
+
 function prunePackedKunDependencies(context) {
   const root = unpackedAppRoot(context)
   const kunDir = join(root, 'kun')
@@ -102,7 +117,7 @@ function prunePackedKunDependencies(context) {
   assertExists(join(kunDir, 'package.json'), 'Kun package manifest')
   assertExists(join(kunDir, 'node_modules'), 'Kun node_modules')
 
-  const prune = npmCommand(['prune', '--omit=dev', '--ignore-scripts'])
+  const prune = npmCommand(packedKunPruneArgs(context))
   execFileSync(prune.command, prune.args, {
     cwd: kunDir,
     env: {
@@ -145,6 +160,12 @@ function validateBundledKunRuntime(context) {
   for (const relativePath of KUN_RUNTIME_REQUIRED_PATHS) {
     assertExists(join(root, relativePath), relativePath)
   }
+  const cursorPlatformPackage =
+    `kun/node_modules/@cursor/sdk-${normalizePlatform(context.electronPlatformName)}-${normalizeArch(context.arch)}`
+  assertExists(
+    join(root, cursorPlatformPackage, 'package.json'),
+    `${cursorPlatformPackage}/package.json`
+  )
   assertExists(
     join(root, 'node_modules', 'better-sqlite3', 'package.json'),
     'root better-sqlite3 dependency'
@@ -260,7 +281,16 @@ set -eu
 
 case "$0" in
   /*) launcher_path=$0 ;;
-  *) launcher_path=$PWD/$0 ;;
+  *)
+    # AppImage may invoke AppRun through PATH, which leaves the product
+    # launcher's argv[0] as a bare filename. Its APPDIR is the only stable
+    # location for the renamed Electron payload in that case.
+    if [ -n "\${APPDIR:-}" ] && [ -x "\${APPDIR}/${executableName}" ]; then
+      launcher_path="\${APPDIR}/${executableName}"
+    else
+      launcher_path=$PWD/$0
+    fi
+    ;;
 esac
 launcher_dir=\${launcher_path%/*}
 launcher_dir=$(CDPATH= cd -P "$launcher_dir" && pwd -P)
@@ -354,6 +384,7 @@ exports._internals = {
   packedResourcesDir,
   unpackedAppRoot,
   npmCommand,
+  packedKunPruneArgs,
   prunePackedKunDependencies,
   materializePackedWorkspaceDependencies,
   validateBundledKunRuntime,

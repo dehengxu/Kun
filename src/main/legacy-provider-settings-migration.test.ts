@@ -6,15 +6,64 @@ import {
   MODEL_PROVIDER_PRESETS,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
+  getModelProviderPreset,
+  modelProviderPresetAccountProfile,
   modelProviderPresetProfile,
-  resolveKunRuntimeSettings
+  resolveKunRuntimeSettings,
+  type AppSettingsV1
 } from '../shared/app-settings'
-import { LegacyProviderSettingsMigrationCoordinator } from './legacy-provider-settings-migration'
+import {
+  LEGACY_PROVIDER_SOURCE_PREFIX,
+  LegacyProviderSettingsMigrationCoordinator
+} from './legacy-provider-settings-migration'
 import { providersConfigForRuntime } from './runtime/kun-runtime-model-config'
 import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
 import { JsonSettingsStore } from './settings-store'
 
 describe('LegacyProviderSettingsMigrationCoordinator', () => {
+  it('emits distinct protected credential bindings for numbered plan accounts', () => {
+    const providerSettings = defaultModelProviderSettings()
+    const kimi = getModelProviderPreset('kimi-code')!
+    const first = modelProviderPresetAccountProfile(kimi, 'api', [])!
+    const second = modelProviderPresetAccountProfile(kimi, 'api', [first])!
+    const runtimeProviders = providersConfigForRuntime({
+      provider: {
+        ...providerSettings,
+        providers: [...providerSettings.providers, first, second]
+      }
+    } as AppSettingsV1)
+
+    expect(runtimeProviders[first.id]).toEqual(expect.objectContaining({
+      credentialSourceId: 'settings:provider:kimi-code'
+    }))
+    expect(runtimeProviders[second.id]).toEqual(expect.objectContaining({
+      credentialSourceId: 'settings:provider:kimi-code-2'
+    }))
+    expect(runtimeProviders[first.id]?.credentialSourceId).not.toBe(runtimeProviders[second.id]?.credentialSourceId)
+  })
+
+  it('projects Cursor SDK providers without persisting their API keys or requiring a base URL', () => {
+    const providerSettings = defaultModelProviderSettings()
+    const cursor = modelProviderPresetProfile(
+      getModelProviderPreset('cursor-subscription')!,
+      'cursor-secret'
+    )
+    const runtimeProviders = providersConfigForRuntime({
+      provider: {
+        ...providerSettings,
+        providers: [...providerSettings.providers, cursor]
+      }
+    } as AppSettingsV1)
+
+    expect(runtimeProviders[cursor.id]).toEqual(expect.objectContaining({
+      apiKey: '',
+      credentialSourceId: 'settings:provider:cursor-subscription',
+      kind: 'cursor-sdk'
+    }))
+    expect(runtimeProviders[cursor.id]?.baseUrl).toBeUndefined()
+    expect(JSON.stringify(runtimeProviders)).not.toContain('cursor-secret')
+  })
+
   it('backs up and removes plaintext while keeping secure bindings readable across restarts', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-credential-migration-'))
     const dataDir = join(userDataDir, 'runtime-data')
@@ -248,6 +297,88 @@ describe('LegacyProviderSettingsMigrationCoordinator', () => {
 
     expect(loaded.provider.apiKey).toBe('plaintext-must-remain-authoritative')
     expect(prepare).not.toHaveBeenCalled()
+  })
+
+  it('forgets Grok and Codex OAuth bindings when the user clears the provider apiKey', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kun-settings-oauth-disconnect-'))
+    const dataDir = join(userDataDir, 'runtime-data')
+    const plainStore = new JsonSettingsStore(userDataDir)
+    const defaults = await plainStore.load()
+    const providerDefaults = defaultModelProviderSettings()
+    const grokPreset = getModelProviderPreset('grok-subscription')!
+    const codexPreset = getModelProviderPreset('codex')!
+    const grokCredentials = JSON.stringify({
+      kind: 'grok-oauth',
+      accessToken: 'grok-access-token',
+      refreshToken: 'grok-refresh-token',
+      expiresAt: Date.now() + 60_000,
+      email: 'user@x.ai'
+    })
+    const codexCredentials = JSON.stringify({
+      kind: 'codex-oauth',
+      accessToken: 'codex-access-token',
+      refreshToken: 'codex-refresh-token',
+      accountId: 'acct_codex',
+      expiresAt: Date.now() + 60_000,
+      email: 'user@openai.com'
+    })
+    const grok = modelProviderPresetProfile(grokPreset, grokCredentials)!
+    const codex = modelProviderPresetProfile(codexPreset, codexCredentials)!
+    await plainStore.save({
+      ...defaults,
+      provider: {
+        ...providerDefaults,
+        providers: [...providerDefaults.providers, grok, codex]
+      },
+      agents: {
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          dataDir,
+          providerId: 'grok-subscription',
+          model: grok.models[0]!
+        }
+      }
+    })
+
+    const store = new JsonSettingsStore(userDataDir, {
+      credentialMigration: new LegacyProviderSettingsMigrationCoordinator()
+    })
+    const loaded = await store.load()
+    expect(loaded.provider.providers.find((provider) => provider.id === 'grok-subscription')?.apiKey)
+      .toBe(grokCredentials)
+    expect(loaded.provider.providers.find((provider) => provider.id === 'codex')?.apiKey)
+      .toBe(codexCredentials)
+
+    const disconnected = await store.patch({
+      provider: {
+        providers: loaded.provider.providers.map((provider) =>
+          provider.id === 'grok-subscription' || provider.id === 'codex'
+            ? { ...provider, apiKey: '' }
+            : provider
+        )
+      }
+    })
+    expect(disconnected.provider.providers.find((provider) => provider.id === 'grok-subscription')?.apiKey)
+      .toBe('')
+    expect(disconnected.provider.providers.find((provider) => provider.id === 'codex')?.apiKey)
+      .toBe('')
+
+    const markers = JSON.parse(await readFile(
+      join(dataDir, 'extensions', 'legacy-credential-migrations.json'),
+      'utf8'
+    )) as { entries: Record<string, unknown> }
+    expect(markers.entries[`${LEGACY_PROVIDER_SOURCE_PREFIX}grok-subscription`]).toBeUndefined()
+    expect(markers.entries[`${LEGACY_PROVIDER_SOURCE_PREFIX}codex`]).toBeUndefined()
+
+    const reloaded = await new JsonSettingsStore(userDataDir, {
+      credentialMigration: new LegacyProviderSettingsMigrationCoordinator()
+    }).load()
+    expect(reloaded.provider.providers.find((provider) => provider.id === 'grok-subscription')?.apiKey)
+      .toBe('')
+    expect(reloaded.provider.providers.find((provider) => provider.id === 'codex')?.apiKey)
+      .toBe('')
+    expect(JSON.stringify(reloaded)).not.toContain('grok-access-token')
+    expect(JSON.stringify(reloaded)).not.toContain('codex-access-token')
   })
 })
 

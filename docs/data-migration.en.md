@@ -38,4 +38,4 @@ Rollback removes only operation-created data whose identity still matches the jo
 
 ## Rollout flag
 
-Development builds enable the feature for internal verification. Packaged builds require `KUN_DATA_MIGRATION_ENABLED=1`; `0` disables new migrations but does not hide recovery for an interrupted operation. Wider rollout remains gated on security review and packaged cross-platform smoke tests.
+Data migration is enabled by default in development builds and packaged releases. A managed or diagnostic launch can set `KUN_DATA_MIGRATION_ENABLED=0` to disable new exports and imports without hiding recovery for an interrupted operation; `1` explicitly enables the feature.

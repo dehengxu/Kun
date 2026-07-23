@@ -7,7 +7,6 @@ import {
 
 describe('right panel contribution identity migration', () => {
   it('migrates every legacy short mode to a stable builtin identity', () => {
-    expect(normalizeStoredRightPanelId('todo')).toBe(BUILTIN_RIGHT_PANEL_IDS.todo)
     expect(normalizeStoredRightPanelId('changes')).toBe(BUILTIN_RIGHT_PANEL_IDS.changes)
     expect(normalizeStoredRightPanelId('browser')).toBe(BUILTIN_RIGHT_PANEL_IDS.browser)
     expect(normalizeStoredRightPanelId('terminal')).toBe(BUILTIN_RIGHT_PANEL_IDS.terminal)
@@ -17,6 +16,9 @@ describe('right panel contribution identity migration', () => {
     )
     expect(normalizeStoredRightPanelId('sdd-ai')).toBe(BUILTIN_RIGHT_PANEL_IDS.sddAi)
     expect(normalizeStoredRightPanelId('canvas')).toBe(BUILTIN_RIGHT_PANEL_IDS.canvas)
+    expect(normalizeStoredRightPanelId('agent-perspective')).toBe(
+      BUILTIN_RIGHT_PANEL_IDS.agentPerspective
+    )
   })
 
   it('preserves valid extension IDs and ignores stale or malformed layout values', () => {
@@ -24,6 +26,8 @@ describe('right panel contribution identity migration', () => {
     expect(normalizeStoredRightPanelId(extensionId)).toBe(extensionId)
     expect(isRightPanelContributionId(extensionId)).toBe(true)
     expect(normalizeStoredRightPanelId('extension:../escape/view')).toBeNull()
+    expect(normalizeStoredRightPanelId('todo')).toBeNull()
+    expect(normalizeStoredRightPanelId('builtin:right-panel-todo')).toBeNull()
     expect(normalizeStoredRightPanelId('removed-panel')).toBeNull()
   })
 })

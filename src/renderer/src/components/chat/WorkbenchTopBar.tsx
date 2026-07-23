@@ -15,13 +15,13 @@ import {
   Folders,
   FolderOpen,
   Globe2,
-  ListTodo,
   LockKeyhole,
   Loader2,
   MessageCircleMore,
   PanelRight,
   Puzzle,
   RefreshCw,
+  ScanSearch,
   Shapes,
   Terminal
 } from 'lucide-react'
@@ -47,10 +47,10 @@ type Props = {
   onToggleRightPanelMode: (mode: Exclude<RightPanelMode, null>) => void
   planPanelEnabled?: boolean
   canvasEnabled?: boolean
-  sideChatCount?: number
   sideChatRunningCount?: number
   sideChatOpen?: boolean
   sideChatEnabled?: boolean
+  agentPerspectiveEnabled?: boolean
   fileTreeOpen?: boolean
   fileTreeEnabled?: boolean
   onToggleFileTree?: () => void
@@ -385,10 +385,10 @@ export function WorkbenchSideRail({
   onToggleRightPanelMode,
   planPanelEnabled = false,
   canvasEnabled = false,
-  sideChatCount = 0,
   sideChatRunningCount = 0,
   sideChatOpen = false,
   sideChatEnabled = true,
+  agentPerspectiveEnabled = true,
   fileTreeOpen = false,
   fileTreeEnabled = true,
   onToggleFileTree,
@@ -399,7 +399,12 @@ export function WorkbenchSideRail({
 }: Props): ReactElement {
   const { t } = useTranslation(['common', 'settings'])
   const items = [
-    { mode: BUILTIN_RIGHT_PANEL_IDS.todo, label: t('rightPanelTodo'), icon: ListTodo },
+    {
+      mode: BUILTIN_RIGHT_PANEL_IDS.agentPerspective,
+      label: t('rightPanelAgentPerspective'),
+      icon: ScanSearch,
+      disabled: !agentPerspectiveEnabled
+    },
     ...(planPanelEnabled ? [{ mode: BUILTIN_RIGHT_PANEL_IDS.plan, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
     { mode: BUILTIN_RIGHT_PANEL_IDS.changes, label: t('rightPanelChanges'), icon: FileEdit },
     { mode: BUILTIN_RIGHT_PANEL_IDS.browser, label: t('rightPanelBrowser'), icon: Globe2 },
@@ -421,11 +426,6 @@ export function WorkbenchSideRail({
           aria-pressed={sideChatOpen}
         >
           <MessageCircleMore className={TOPBAR_ICON_CLASS} strokeWidth={1.75} />
-          {sideChatCount > 0 ? (
-            <span className="absolute -left-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-white">
-              {Math.min(sideChatCount, 9)}
-            </span>
-          ) : null}
           {sideChatRunningCount > 0 ? (
             <span className="absolute -bottom-0.5 -left-0.5 h-2 w-2 animate-pulse rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.18)]" />
           ) : null}
@@ -440,95 +440,13 @@ export function WorkbenchSideRail({
             key={item.mode}
             type="button"
             onClick={() => onToggleRightPanelMode(item.mode)}
-            className={sideRailButtonClass(active)}
+            disabled={'disabled' in item && item.disabled === true}
+            className={sideRailButtonClass(active, 'disabled:cursor-not-allowed disabled:opacity-45')}
             data-tooltip={item.label}
             aria-label={item.label}
             aria-pressed={active}
           >
             <Icon className={TOPBAR_ICON_CLASS} strokeWidth={1.75} />
-          </button>
-        )
-      })}
-
-      {extensionContainers.map(({ container, target }) => {
-        if (container.owner.kind !== 'extension') return null
-        const active = rightPanelMode === target.id
-        const icon = container.payload.icon
-        const title = boundedPlainText(container.payload.title, 128)
-        const label = target.workspaceTrusted
-          ? title
-          : t('extensionRailAuthorize', { title })
-        return (
-          <button
-            key={container.id}
-            type="button"
-            onClick={() => onSelectExtension
-              ? onSelectExtension(target)
-              : onToggleRightPanelMode(target.id as Exclude<RightPanelMode, null>)}
-            className={sideRailButtonClass(active, 'relative')}
-            data-tooltip={label}
-            aria-label={label}
-            aria-pressed={active}
-            data-contribution-id={container.id}
-            data-extension-trusted={String(target.workspaceTrusted)}
-          >
-            {icon ? (
-              <img
-                src={extensionHostIconUrl(container.owner.extensionId, icon)}
-                alt=""
-                aria-hidden="true"
-                className={TOPBAR_ICON_CLASS}
-              />
-            ) : (
-              <Puzzle className={TOPBAR_ICON_CLASS} strokeWidth={1.75} />
-            )}
-            {!target.workspaceTrusted ? (
-              <span className="absolute -bottom-1 -left-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-500 text-white shadow-sm" aria-hidden>
-                <LockKeyhole className="h-2.5 w-2.5" strokeWidth={2.25} />
-              </span>
-            ) : null}
-          </button>
-        )
-      })}
-
-      {extensionItems.map((item) => {
-        if (item.owner.kind !== 'extension') return null
-        if (extensionContainers.some(({ target }) => target.id === item.id)) return null
-        const active = rightPanelMode === item.id
-        const icon = item.payload.icon
-        const title = boundedPlainText(item.payload.title, 128)
-        const label = item.workspaceTrusted
-          ? title
-          : t('extensionRailAuthorize', { title })
-        return (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => onSelectExtension
-              ? onSelectExtension(item)
-              : onToggleRightPanelMode(item.id as Exclude<RightPanelMode, null>)}
-            className={sideRailButtonClass(active, 'relative')}
-            data-tooltip={label}
-            aria-label={label}
-            aria-pressed={active}
-            data-contribution-id={item.id}
-            data-extension-trusted={String(item.workspaceTrusted)}
-          >
-            {icon ? (
-              <img
-                src={extensionHostIconUrl(item.owner.extensionId, icon)}
-                alt=""
-                aria-hidden="true"
-                className={TOPBAR_ICON_CLASS}
-              />
-            ) : (
-              <Puzzle className={TOPBAR_ICON_CLASS} strokeWidth={1.75} />
-            )}
-            {!item.workspaceTrusted ? (
-              <span className="absolute -bottom-1 -left-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-500 text-white shadow-sm" aria-hidden>
-                <LockKeyhole className="h-2.5 w-2.5" strokeWidth={2.25} />
-              </span>
-            ) : null}
           </button>
         )
       })}
@@ -545,6 +463,93 @@ export function WorkbenchSideRail({
         >
           <Folders className={TOPBAR_ICON_CLASS} strokeWidth={1.75} />
         </button>
+      ) : null}
+
+      {extensionContainers.length > 0 || extensionItems.length > 0 ? (
+        <div className="ds-extension-side-rail-group mt-auto flex shrink-0 flex-col items-center gap-1.5 border-t border-ds-border-muted pt-2">
+          {extensionContainers.map(({ container, target }) => {
+            if (container.owner.kind !== 'extension') return null
+            const active = rightPanelMode === target.id
+            const icon = container.payload.icon
+            const title = boundedPlainText(container.payload.title, 128)
+            const label = target.workspaceTrusted
+              ? title
+              : t('extensionRailAuthorize', { title })
+            return (
+              <button
+                key={container.id}
+                type="button"
+                onClick={() => onSelectExtension
+                  ? onSelectExtension(target)
+                  : onToggleRightPanelMode(target.id as Exclude<RightPanelMode, null>)}
+                className={sideRailButtonClass(active, 'relative')}
+                data-tooltip={label}
+                aria-label={label}
+                aria-pressed={active}
+                data-contribution-id={container.id}
+                data-extension-trusted={String(target.workspaceTrusted)}
+              >
+                {icon ? (
+                  <img
+                    src={extensionHostIconUrl(container.owner.extensionId, icon)}
+                    alt=""
+                    aria-hidden="true"
+                    className={TOPBAR_ICON_CLASS}
+                  />
+                ) : (
+                  <Puzzle className={TOPBAR_ICON_CLASS} strokeWidth={1.75} />
+                )}
+                {!target.workspaceTrusted ? (
+                  <span className="absolute -bottom-1 -left-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-500 text-white shadow-sm" aria-hidden>
+                    <LockKeyhole className="h-2.5 w-2.5" strokeWidth={2.25} />
+                  </span>
+                ) : null}
+              </button>
+            )
+          })}
+
+          {extensionItems.map((item) => {
+            if (item.owner.kind !== 'extension') return null
+            if (extensionContainers.some(({ target }) => target.id === item.id)) return null
+            const active = rightPanelMode === item.id
+            const icon = item.payload.icon
+            const title = boundedPlainText(item.payload.title, 128)
+            const label = item.workspaceTrusted
+              ? title
+              : t('extensionRailAuthorize', { title })
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onSelectExtension
+                  ? onSelectExtension(item)
+                  : onToggleRightPanelMode(item.id as Exclude<RightPanelMode, null>)}
+                className={sideRailButtonClass(active, 'relative')}
+                data-tooltip={label}
+                aria-label={label}
+                aria-pressed={active}
+                data-contribution-id={item.id}
+                data-extension-trusted={String(item.workspaceTrusted)}
+              >
+                {icon ? (
+                  <img
+                    src={extensionHostIconUrl(item.owner.extensionId, icon)}
+                    alt=""
+                    aria-hidden="true"
+                    className={TOPBAR_ICON_CLASS}
+                  />
+                ) : (
+                  <Puzzle className={TOPBAR_ICON_CLASS} strokeWidth={1.75} />
+                )}
+                {!item.workspaceTrusted ? (
+                  <span className="absolute -bottom-1 -left-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-500 text-white shadow-sm" aria-hidden>
+                    <LockKeyhole className="h-2.5 w-2.5" strokeWidth={2.25} />
+                  </span>
+                ) : null}
+              </button>
+            )
+          })}
+        </div>
       ) : null}
 
     </div>

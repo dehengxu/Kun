@@ -50,6 +50,7 @@ describe('ContributionRegistry', () => {
     expect(registry.has(BUILTIN_RIGHT_PANEL_IDS.terminal)).toBe(true)
     expect(registry.has(BUILTIN_RIGHT_PANEL_IDS.files)).toBe(true)
     expect(registry.has(BUILTIN_RIGHT_PANEL_IDS.sideConversations)).toBe(true)
+    expect(registry.has(BUILTIN_RIGHT_PANEL_IDS.agentPerspective)).toBe(true)
     const view = registry.get('extension:acme.issues/issues')
     expect(view?.owner).toMatchObject({ kind: 'extension', extensionId: 'acme.issues' })
     expect(view?.point).toBe('views.rightSidebar')
@@ -82,7 +83,7 @@ describe('ContributionRegistry', () => {
     ]))
 
     expect(registry.get('extension:acme.duplicate/same')).toBeUndefined()
-    expect(registry.has(BUILTIN_RIGHT_PANEL_IDS.todo)).toBe(true)
+    expect(registry.has(BUILTIN_RIGHT_PANEL_IDS.changes)).toBe(true)
     expect(registry.getDiagnostics().some((item) => item.code === 'CONTRIBUTION_DUPLICATE_ID')).toBe(true)
   })
 

@@ -46,6 +46,7 @@ describe('composeModelRequest', () => {
     })
     for (const key of [
       'providerId',
+      'threadProfileInstruction',
       'modeInstruction',
       'contextInstructions',
       'attachments',
@@ -60,7 +61,7 @@ describe('composeModelRequest', () => {
     expect(composed.sentInputTokens).toBe(estimateModelRequestInputTokens(composed.request))
   })
 
-  it('preserves request field ordering inputs and augments a thread persona', () => {
+  it('preserves the stable prompt and separates a thread persona', () => {
     const prefix = createImmutablePrefix({ systemPrompt: 'runtime base' })
     const composed = composeModelRequest({
       threadId,
@@ -95,7 +96,10 @@ describe('composeModelRequest', () => {
       providerId: 'provider_a',
       accountId: 'account_a',
       reasoningEffort: 'high',
-      systemPrompt: 'runtime base\n\npersona rules',
+      systemPrompt: 'runtime base',
+      threadProfileInstruction: expect.stringContaining(
+        '<kun_thread_profile>\npersona rules\n</kun_thread_profile>'
+      ),
       modeInstruction: 'plan mode',
       contextInstructions: ['runtime context', 'memory context'],
       requiredToolName: 'read',
@@ -104,6 +108,7 @@ describe('composeModelRequest', () => {
       attachmentTextFallbacks: [{ id: 'fallback' }],
       attachmentDocuments: [{ id: 'document' }]
     })
+    expect(composed.request.threadProfileInstruction).toContain('cannot override Kun policy')
   })
 
   it('caps images before economy and hygiene without mutating source history', () => {

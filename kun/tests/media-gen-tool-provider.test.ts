@@ -9,6 +9,8 @@ import {
   buildMusicGenToolProviders,
   buildSpeechGenToolProviders,
   buildVideoGenToolProviders,
+  createVideoGenClient,
+  GrokImagineVideoClient,
   MimoSpeechClient,
   MiniMaxMusicClient,
   MiniMaxSpeechClient,
@@ -379,6 +381,85 @@ describe('Media gen tool provider', () => {
     expect(updates).toEqual([
       { output: { status: 'submitted', taskId: 'task-1', provider: 'minimax-video' } },
       { output: { status: 'success', taskId: 'task-1', provider: 'minimax-video' } }
+    ])
+  })
+
+  it('polls Grok Imagine video generation and downloads the finished file', async () => {
+    expect(createVideoGenClient({
+      protocol: 'grok-imagine-video',
+      baseUrl: 'https://api.x.ai/v1',
+      apiKey: 'grok-access'
+    }).id).toBe('grok-imagine-video')
+
+    const requests: Array<{
+      url: string
+      method?: string
+      headers: Headers
+      body?: Record<string, unknown>
+    }> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      requests.push({
+        url: href,
+        method: init?.method,
+        headers: new Headers(init?.headers),
+        ...(init?.body ? { body: JSON.parse(String(init.body)) as Record<string, unknown> } : {})
+      })
+      if (href.endsWith('/videos/generations')) {
+        return new Response(JSON.stringify({ request_id: 'video-request-1' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      if (href.endsWith('/videos/video-request-1')) {
+        return new Response(JSON.stringify({
+          status: 'done',
+          video: { url: 'https://cdn.example.test/grok-video.mp4' }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      expect(href).toBe('https://cdn.example.test/grok-video.mp4')
+      return new Response(new Uint8Array(Buffer.from('grok-video')), {
+        status: 200,
+        headers: { 'content-type': 'video/mp4' }
+      })
+    }))
+    const updates: ToolExecutionUpdate[] = []
+    const client = new GrokImagineVideoClient('https://api.x.ai/v1', 'grok-access', {
+      'x-grok-client-version': '0.2.106',
+      'x-grok-client-identifier': 'kun'
+    })
+
+    const media = await client.generate({
+      prompt: 'Animate the clouds',
+      model: 'grok-imagine-video-1.5-preview',
+      duration: 6,
+      resolution: '720P',
+      firstFrameImage: { mimeType: 'image/png', data: Buffer.from('source-image') },
+      timeoutMs: 1_000,
+      pollIntervalMs: 1,
+      signal: new AbortController().signal,
+      onUpdate: (update) => {
+        updates.push(update)
+      }
+    })
+
+    expect(media.data.toString('utf8')).toBe('grok-video')
+    expect(requests[0].url).toBe('https://api.x.ai/v1/videos/generations')
+    expect(requests[0].headers.get('authorization')).toBe('Bearer grok-access')
+    expect(requests[0].headers.get('x-grok-client-identifier')).toBe('kun')
+    expect(requests[0].body).toEqual({
+      model: 'grok-imagine-video-1.5-preview',
+      prompt: 'Animate the clouds',
+      duration: 6,
+      resolution: '720p',
+      image: { url: `data:image/png;base64,${Buffer.from('source-image').toString('base64')}` },
+      reference_images: []
+    })
+    expect(requests[1].url).toBe('https://api.x.ai/v1/videos/video-request-1')
+    expect(requests[2].headers.get('authorization')).toBeNull()
+    expect(updates).toEqual([
+      { output: { status: 'submitted', taskId: 'video-request-1', provider: 'grok-imagine-video' } },
+      { output: { status: 'done', taskId: 'video-request-1', provider: 'grok-imagine-video' } }
     ])
   })
 })

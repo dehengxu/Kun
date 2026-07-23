@@ -21,23 +21,38 @@ async function fixture() {
     join(root, 'node_modules', '@napi-rs', 'canvas', 'package.json'),
     JSON.stringify({ name: '@napi-rs/canvas', version: '0.1.100' })
   )
+  await mkdir(join(root, 'kun', 'node_modules', '@cursor', 'sdk'), { recursive: true })
+  await writeFile(
+    join(root, 'kun', 'node_modules', '@cursor', 'sdk', 'package.json'),
+    JSON.stringify({ name: '@cursor/sdk', version: '1.0.24' })
+  )
   return root
 }
 
 test('uses npm cross-platform flags without changing package metadata', () => {
-  assert.deepEqual(nativeInstallArguments('x64', { sharp: '0.34.5', canvas: '0.1.100' }), [
+  assert.deepEqual(nativeInstallArguments('x64', {
+    sharp: '0.34.5',
+    canvas: '0.1.100',
+    cursorSdk: '1.0.24'
+  }), [
     'install',
     '--no-save',
     '--package-lock=false',
     '--ignore-scripts',
     '--include=optional',
+    '--force',
     '--os=darwin',
     '--cpu=x64',
     'sharp@0.34.5',
-    '@napi-rs/canvas@0.1.100'
+    '@napi-rs/canvas@0.1.100',
+    '@cursor/sdk-darwin-x64@1.0.24'
   ])
   assert.throws(
-    () => nativeInstallArguments('ia32', { sharp: '0.34.5', canvas: '0.1.100' }),
+    () => nativeInstallArguments('ia32', {
+      sharp: '0.34.5',
+      canvas: '0.1.100',
+      cursorSdk: '1.0.24'
+    }),
     /Unsupported/
   )
 })
@@ -65,11 +80,17 @@ test('requires target Sharp, libvips, and Canvas packages after installation', a
         join(canvasDirectory, 'package.json'),
         JSON.stringify({ name: '@napi-rs/canvas-darwin-x64', os: ['darwin'], cpu: ['x64'] })
       )
+      const cursorDirectory = join(options.cwd, 'node_modules', '@cursor', 'sdk-darwin-x64')
+      require('node:fs').mkdirSync(cursorDirectory, { recursive: true })
+      require('node:fs').writeFileSync(
+        join(cursorDirectory, 'package.json'),
+        JSON.stringify({ name: '@cursor/sdk-darwin-x64', os: ['darwin'], cpu: ['x64'] })
+      )
     }
   })
   assert.deepEqual(result, {
     arch: 'x64',
-    versions: { sharp: '0.34.5', canvas: '0.1.100' }
+    versions: { sharp: '0.34.5', canvas: '0.1.100', cursorSdk: '1.0.24' }
   })
   assert.equal(calls.length, 1)
   assert.ok(calls[0].args.includes('--cpu=x64'))

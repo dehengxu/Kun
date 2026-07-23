@@ -1,6 +1,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_KUN_CAPABILITIES_CONFIG } from '../contracts/capabilities.js'
 import { expandHomePath, RuntimeTuningConfigSchema } from './kun-config.js'
 
 describe('RuntimeTuningConfigSchema streamIdleTimeoutMs', () => {
@@ -32,6 +33,12 @@ describe('RuntimeTuningConfigSchema turn admission', () => {
     expect(RuntimeTuningConfigSchema.safeParse({
       turnLimits: { maxConcurrentTurns: 257 }
     }).success).toBe(false)
+  })
+})
+
+describe('default subagent parallelism', () => {
+  it('defaults max parallel subagent runs to 256', () => {
+    expect(DEFAULT_KUN_CAPABILITIES_CONFIG.subagents.maxParallel).toBe(256)
   })
 })
 

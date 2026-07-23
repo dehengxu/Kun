@@ -127,9 +127,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install host-native FFmpeg
+      - name: Install host-native FFmpeg and Whisper build tooling
         run: |
-          brew install ffmpeg-full
+          brew install cmake ffmpeg-full
           ffmpeg_bin="$(brew --prefix ffmpeg-full)/bin"
           "$ffmpeg_bin/ffmpeg" -hide_banner -filters 2>&1 | grep -Eq '[[:space:]]drawtext[[:space:]]'
           echo "$ffmpeg_bin" >> "$GITHUB_PATH"

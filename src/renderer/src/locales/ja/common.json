@@ -1558,6 +1558,7 @@
   "composerVoiceFailed": "音声文字起こしに失敗しました: {{message}}",
   "composerImageUnavailable": "このランタイムでは画像入力は利用できません。",
   "composerAttachmentUnavailable": "添付ファイルのアップロードは利用できません。",
+  "composerDropFilesHere": "離すとこの会話にファイルを追加します",
   "composerAttachmentModelUnsupported": "選択された機種は画像を読み込めません。ビジョンモデルに切り替えるか、アタッチメントを取り外してください。",
   "composerPdfAttachmentUnavailable": "このファイルでは PDF テキスト抽出は利用できません。",
   "composerPdfAttachmentNoText": "この PDF には抽出可能なテキストが含まれておらず、内蔵 OCR は読み取り可能なテキストを検出できませんでした。より鮮明なスキャンを試すか、関連するページを貼り付けてください。",
@@ -1583,8 +1584,8 @@
   "composerPlanPlaceholder": "実行前に目標を細分化し、手順の概要と範囲の変更を行います…",
   "composerSlashHint": "コマンドの場合は「/」と入力します",
   "workingDirectory": "作業ディレクトリ",
-  "emptyHeroTitle": "新しい会話を開始する",
-  "emptyHeroSub": "タスクを選択するか、質問を入力してください",
+  "emptyHeroTitle": "今日は Kun と何をしますか？",
+  "emptyHeroSub": "アイデアを説明するか、新しいタスクを始めましょう",
   "emptyHeroSubNoWorkspace": "まずローカルの作業ディレクトリを選択してから、最初のスレッドを開始します。",
   "usageHeatmapBadge": "くんの使い方",
   "usageHeatmapTitle": "最近のエージェントのリズム",
@@ -1743,6 +1744,9 @@
   "queuedMessagesTitle": "{{count}} 個がキューに入れられました",
   "queuedMessagesHint": "これらのメッセージは、現在の返信が終了した後に自動的に送信されます。",
   "queuedMessageRemove": "キューに入れられたメッセージを削除する",
+  "queuedMessageMoreActions": "キューのメッセージのその他の操作",
+  "queuedMessageEdit": "メッセージを編集",
+  "queuedMessageReorder": "ドラッグしてキューの順序を変更",
   "guideQueuedMessage": "ガイド",
   "guideQueuedMessagePending": "導き",
   "guideQueuedMessageHint": "この入力をエージェントの次のモデル インタラクションに追加します",
@@ -1833,6 +1837,11 @@
   "sidePanelTitle": "ブランチ会話",
   "sidePanelOpen": "ブランチでの会話を開く",
   "sidePanelNew": "新しい分岐の会話",
+  "sidePanelTabTitle": "ブランチ会話 {{index}}",
+  "sidePanelNewTabTitle": "新しいブランチ",
+  "sidePanelOriginMeta": "「{{title}}」から · {{time}}",
+  "sidePanelDraftOrigin": "「{{title}}」から新しいブランチ",
+  "sidePanelSwitch": "ブランチ会話を切り替える",
   "sidePanelParentLabel": "From \"{{title}}\"",
   "sidePanelParentMissing": "ブランチ会話",
   "sidePanelHide": "分岐パネルを非表示にする",
@@ -1863,7 +1872,6 @@
   "rightPanelRuntime": "ランタイム",
   "rightPanelPlan": "計画",
   "rightPanelFiles": "ファイル",
-  "rightPanelTodo": "藤堂",
   "rightPanelCanvas": "キャンバス",
   "rightPanelWhiteboard": "ホワイトボード",
   "canvasPanelNeedsThread": "キャンバスを使用するには、会話を開くか開始します。",
@@ -1874,7 +1882,6 @@
   "rightPanelBrowserTool": "ブラウザ",
   "rightPanelNewBrowserTab": "新しいタブ",
   "rightPanelSideConversations": "ブランチ会話",
-  "rightPanelTodoTool": "藤堂",
   "rightPanelChangesReview": "変更・見直し",
   "rightPanelTabs": "右のワークスペースタブ",
   "rightPanelCloseTab": "{{title}}を閉じる",
@@ -2139,15 +2146,6 @@
   },
   "goalUpdatedTimeline": "Goal {{status}}: {{objective}}",
   "goalClearedTimeline": "ゴールクリア",
-  "todoPanelTitle": "スレッドTodo",
-  "todoClear": "Todoをクリアする",
-  "todoEmptyTitle": "まだ ToDo がありません",
-  "todoEmptyDescription": "このスレッドの計画チェックリストとモデルで作成された ToDo がここに表示されます。",
-  "todoStatusPending": "保留中",
-  "todoStatusInProgress": "アクティブ",
-  "todoStatusCompleted": "完了",
-  "todoMarkPending": "マーク保留中",
-  "todoMarkCompleted": "完了としてマークを付ける",
   "todoProgressStep": "ステップ {{current}} / {{total}}",
   "todoProgressAria": "Todo の進行状況: ステップ {{current}} / {{total}}",
   "todoProgressDetails": "Todoの詳細",
@@ -2165,6 +2163,18 @@
   "sidebarEmptySubOffline": "まずランタイムを接続してから、上から最初のスレッドを作成します。",
   "sidebarWorkspaceEmpty": "まだスレッドがありません",
   "sidebarWorkspaceNewThread": "新しいスレッド",
+  "sidebarFolderCreate": "新しいフォルダー",
+  "sidebarFolderCreatePrompt": "フォルダー名を入力してください。サイドバーの整理専用で、ディスク上には作成されません。",
+  "sidebarFolderRename": "フォルダー名を変更",
+  "sidebarFolderRenamePrompt": "新しいフォルダー名を入力",
+  "sidebarFolderNameExists": "このプロジェクトには同じ名前のフォルダーが既にあります。",
+  "sidebarFolderDelete": "フォルダーを削除",
+  "sidebarFolderDeleteDialogTitle": "「{{name}}」を削除しますか？",
+  "sidebarFolderDeleteDialogDescription": "サイドバーのフォルダーだけが削除されます。会話やプロジェクトファイルは削除されません。",
+  "sidebarFolderDeleteDialogDetail": "フォルダー内の {{count}} 件のスレッドはプロジェクト直下に戻ります。",
+  "sidebarFolderDeleteConfirmButton": "フォルダーを削除",
+  "sidebarFolderAriaLabel": "{{name}}、{{count}} 件のスレッド",
+  "sidebarFolderEmpty": "スレッドをここにドラッグ",
   "sidebarWorkspaceShowMore": "もっと見る (あと {{count}} 件)",
   "sidebarWorkspaceShowLess": "表示を少なくする",
   "sidebarWorkspaceArchiveThreads": "このプロジェクト内のすべてのスレッドをアーカイブする",
@@ -2691,6 +2701,8 @@
   "groupEditedFile": "1ファイルを編集しました",
   "turnChangeFilesOne": "1ファイルを編集しました",
   "turnChangeFilesMany": "{{count}} 個のファイルを編集しました",
+  "turnChangeShowMore": "残り {{count}} ファイルを表示",
+  "turnChangeShowFewer": "表示するファイルを減らす",
   "groupRanCommands": "{{count}} コマンドを実行しました",
   "groupRanCommand": "1 コマンドを実行しました",
   "groupRanBackgroundCommands": "{{count}} 個のバックグラウンド コマンドを実行しました",
@@ -2770,6 +2782,9 @@
   "componentPrototypeIterate": "調整を続ける",
   "componentPrototypeAdopt": "デザインを採用",
   "subagentDefaultName": "復代理人",
+  "subagentAgentLabel": "エージェント",
+  "subagentModelLabel": "モデル",
+  "subagentNotRecorded": "記録なし",
   "subagentStatusQueued": "キューに入れられました",
   "subagentStatusRunning": "ランニング",
   "subagentStatusDone": "完了",
@@ -2906,6 +2921,110 @@
   "expandSidebar": "サイドバーを展開する",
   "rightPanelSubagents": "サブエージェント",
   "rightPanelMcpSkills": "MCPとスキル",
+  "rightPanelAgentPerspective": "エージェント視点",
+  "agentPerspectiveTitle": "エージェント視点",
+  "agentPerspectiveSubtitle": "この会話のモデルリクエスト：{{count}}件",
+  "agentPerspectiveRefresh": "リクエストを更新",
+  "agentPerspectiveLoading": "読み込み中…",
+  "agentPerspectiveEmpty": "この会話ではモデルHTTPリクエストがまだ記録されていません。",
+  "agentPerspectiveUnsupported": "モデルリクエストを確認するCode会話を選択してください。",
+  "agentPerspectiveLoadError": "モデルリクエストを読み込めません：{{error}}",
+  "agentPerspectiveLoadOlder": "以前のリクエストを読み込む",
+  "agentPerspectiveDetailSections": "リクエスト詳細セクション",
+  "agentPerspectiveOverview": "概要",
+  "agentPerspectiveRequest": "リクエスト",
+  "agentPerspectiveResponse": "レスポンス",
+  "agentPerspectiveDecoded": "解析結果",
+  "agentPerspectiveHeaders": "ヘッダー",
+  "agentPerspectiveBody": "リクエスト本文",
+  "agentPerspectiveRawResponse": "生レスポンス",
+  "agentPerspectiveRaw": "生データ",
+  "agentPerspectivePretty": "整形",
+  "agentPerspectiveCopy": "コピー",
+  "agentPerspectiveCopied": "コピーしました",
+  "agentPerspectiveRedacted": "認証情報はこのトレースの保存前に秘匿されました。",
+  "agentPerspectiveTruncated": "切り詰め済み",
+  "agentPerspectiveTruncationNotice": "キャプチャ上限に達しました。プロバイダーへの実リクエストは変更されていません。",
+  "agentPerspectiveNoResponse": "この試行ではHTTPレスポンスを受信していません。",
+  "agentPerspectiveNoDecoded": "この試行には解析済みモデル出力がありません。",
+  "agentPerspectiveAttempt": "試行",
+  "agentPerspectiveInitial": "初回",
+  "agentPerspectiveTransportRetry": "通信再試行",
+  "agentPerspectiveStreamFallback": "ストリーム互換フォールバック",
+  "agentPerspectivePending": "処理中",
+  "agentPerspectiveCompleted": "完了",
+  "agentPerspectiveTransportError": "通信エラー",
+  "agentPerspectiveCaptureError": "キャプチャエラー",
+  "agentPerspectiveDuration": "所要時間",
+  "agentPerspectiveTimeToHeaders": "ヘッダー受信まで",
+  "agentPerspectiveProvider": "プロバイダー",
+  "agentPerspectiveModel": "モデル",
+  "agentPerspectiveEndpointFormat": "エンドポイント形式",
+  "agentPerspectiveStartedAt": "開始日時",
+  "agentPerspectiveStatus": "状態",
+  "agentPerspectiveUrl": "最終リクエストURL",
+  "agentPerspectiveEventSubtitle": "{{events}}ステップ · {{requests}}モデルリクエスト",
+  "agentPerspectiveSearch": "ステップを検索",
+  "agentPerspectiveSearchPlaceholder": "モデル、ツール、タイトルを検索…",
+  "agentPerspectiveFilterAll": "すべて",
+  "agentPerspectiveFilterLlm": "LLM",
+  "agentPerspectiveFilterTools": "ツール",
+  "agentPerspectiveFilterTitles": "タイトル",
+  "agentPerspectiveNoMatchingEvents": "一致するステップはありません",
+  "agentPerspectiveSemanticRequest": "意味リクエスト",
+  "agentPerspectiveRawRequest": "生リクエスト",
+  "agentPerspectiveStreamEvents": "ストリームイベント",
+  "agentPerspectiveTiming": "タイミング",
+  "agentPerspectiveLlmRequest": "LLMリクエスト",
+  "agentPerspectiveToolCall": "ツール呼び出し",
+  "agentPerspectiveTitleGeneration": "タイトル生成",
+  "agentPerspectiveTokens": "{{count}} tokens",
+  "agentPerspectiveCacheHit": "キャッシュヒット {{rate}}%",
+  "agentPerspectiveRequestComposition": "リクエスト構成（推定）",
+  "agentPerspectiveSystemPrompt": "システムプロンプト",
+  "agentPerspectiveSkills": "Skills",
+  "agentPerspectiveToolDefinitions": "ツール定義",
+  "agentPerspectiveMessages": "メッセージ",
+  "agentPerspectiveParameters": "パラメータ",
+  "agentPerspectiveNoSkills": "Skillは注入されていません",
+  "agentPerspectiveNoTools": "ツール定義は送信されていません",
+  "agentPerspectiveNoMessages": "メッセージはありません",
+  "agentPerspectiveToolCompleted": "ツール結果を受信しました",
+  "agentPerspectiveToolPending": "ツール結果を待機中",
+  "agentPerspectiveCallId": "呼び出しID",
+  "agentPerspectiveParentRequest": "元のリクエスト",
+  "agentPerspectiveToolArguments": "ツール引数",
+  "agentPerspectiveToolResult": "ツール結果",
+  "agentPerspectiveToolResultPending": "ツールは要求されましたが、結果はまだ後続リクエストにありません。",
+  "agentPerspectiveGeneratedTitle": "生成されたタイトル",
+  "agentPerspectiveResponseOutput": "モデル出力",
+  "agentPerspectiveReasoningOutput": "推論出力",
+  "agentPerspectiveToolCalls": "ツール呼び出し",
+  "agentPerspectiveUsage": "使用量",
+  "agentPerspectiveResponseStartedAt": "レスポンス開始",
+  "agentPerspectiveFinishedAt": "完了",
+  "agentPerspectivePrivacyNotice": "認証情報は秘匿され、内容はこの端末にのみ保存されます。",
+  "agentPerspectiveSkillActive": "有効",
+  "agentPerspectiveToolSourceSummary": "{{groups}} 件の提供元 · {{tools}} 個のツール",
+  "agentPerspectiveSourceKun": "Kun システム",
+  "agentPerspectiveSourceMcp": "MCP",
+  "agentPerspectiveSourceExtension": "拡張機能",
+  "agentPerspectiveSourceUnclassified": "未分類",
+  "agentPerspectiveKunCore": "共通コア",
+  "agentPerspectiveKunGui": "GUI 専用",
+  "agentPerspectiveKunRuntime": "ランタイム機能",
+  "agentPerspectiveMcpServer": "MCP サーバー",
+  "agentPerspectiveExtensionProvider": "拡張 Provider",
+  "agentPerspectiveProviderUnknown": "不明な提供元",
+  "agentPerspectiveKunManaged": "Kun 管理",
+  "agentPerspectiveMcpDiscovery": "検出機能",
+  "agentPerspectiveHistoricalInference": "履歴から推定",
+  "agentPerspectiveToolSource": "ツールの提供元",
+  "agentPerspectiveExpandToolSource": "{{source}} ツールを切り替え",
+  "agentPerspectiveExpandToolProvider": "{{provider}} グループを切り替え",
+  "agentPerspectiveExpandTool": "{{tool}} の詳細を切り替え",
+  "agentPerspectiveNoToolDescription": "説明なし",
+  "agentPerspectiveToolSchema": "{{tool}} の入力スキーマ",
   "mcpSkillsPanel": {
     "projectScope": "現在のプロジェクト",
     "globalScope": "グローバル",
@@ -2946,11 +3065,80 @@
     "system": "システム・内部",
     "global": "グローバル・共有",
     "newSubagent": "新しいサブエージェント",
+    "delegatableCount": "委任可能なロール {{count}} 個",
+    "configuredCount": "設定済み {{count}} 個",
+    "showingCount": "{{visible}} / {{total}} 件を表示",
+    "policySummary": "キューとセッションの上限",
+    "search": "サブエージェントを検索",
+    "searchPlaceholder": "名前、能力、ユースケースで検索",
+    "clearSearch": "検索をクリア",
+    "toggleCategory": "{{category}} カテゴリを開閉",
+    "batchModel": "一括モデル",
+    "mixedModels": "複数モデル",
+    "mixedConfiguration": "複数の設定",
+    "categoryConfiguration": "カテゴリのデフォルト設定",
+    "categoryConfigurationDesc": "このカテゴリのすべてのエージェントに同じデフォルトを適用します",
+    "resetCategoryConfiguration": "デフォルトに戻す",
+    "effectiveModel": "有効なモデル",
+    "batchModelAria": "{{category}} の {{count}} 個のエージェントを同じモデルに設定",
+    "reasoning": "推論強度",
+    "mixedReasoning": "複数の推論",
+    "batchReasoningAria": "{{category}} の {{count}} 個のエージェントを同じ推論強度に設定",
+    "capabilities": "能力",
+    "emptyTitle": "一致するサブエージェントがありません",
+    "emptySearch": "別の名前、能力、ユースケースをお試しください。",
+    "emptyCategory": "別のカテゴリを選択してください。",
+    "surface": {
+      "shared": "基本",
+      "code": "Code",
+      "write": "執筆",
+      "design": "デザイン"
+    },
+    "surfaceInherited": "基本から継承",
+    "surfaceAssigned": "このモードで利用可能",
+    "surfaceUnassigned": "このモードでは利用不可",
+    "pagination": "Agent ページ",
+    "pageSummary": "{{page}} / {{pages}} ページ · {{count}} Agent",
+    "previousPage": "前のページ",
+    "nextPage": "次のページ",
+    "extensionAgents": {
+      "title": "拡張エージェント",
+      "description": "基本セット以外のエージェント · {{count}}",
+      "enabled": "有効",
+      "disabled": "無効",
+      "toggle": "拡張エージェントを切り替え",
+      "keepBaseOnly": "基本エージェントのみ",
+      "enableExtensions": "拡張エージェントを有効化",
+      "baseAlwaysAvailable": "基本エージェントは常に利用できます"
+    },
+    "category": {
+      "all": "すべて",
+      "baseAgent": "基本エージェント",
+      "development": "開発",
+      "review": "レビュー",
+      "quality": "品質",
+      "planning": "計画",
+      "operations": "運用",
+      "research": "調査",
+      "custom": "カスタム"
+    },
     "smallModel": {
       "name": "小型モデル",
       "desc": "タイトルと概要のデフォルト"
     },
     "role": {
+      "general": {
+        "name": "一般",
+        "desc": "充実したツール・多段階作業"
+      },
+      "explore": {
+        "name": "探検する",
+        "desc": "読み取り専用 · コードの検索と検索"
+      },
+      "component-designer": {
+        "name": "Component Designer",
+        "desc": "Focused interactive component prototype"
+      },
       "design-reviewer": {
         "name": "デザインレビュー",
         "desc": "デザインレビューア · 読み取り専用"
@@ -2958,6 +3146,166 @@
       "over-engineering-reviewer": {
         "name": "オーバーエンジニアリングのレビュー",
         "desc": "オーバーエンジニアリングレビューアー · 読み取り専用"
+      },
+      "code-reviewer": {
+        "name": "コードレビュー担当",
+        "desc": "5 観点レビュー · 読み取り専用"
+      },
+      "test-engineer": {
+        "name": "テストエンジニア",
+        "desc": "テスト戦略 · テストの作成と実行が可能"
+      },
+      "security-auditor": {
+        "name": "セキュリティ監査担当",
+        "desc": "脅威と OWASP リスク · 読み取り専用"
+      },
+      "web-performance-auditor": {
+        "name": "Web パフォーマンス監査担当",
+        "desc": "Core Web Vitals · 証拠ベース"
+      },
+      "api-and-interface-design": {
+        "name": "API & Interface Architect",
+        "desc": "Stable public contracts · compatibility and validation"
+      },
+      "browser-testing-with-devtools": {
+        "name": "Web QA Planner",
+        "desc": "Browser and accessibility verification plans · read-only"
+      },
+      "ci-cd-and-automation": {
+        "name": "CI/CD Engineer",
+        "desc": "Pipelines, quality gates, and rollback-safe releases"
+      },
+      "code-review-and-quality": {
+        "name": "Code Quality Reviewer",
+        "desc": "Multi-axis correctness and architecture review · read-only"
+      },
+      "code-simplification": {
+        "name": "Code Simplification Engineer",
+        "desc": "Reduce complexity · preserve behavior"
+      },
+      "context-engineering": {
+        "name": "Context Engineer",
+        "desc": "Minimal authoritative context pack · read-only"
+      },
+      "debugging-and-error-recovery": {
+        "name": "Root Cause Debugger",
+        "desc": "Reproduce, localize, fix, and regression-test"
+      },
+      "deprecation-and-migration": {
+        "name": "Migration Engineer",
+        "desc": "Staged compatibility, data migration, and rollback"
+      },
+      "documentation-and-adrs": {
+        "name": "Documentation & ADR Engineer",
+        "desc": "Architecture decisions, guides, and API docs"
+      },
+      "doubt-driven-development": {
+        "name": "Doubt-Driven Reviewer",
+        "desc": "Challenge assumptions and designs · read-only"
+      },
+      "frontend-ui-engineering": {
+        "name": "Frontend UI Engineer",
+        "desc": "Accessible, responsive, product-quality interfaces"
+      },
+      "git-workflow-and-versioning": {
+        "name": "Git Workflow Engineer",
+        "desc": "Branches, atomic commits, and history safety"
+      },
+      "idea-refine": {
+        "name": "Idea Refinement Partner",
+        "desc": "Compare options, MVP bounds, and validation · read-only"
+      },
+      "incremental-implementation": {
+        "name": "Incremental Implementation Engineer",
+        "desc": "Thin, buildable, continuously verified slices"
+      },
+      "interview-me": {
+        "name": "Requirements Interviewer",
+        "desc": "Find gaps and high-information questions · read-only"
+      },
+      "observability-and-instrumentation": {
+        "name": "Observability Engineer",
+        "desc": "Logs, metrics, traces, and actionable alerts"
+      },
+      "performance-optimization": {
+        "name": "Performance Engineer",
+        "desc": "Measure bottlenecks and prove before/after impact"
+      },
+      "planning-and-task-breakdown": {
+        "name": "Implementation Planner",
+        "desc": "Dependency-aware, acceptance-driven tasks · read-only"
+      },
+      "security-and-hardening": {
+        "name": "Security Hardening Engineer",
+        "desc": "Threat-model and implement scoped security fixes"
+      },
+      "shipping-and-launch": {
+        "name": "Release Readiness Engineer",
+        "desc": "Go/no-go, rollout, and rollback plans · read-only"
+      },
+      "source-driven-development": {
+        "name": "Source-Driven Researcher",
+        "desc": "Ground guidance in version-matched sources · read-only"
+      },
+      "spec-driven-development": {
+        "name": "Specification Engineer",
+        "desc": "Scenarios, interfaces, and acceptance criteria · read-only"
+      },
+      "test-driven-development": {
+        "name": "TDD Engineer",
+        "desc": "Red-green-refactor with behavior-focused proof"
+      },
+      "using-agent-skills": {
+        "name": "Engineering Workflow Advisor",
+        "desc": "Map work to the smallest suitable agent sequence · read-only"
+      },
+      "write-outline-architect": {
+        "name": "Outline Architect",
+        "desc": "Structure, arguments, and narrative progression · read-only"
+      },
+      "write-draft-author": {
+        "name": "Draft Author",
+        "desc": "Long-form drafts and focused section writing"
+      },
+      "write-developmental-editor": {
+        "name": "Developmental Editor",
+        "desc": "Improve logic, structure, pacing, and clarity"
+      },
+      "write-copy-editor": {
+        "name": "Copy Editor",
+        "desc": "Polish tone, terminology, and grammar"
+      },
+      "write-fact-checker": {
+        "name": "Fact Checker",
+        "desc": "Verify claims, figures, and uncertainty · read-only"
+      },
+      "write-citation-researcher": {
+        "name": "Citation Researcher",
+        "desc": "Authoritative sources and traceable citations · read-only"
+      },
+      "design-product-planner": {
+        "name": "Product Design Planner",
+        "desc": "Direction, goals, flows, and tradeoffs · read-only"
+      },
+      "design-ux-researcher": {
+        "name": "UX Researcher",
+        "desc": "User journeys and usability research · read-only"
+      },
+      "design-screen-designer": {
+        "name": "Screen Designer",
+        "desc": "Complete responsive screens and interaction states"
+      },
+      "design-system-architect": {
+        "name": "Design System Architect",
+        "desc": "Semantic tokens, components, and variant constraints"
+      },
+      "design-code-binder": {
+        "name": "Design Code Binder",
+        "desc": "Map design nodes to routes and source files"
+      },
+      "design-handoff-specialist": {
+        "name": "Design Handoff Specialist",
+        "desc": "DESIGN.md, implementation notes, and handoff assets"
       },
       "compaction": {
         "name": "圧縮",
@@ -2978,17 +3326,12 @@
       "summary": {
         "name": "概要",
         "desc": "LLM · デフォルトは小規模モデル"
-      },
-      "general": {
-        "name": "一般",
-        "desc": "充実したツール・多段階作業"
-      },
-      "explore": {
-        "name": "探検する",
-        "desc": "読み取り専用 · コードの検索と検索"
       }
     },
-    "builtin": "内蔵"
+    "builtin": "内蔵",
+    "customTag": "カスタム",
+    "workspaceFile": "{{path}} で定義",
+    "workspaceReadOnly": ".kun/agents/*.md でこのロールを編集してください"
   },
   "summarizeSession": "要約する",
   "summarizing": "要約すると…",

@@ -443,6 +443,15 @@ describe('AgentLoop interruption', () => {
     expect(model.requests[0]?.modeInstruction).toContain('SINGLE SCREEN')
     expect(model.requests[0]?.modeInstruction).toContain('COMPLETE MULTI-SCREEN EXPERIENCE')
     expect(model.requests[0]?.modeInstruction).toContain('MODIFY EXISTING DESIGN')
+    expect(model.requests[0]?.contextInstructions?.[0]).toContain(
+      'Kun assembled the following dynamic context'
+    )
+    expect(model.requests[0]?.contextInstructions?.[1]).toContain(
+      '<kun_context_block kind="runtime-context" authority="runtime">'
+    )
+    expect(model.requests[0]?.contextInstructions?.[1]).toContain(
+      'Current opened project absolute path: `/tmp/workspace`'
+    )
   })
 
   it('recovers a dedicated SVG turn until mutation and matching validation succeed', async () => {

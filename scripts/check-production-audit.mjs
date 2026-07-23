@@ -17,7 +17,9 @@ const allowedModeratePackages = new Set([
   'file-type',
   'jimp'
 ])
-const allowedAdvisory = 'https://github.com/advisories/GHSA-5v7r-6r5c-r473'
+const allowedAdvisories = new Set([
+  'https://github.com/advisories/GHSA-5v7r-6r5c-r473'
+])
 
 // nut-js still pins Jimp 0.22 and has no compatible upstream update. Kun only
 // uses nut-js for native screen pixels/input and converts captures through its
@@ -82,7 +84,7 @@ function assertNoUnacceptedVulnerabilities(target, report) {
     }
     if (Array.isArray(raw.via)) {
       for (const via of raw.via) {
-        if (isRecord(via) && typeof via.url === 'string' && via.url !== allowedAdvisory) {
+        if (isRecord(via) && typeof via.url === 'string' && !allowedAdvisories.has(via.url)) {
           rejected.push(`${name}: unexpected advisory ${via.url}`)
         }
       }
@@ -100,7 +102,7 @@ function assertNoUnacceptedVulnerabilities(target, report) {
 
 function hasAllowedAdvisory(value) {
   if (!isRecord(value) || !Array.isArray(value.via)) return false
-  return value.via.some((entry) => isRecord(entry) && entry.url === allowedAdvisory)
+  return value.via.some((entry) => isRecord(entry) && typeof entry.url === 'string' && allowedAdvisories.has(entry.url))
 }
 
 function isRecord(value) {

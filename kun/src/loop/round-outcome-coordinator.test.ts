@@ -175,6 +175,7 @@ describe('RoundOutcomeCoordinator', () => {
         imContext: true
       }),
       modelProviderId: 'provider_main',
+      modelReasoningEffort: 'high',
       toolProviderMetadata: new Map([[
         CREATE_PLAN_TOOL_NAME,
         { providerId: 'provider_tool', providerKind: 'built-in' }
@@ -196,6 +197,7 @@ describe('RoundOutcomeCoordinator', () => {
       }
     })
     expect(h.dispatches[0]?.calls[0]).toMatchObject({ providerId: 'provider_tool', toolKind: 'file_change' })
+    expect(h.dispatches[0]?.reasoningEffort).toBe('high')
     expect(Object.hasOwn(h.dispatches[0] ?? {}, 'userInputDisabled')).toBe(false)
     expect(Object.hasOwn(h.dispatches[0] ?? {}, 'imContext')).toBe(false)
   })

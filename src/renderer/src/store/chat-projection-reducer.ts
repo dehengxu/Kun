@@ -22,6 +22,7 @@ export type ChatProjectionReducerContext = {
   runtimeStatusText: (event: RuntimeStatusEventPayload) => string
   runtimeErrorView: (event: RuntimeErrorEventPayload) => {
     summary: string
+    message: string
     code?: string
     detail?: string
   }
@@ -329,10 +330,11 @@ export function reduceChatProjection(
         kind: 'system',
         id: event.itemId,
         createdAt: event.createdAt ?? new Date(context.now).toISOString(),
-        text: view.summary,
+        text: view.message,
         ...(view.code ? { code: view.code } : {}),
         ...(view.detail ? { detail: view.detail } : {}),
-        severity: event.severity ?? 'error'
+        severity: event.severity ?? 'error',
+        runtimeError: true
       }
       return {
         ...flushed,

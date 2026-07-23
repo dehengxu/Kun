@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -72,5 +72,37 @@ describe('ExtensionProviderAccountStore bindings', () => {
     })
     const bindingFile = await readFile(join(root, 'extensions', 'provider-bindings.json'), 'utf8')
     expect(bindingFile).not.toContain('credential_ref_must_not_be_copied')
+  })
+
+  it('reads and clears legacy hash-keyed bindings before rewriting them with the current key', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-provider-binding-legacy-'))
+    roots.push(root)
+    const scopeKey = 'workspace:/legacy'
+    const providerId = 'ext-acme-models'
+    const path = join(root, 'extensions', 'provider-bindings.json')
+    await mkdir(join(root, 'extensions'), { recursive: true })
+    await writeFile(path, JSON.stringify({
+      schemaVersion: 1,
+      revision: 1,
+      bindings: {
+        legacySha256Key: {
+          scopeKey,
+          ownerExtensionId: 'acme.models',
+          ownerExtensionVersion: '1.0.0',
+          binding: { providerId, accountId: 'account-1', modelId: 'model-1' },
+          dataAccessDigest: 'a'.repeat(64),
+          dataCategories: ['conversation-history'],
+          acknowledgedAt: '2026-07-11T00:00:00.000Z',
+          updatedAt: '2026-07-11T00:00:00.000Z'
+        }
+      }
+    }), 'utf8')
+
+    const store = new ExtensionProviderAccountStore({ dataDir: root })
+    await expect(store.getBinding(scopeKey, providerId)).resolves.toMatchObject({
+      binding: { providerId, accountId: 'account-1' }
+    })
+    await expect(store.clearBinding(scopeKey, providerId)).resolves.toBe(true)
+    await expect(store.getBinding(scopeKey, providerId)).resolves.toBeNull()
   })
 })

@@ -288,6 +288,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     fallbackHardThreshold: contextCompaction.defaultHardThreshold
   })
   const runtimeTuning = kun.runtimeTuning ?? {
+    maxConcurrentTurns: 256,
     maxWallTimeMs: 86400000,
     streamIdleTimeoutMs: 45000,
     toolStorm: {
@@ -1626,6 +1627,22 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                           />
                         </label>
                       </div>
+                    }
+                  />
+                  <SettingRow
+                    title={t('kunMaxConcurrentTurns')}
+                    description={t('kunMaxConcurrentTurnsDesc')}
+                    control={
+                      <input
+                        type="number"
+                        min={1}
+                        max={256}
+                        className="w-40 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                        value={runtimeTuning.maxConcurrentTurns}
+                        onChange={(e) =>
+                          updateRuntimeTuning({ maxConcurrentTurns: Number(e.target.value) })
+                        }
+                      />
                     }
                   />
                   <SettingRow

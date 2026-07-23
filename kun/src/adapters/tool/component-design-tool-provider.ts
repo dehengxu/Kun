@@ -221,7 +221,17 @@ export function buildComponentDesignToolProviders(
             // parent tool cannot reach this point in read-only/external modes
             // because its own file_change write is rejected first.
             sandboxMode: 'workspace-write',
-            onStart: (startedChildId) => {
+            security: {
+              sandboxRoot: childWorkspace,
+              ...(context.allowedProviderIds ? { allowedProviderIds: [...context.allowedProviderIds] } : {}),
+              ...(context.blockedProviderIds ? { blockedProviderIds: [...context.blockedProviderIds] } : {}),
+              ...(context.blockedSkillIds ? { blockedSkillIds: [...context.blockedSkillIds] } : {}),
+              memoryEnabled: false
+            },
+            onQueued: (queuedChildId) => {
+              childId = queuedChildId
+            },
+            onRunning: (startedChildId) => {
               childId = startedChildId
               runningUpdate = emitComponentPrototypeUpdate(onUpdate, {
                 ...basePayload,

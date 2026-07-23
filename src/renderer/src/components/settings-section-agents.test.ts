@@ -1,14 +1,27 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import {
+  act,
+  create as createRenderer,
+  type ReactTestInstance,
+  type ReactTestRenderer
+} from 'react-test-renderer'
 import {
   DEFAULT_MODEL_PROVIDER_ID,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
   getModelProviderPreset,
+  modelProviderPresetAccountProfile,
   modelProviderPresetProfile,
+  modelProviderTokenPlanProfile,
   type ModelProviderProfileV1
 } from '@shared/app-settings'
+import type {
+  CursorSubscriptionModel,
+  ModelsDevCatalogResult,
+  ModelProviderProbeResult
+} from '@shared/kun-gui-api'
 import { AgentsSettingsSection, modelProvidersSettingsPatch } from './settings-section-agents'
 import { ProvidersSettingsSection } from './settings-section-providers'
 
@@ -25,13 +38,52 @@ const labels: Record<string, string> = {
   kunProviderSelectDesc: 'Provider select description',
   modelProviderAdd: 'Add provider',
   modelProviderAddMenuCustom: 'Custom provider…',
+  modelProviderAddCustomDesc: 'Start with a blank provider and configure its endpoint and models.',
+  modelProviderAddDialogTitle: 'Add a provider',
+  modelProviderAddDialogDesc: 'Choose a preset or create a custom provider.',
+  modelProviderAddDialogCancel: 'Close add provider dialog',
+  modelProviderAddDialogSearch: 'Search provider presets…',
+  modelProviderAddDialogEmpty: 'No provider presets match "{{query}}".',
+  modelProviderTabConnection: 'Connection',
+  modelProviderTabModels: 'Models',
+  modelProviderTabCapabilities: 'Capabilities',
+  modelProviderTabAdvanced: 'Advanced',
+  modelProviderWorkspaceTabs: 'Provider settings tabs',
+  modelProviderCompactSelect: 'Choose provider',
+  modelProviderSearchPlaceholder: 'Search configured providers…',
+  modelProviderSearchEmpty: 'No providers match "{{query}}".',
+  modelProviderGroupPlans: 'Subscription plans',
+  modelProviderGroupApi: 'Pay-as-you-go',
+  modelProviderPlanBadge: 'Plan',
+  modelProviderTokenPlanBadge: 'Token Plan',
+  modelProviderPresetUpdateTag: 'Update preset',
+  modelProviderAccountCount: '{{count}} accounts',
+  modelProviderAddAccountHint: 'Add an independent account',
+  modelProviderNewName: 'Custom provider {{index}}',
+  modelProviderDraftBadge: 'Unsaved',
+  modelProviderDraftSection: 'Add this provider',
+  modelProviderDraftConfirm: 'Add',
+  modelProviderDraftDiscard: 'Cancel',
+  modelProviderDraftHintReady: 'Click Add to save this provider and switch to it.',
+  modelProviderDraftHintNoKey: 'No API key yet — Add saves without activating.',
+  modelProviderNeedsConfiguration: 'Needs configuration',
+  modelProviderReady: 'Ready',
+  modelProviderIdentitySection: 'Provider identity',
+  modelProviderIdentityHint: 'Manage the provider ID under Advanced.',
   modelProviderSectionBasics: 'Provider basics',
   modelProviderSectionConnection: 'Provider connection',
   modelProviderSectionDanger: 'Danger zone',
   modelProviderTestConnection: 'Test connection',
-  modelProviderFetchModels: 'Fetch from API',
+  modelProviderTesting: 'Testing connection…',
+  modelProviderTestSuccess: 'Connected · {{latency}}ms · {{total}} models',
+  modelProviderTestFailed: 'Connection failed: {{message}}',
+  modelProviderPresetMissingKeyForProbe: 'Enter this provider API key first.',
+  modelProviderInvalidUrl: 'URL must start with http:// or https://',
+  modelProviderFetchModels: 'Fetch models',
+  modelProviderFetchedModels: 'Fetched {{total}} new models',
   modelProviderModelsPlaceholder: 'Type a model ID and press Enter',
-  modelProviderModelCount: 'models count',
+  modelProviderModelCount: '{{total}} models',
+  modelProviderModelRemove: 'Remove {{model}}',
   modelProviderInUse: 'In use',
   modelProviderMissingKey: 'No API key',
   modelProviderDefaultBadge: 'Default',
@@ -44,6 +96,10 @@ const labels: Record<string, string> = {
   modelProviderId: 'Provider ID',
   modelProviderApiKey: 'Provider API key',
   modelProviderApiKeyPlaceholder: 'Enter provider API key',
+  cursorSubscriptionNote: 'Enter an API key created in the Cursor dashboard.',
+  cursorSubscriptionGetApiKey: 'Get Cursor API key',
+  cursorSubscriptionAccount: 'Connected account: {{account}} · API key: {{keyName}}',
+  cursorSubscriptionRestartRequired: 'Fully quit Kun and reopen it, then try again.',
   modelProviderBaseUrl: 'Provider base URL',
   modelProviderEndpointFormat: 'Endpoint format',
   modelProviderRetrySection: 'Failure retry',
@@ -52,6 +108,38 @@ const labels: Record<string, string> = {
   modelProviderRetryStatusCodes: 'Retry HTTP status codes',
   modelProviderRetryStatusCodesHint: 'Separate multiple status codes with commas, for example 429,503.',
   modelProviderFetchEmpty: 'No models found',
+  providerModelImportTitle: 'Pick models to import',
+  providerModelImportSubtitle: 'Found {{total}} for {{provider}}; {{existing}} already added.',
+  providerModelImportSearchPlaceholder: 'Search by model name',
+  providerModelImportFilterAll: 'All types ({{count}})',
+  providerModelImportSourceAll: 'All sources ({{count}})',
+  providerModelImportSourceApi: 'Provider API ({{count}})',
+  providerModelImportSourceCatalog: 'models.dev ({{count}})',
+  providerModelImportSourceApiBadge: 'Provider API',
+  providerModelImportSourceCatalogBadge: 'models.dev only',
+  providerModelImportSourceBothBadge: 'API + models.dev',
+  providerModelImportHideExisting: 'Hide already added ({{count}})',
+  providerModelImportAlreadyAdded: 'Already added',
+  providerModelImportNoneFetched: 'No models available',
+  providerModelImportNoneMatch: 'No models match',
+  providerModelImportSelectAllVisible: 'Select filtered ({{count}})',
+  providerModelImportClearVisible: 'Clear filtered selection',
+  providerModelImportSelectedCount: '{{count}} selected',
+  providerModelImportCancel: 'Cancel import',
+  providerModelImportConfirm: 'Import {{count}}',
+  providerModelImportApplyMetadata: 'Apply model metadata',
+  providerModelImportMetadataUpdates: '{{count}} existing models can be updated',
+  providerModelImportProviderWarning: 'Provider verification failed: {{message}}',
+  providerModelImportProviderReturnedEmpty: 'Provider API returned no models.',
+  providerModelImportCatalogError: 'Catalog unavailable: {{message}}',
+  providerModelImportCatalogUnmapped: 'No exact catalog mapping.',
+  providerModelImportCatalogStale: 'Using cached catalog data.',
+  providerModelImportContextBadge: 'Context {{value}}',
+  providerModelImportOutputBadge: 'Output {{value}}',
+  providerModelImportVisionBadge: 'Vision',
+  providerModelImportToolsBadge: 'Tools',
+  providerModelImportNoToolsBadge: 'No tools',
+  providerModelImportReasoningBadge: 'Reasoning',
   modelEndpointChatCompletions: '/v1/chat/completions (openai)',
   modelEndpointResponses: '/v1/responses (openai)',
   modelEndpointMessages: '/v1/messages (anthropic)',
@@ -61,13 +149,49 @@ const labels: Record<string, string> = {
   modelProviderImageCapabilityDesc: 'Image capability description',
   modelProviderImageEnable: 'Enable image',
   modelProviderImageDisable: 'Disable image',
+  modelProviderSpeechCapability: 'Speech-to-text capability',
+  modelProviderSpeechCapabilityDesc: 'Speech-to-text capability description',
+  modelProviderTextToSpeechCapability: 'Speech generation capability',
+  modelProviderTextToSpeechCapabilityDesc: 'Speech generation capability description',
+  modelProviderMusicCapability: 'Music generation capability',
+  modelProviderMusicCapabilityDesc: 'Music generation capability description',
+  modelProviderVideoCapability: 'Video generation capability',
+  modelProviderVideoCapabilityDesc: 'Video generation capability description',
+  modelProviderCapabilityConfigure: 'Configure',
+  modelProviderCapabilityCollapse: 'Collapse',
+  modelProviderCapabilityEnabled: 'Enabled',
+  modelProviderCapabilityDisabled: 'Disabled',
+  modelProviderGlobalNetwork: 'Global network proxy',
+  modelProviderVisionBadge: 'Vision',
   imageGenProtocol: 'Image protocol',
   imageGenProtocolOpenAi: 'OpenAI Images',
   imageGenProtocolMiniMax: 'MiniMax image_generation',
   imageGenBaseUrl: 'Image base URL',
   imageGenModel: 'Image model',
   imageGenBaseUrlPlaceholder: 'https://api.example.com/v1',
+  speechToTextProtocol: 'Speech protocol',
+  speechToTextBaseUrl: 'Speech API base URL',
+  speechToTextModels: 'Speech models',
+  textToSpeechProtocol: 'Speech generation protocol',
+  textToSpeechBaseUrl: 'Speech generation base URL',
+  textToSpeechBaseUrlPlaceholder: 'https://api.example.com/v1',
+  textToSpeechModel: 'Speech generation model',
+  musicGenerationProtocol: 'Music generation protocol',
+  musicGenerationBaseUrl: 'Music generation base URL',
+  musicGenerationBaseUrlPlaceholder: 'https://api.example.com/v1',
+  musicGenerationModel: 'Music model',
+  videoGenerationProtocol: 'Video generation protocol',
+  videoGenerationBaseUrl: 'Video generation base URL',
+  videoGenerationBaseUrlPlaceholder: 'https://api.example.com/v1',
+  videoGenerationModel: 'Video model',
+  proxyEnabled: 'Use proxy for model requests',
+  proxyUrlDesc: 'Route model requests through a global proxy.',
+  proxyUrlPlaceholder: 'http://127.0.0.1:7890',
   baseUrlPlaceholder: 'https://api.example.com/v1',
+  autoApplyHint: 'Changes apply automatically',
+  applying: 'Applying…',
+  applied: 'Applied',
+  applyFailed: 'Could not apply',
   kunApiKey: 'Kun API key',
   kunApiKeyDesc: 'Kun API key description',
   kunApiKeyPlaceholder: 'Inherit API key',
@@ -150,6 +274,8 @@ const labels: Record<string, string> = {
   kunCompactionSummaryTimeout: 'Summary timeout',
   kunCompactionSummaryMaxTokens: 'Summary max tokens',
   kunCompactionSummaryInputBytes: 'Summary input bytes',
+  kunMaxConcurrentTurns: 'Maximum concurrent turns',
+  kunMaxConcurrentTurnsDesc: 'Maximum concurrent turns description',
   kunMaxWallTime: 'Maximum turn duration',
   kunMaxWallTimeDesc: 'Maximum turn duration description',
   kunStreamIdleTimeout: 'Stream idle timeout',
@@ -307,8 +433,12 @@ const labels: Record<string, string> = {
   projectConfigRevoke: 'Revoke project MCP'
 }
 
-function t(key: string): string {
-  return labels[key] ?? key
+function t(key: string, params?: Record<string, unknown>): string {
+  let value = labels[key] ?? key
+  for (const [name, replacement] of Object.entries(params ?? {})) {
+    value = value.split(`{{${name}}}`).join(String(replacement))
+  }
+  return value
 }
 
 function baseCtx(): Record<string, unknown> {
@@ -425,6 +555,51 @@ function baseCtx(): Record<string, unknown> {
     splitSettingsList: (value: string) => value.split('\n').filter(Boolean),
     listSettingsText: (value: string[]) => value.join('\n')
   }
+}
+
+function instanceText(instance: ReactTestInstance): string {
+  return instance.children
+    .map((child) => typeof child === 'string' ? child : instanceText(child))
+    .join('')
+}
+
+function rendererText(renderer: ReactTestRenderer): string {
+  return JSON.stringify(renderer.toJSON())
+}
+
+function findButton(renderer: ReactTestRenderer, label: string): ReactTestInstance {
+  const button = renderer.root.findAllByType('button')
+    .find((candidate) => instanceText(candidate).trim() === label)
+  expect(button, `button "${label}"`).toBeTruthy()
+  return button!
+}
+
+function findButtonContaining(renderer: ReactTestRenderer, label: string): ReactTestInstance {
+  const button = renderer.root.findAllByType('button')
+    .find((candidate) => instanceText(candidate).includes(label))
+  expect(button, `button containing "${label}"`).toBeTruthy()
+  return button!
+}
+
+function activePanelText(renderer: ReactTestRenderer): string {
+  const panels = renderer.root.findAllByProps({ role: 'tabpanel' })
+  expect(panels).toHaveLength(1)
+  return instanceText(panels[0])
+}
+
+async function renderProviders(ctx: Record<string, unknown>): Promise<ReactTestRenderer> {
+  let renderer!: ReactTestRenderer
+  await act(async () => {
+    renderer = createRenderer(createElement(ProvidersSettingsSection, { ctx }))
+  })
+  return renderer
+}
+
+async function clickProviderTab(renderer: ReactTestRenderer, label: string): Promise<void> {
+  const tab = renderer.root.findAllByProps({ role: 'tab' })
+    .find((candidate) => instanceText(candidate) === label)
+  expect(tab, `tab "${label}"`).toBeTruthy()
+  await act(async () => tab!.props.onClick())
 }
 
 describe('AgentsSettingsSection Kun diagnostics smoke', () => {
@@ -547,19 +722,317 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     }))
   })
 
-  it('renders custom model provider id as editable', () => {
-    const provider = defaultModelProviderSettings()
-    const customProvider = {
-      id: 'custom-provider-2',
-      name: 'Custom Provider',
-      apiKey: '',
-      baseUrl: 'https://api.example.com/v1',
-      endpointFormat: 'messages',
-      models: [],
-      modelProfiles: {}
-    } satisfies ModelProviderProfileV1
-    const html = renderToStaticMarkup(createElement(ProvidersSettingsSection, {
-      ctx: {
+  describe('provider settings workspace', () => {
+    const probeModelProvider = vi.fn(async (): Promise<ModelProviderProbeResult> => ({
+      ok: true as const,
+      latencyMs: 18,
+      modelIds: ['model-a', 'model-b']
+    }))
+    const fetchModelsDevCatalog = vi.fn(async (): Promise<ModelsDevCatalogResult> => ({
+      status: 'ok' as const,
+      providerKey: 'test-provider',
+      providerName: 'Test Provider',
+      matchMode: 'catalog' as const,
+      stale: false,
+      models: [
+        {
+          id: 'model-a',
+          name: 'Model A',
+          description: 'Vision-capable catalog metadata',
+          inputModalities: ['text', 'image'],
+          outputModalities: ['text'],
+          contextWindowTokens: 128_000,
+          maxOutputTokens: 16_000,
+          toolCalling: true
+        },
+        {
+          id: 'catalog-only',
+          inputModalities: ['text'],
+          outputModalities: ['text'],
+          toolCalling: false
+        }
+      ]
+    }))
+    const claudeSubscriptionStatus = vi.fn(async () => ({ loggedIn: true }))
+    const cursorSubscriptionDiscover = vi.fn(async (): Promise<{
+      account: {
+        apiKeyName: string
+        userEmail?: string
+        userFirstName?: string
+        userLastName?: string
+      }
+      models: CursorSubscriptionModel[]
+    }> => ({
+      account: { apiKeyName: 'test-key', userEmail: 'cursor@example.com' },
+      models: [{ id: 'auto', displayName: 'Auto' }]
+    }))
+    const openExternal = vi.fn(async () => undefined)
+    let mountedRenderers: ReactTestRenderer[] = []
+
+    beforeEach(() => {
+      ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+      probeModelProvider.mockClear()
+      fetchModelsDevCatalog.mockClear()
+      claudeSubscriptionStatus.mockClear()
+      cursorSubscriptionDiscover.mockReset()
+      cursorSubscriptionDiscover.mockResolvedValue({
+        account: { apiKeyName: 'test-key', userEmail: 'cursor@example.com' },
+        models: [{ id: 'auto', displayName: 'Auto' }]
+      })
+      openExternal.mockClear()
+      mountedRenderers = []
+      vi.stubGlobal('window', {
+        kunGui: {
+          probeModelProvider,
+          fetchModelsDevCatalog,
+          cursorSubscriptionDiscover,
+          openExternal,
+          claudeSubscriptionStatus,
+          claudeSubscriptionSdkStatus: vi.fn(async () => ({ installed: true })),
+          claudeSubscriptionModels: vi.fn(async () => []),
+          onClaudeSubscriptionSdkProgress: vi.fn(() => () => undefined)
+        },
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        setTimeout: (callback: () => void) => {
+          callback()
+          return 1
+        },
+        clearTimeout: vi.fn()
+      })
+      vi.stubGlobal('document', {
+        body: { style: { overflow: '' } },
+        activeElement: null
+      })
+    })
+
+    afterEach(async () => {
+      await act(async () => {
+        for (const renderer of mountedRenderers) renderer.unmount()
+      })
+      vi.unstubAllGlobals()
+      ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
+    })
+
+    const mountProviders = async (ctx: Record<string, unknown>): Promise<ReactTestRenderer> => {
+      const renderer = await renderProviders(ctx)
+      mountedRenderers.push(renderer)
+      return renderer
+    }
+
+    it('opens the official Cursor User API Keys page from the connection form', async () => {
+      const settings = defaultModelProviderSettings()
+      const cursor = modelProviderPresetProfile(
+        getModelProviderPreset('cursor-subscription')!,
+        ''
+      )
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, cursor] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: cursor.id, model: 'auto' }
+      })
+
+      expect(activePanelText(renderer)).toContain('Enter an API key created in the Cursor dashboard.')
+      await act(async () => findButton(renderer, 'Get Cursor API key').props.onClick())
+
+      expect(openExternal).toHaveBeenCalledOnce()
+      expect(openExternal).toHaveBeenCalledWith('https://cursor.com/dashboard?tab=integrations')
+    })
+
+    it('turns a stale Cursor discovery handler error into restart guidance', async () => {
+      cursorSubscriptionDiscover.mockRejectedValueOnce(
+        new Error(
+          "Error invoking remote method 'cursor-subscription:discover': "
+          + "Error: No handler registered for 'cursor-subscription:discover'"
+        )
+      )
+      const settings = defaultModelProviderSettings()
+      const cursor = modelProviderPresetProfile(
+        getModelProviderPreset('cursor-subscription')!,
+        'cursor-secret'
+      )
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, cursor] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: cursor.id, model: 'auto' }
+      })
+
+      await act(async () => {
+        findButton(renderer, 'Test connection').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(rendererText(renderer)).toContain(
+        'Connection failed: Fully quit Kun and reopen it, then try again.'
+      )
+      expect(rendererText(renderer)).not.toContain('No handler registered')
+    })
+
+    it('imports Cursor mixed-vendor context, vision, and SDK aliases', async () => {
+      cursorSubscriptionDiscover.mockResolvedValueOnce({
+        account: { apiKeyName: 'test-key', userEmail: 'cursor@example.com' },
+        models: [{
+          id: 'gemini-3.6-flash',
+          displayName: 'Gemini 3.6 Flash',
+          aliases: ['gemini-flash-latest']
+        }]
+      })
+      fetchModelsDevCatalog.mockResolvedValueOnce({
+        status: 'ok',
+        providerKey: 'cursor-mixed',
+        providerName: 'Cursor',
+        matchMode: 'enrichment-only',
+        stale: false,
+        models: [{
+          id: 'gemini-3.6-flash',
+          providerKey: 'google',
+          inputModalities: ['text', 'image'],
+          outputModalities: ['text'],
+          contextWindowTokens: 1_048_576,
+          maxOutputTokens: 65_536,
+          reasoning: true,
+          toolCalling: true
+        }]
+      })
+      const settings = defaultModelProviderSettings()
+      const cursor = modelProviderPresetProfile(
+        getModelProviderPreset('cursor-subscription')!,
+        'cursor-secret'
+      )
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, cursor] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: cursor.id, model: 'auto' },
+        update
+      })
+
+      await act(async () => findButton(renderer, 'Models').props.onClick())
+      await act(async () => {
+        findButton(renderer, 'Fetch models').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(fetchModelsDevCatalog).toHaveBeenCalledWith({
+        providerId: 'cursor-subscription',
+        baseUrl: '',
+        forceRefresh: true,
+        modelHints: [{
+          id: 'gemini-3.6-flash',
+          aliases: ['gemini-flash-latest']
+        }]
+      })
+      expect(findButton(renderer, 'Import 1').props.disabled).toBe(false)
+      await act(async () => findButton(renderer, 'Import 1').props.onClick())
+
+      const updatedProviders = update.mock.calls[0]?.[0]?.provider?.providers as ModelProviderProfileV1[]
+      const updatedCursor = updatedProviders.find((item) => item.id === cursor.id)
+      expect(updatedCursor?.models).toEqual(['gemini-3.6-flash'])
+      expect(updatedCursor?.modelProfiles['gemini-3.6-flash']).toEqual(expect.objectContaining({
+        aliases: ['gemini-flash-latest'],
+        contextWindowTokens: 1_048_576,
+        maxOutputTokens: 65_536,
+        inputModalities: ['text', 'image'],
+        messageParts: ['text', 'image_url'],
+        reasoning: {
+          supportedEfforts: ['auto'],
+          defaultEffort: 'auto',
+          requestProtocol: 'none'
+        }
+      }))
+    })
+
+    it('repairs missing metadata for an existing pulled Cursor model list', async () => {
+      fetchModelsDevCatalog.mockResolvedValueOnce({
+        status: 'ok',
+        providerKey: 'cursor-mixed',
+        providerName: 'Cursor',
+        matchMode: 'enrichment-only',
+        stale: false,
+        models: [{
+          id: 'gemini-3.6-flash',
+          providerKey: 'google',
+          inputModalities: ['text', 'image'],
+          outputModalities: ['text'],
+          contextWindowTokens: 1_048_576,
+          maxOutputTokens: 65_536,
+          reasoning: true,
+          toolCalling: true
+        }]
+      })
+      const settings = defaultModelProviderSettings()
+      const cursor = {
+        ...modelProviderPresetProfile(
+          getModelProviderPreset('cursor-subscription')!,
+          'cursor-secret'
+        ),
+        models: ['gemini-3.6-flash'],
+        modelProfiles: {}
+      }
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, cursor] },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: cursor.id,
+          model: 'gemini-3.6-flash'
+        },
+        update
+      })
+
+      await act(async () => {
+        findButton(renderer, 'Models').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(fetchModelsDevCatalog).toHaveBeenCalledWith({
+        providerId: 'cursor-subscription',
+        baseUrl: '',
+        forceRefresh: false,
+        modelHints: [{
+          id: 'gemini-3.6-flash'
+        }]
+      })
+      const updatedProviders = update.mock.calls.at(-1)?.[0]?.provider?.providers as
+        | ModelProviderProfileV1[]
+        | undefined
+      const updatedCursor = updatedProviders?.find((item) => item.id === cursor.id)
+      expect(updatedCursor?.modelProfiles['gemini-3.6-flash']).toEqual(expect.objectContaining({
+        contextWindowTokens: 1_048_576,
+        maxOutputTokens: 65_536,
+        inputModalities: ['text', 'image'],
+        messageParts: ['text', 'image_url'],
+        reasoning: {
+          supportedEfforts: ['auto'],
+          defaultEffort: 'auto',
+          requestProtocol: 'none'
+        }
+      }))
+    })
+
+    it('renders task tabs and keeps the selected task while switching providers', async () => {
+      const provider = defaultModelProviderSettings()
+      const customProvider = {
+        id: 'custom-provider-2',
+        name: 'Custom Provider',
+        apiKey: '',
+        baseUrl: 'https://api.example.com/v1',
+        endpointFormat: 'messages',
+        models: [],
+        modelProfiles: {},
+        image: {
+          protocol: 'openai-images',
+          baseUrl: 'api.example.com/v1',
+          models: ['image-model']
+        }
+      } satisfies ModelProviderProfileV1
+      const renderer = await mountProviders({
         ...baseCtx(),
         provider: {
           ...provider,
@@ -569,44 +1042,90 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           ...defaultKunRuntimeSettings(),
           providerId: customProvider.id
         }
-      }
-    }))
-    const providerIdInput = html.match(/<input[^>]+value="custom-provider-2"[^>]*>/)?.[0]
+      })
 
-    expect(providerIdInput).toBeTruthy()
-    expect(providerIdInput).not.toContain('readOnly')
-    expect(providerIdInput).not.toContain('readonly')
-    expect(html).toContain('Endpoint format')
-    expect(html).toContain('<option value="messages" selected="">/v1/messages (anthropic)</option>')
-    expect(html).toContain('<option value="custom_endpoint">Custom full endpoint</option>')
-    expect(html).toContain('Enter provider API key')
-    expect(html).not.toContain('Inherit API key')
-    expect(html).toContain('Add provider')
-    expect(html).toContain('Test connection')
-    expect(html).toContain('Fetch from API')
-    expect(html).toContain('Danger zone')
-    expect(html).toContain('In use')
-    expect(html).toContain('No API key')
-  })
+      const tabs = renderer.root.findAllByProps({ role: 'tab' })
+      expect(tabs.map(instanceText)).toEqual(['Connection', 'Models', 'Capabilities', 'Advanced'])
+      expect(tabs.map((tab) => tab.props['aria-selected'])).toEqual([true, false, false, false])
+      expect(tabs.map((tab) => tab.props.tabIndex)).toEqual([0, -1, -1, -1])
+      expect(tabs.map((tab) => tab.props['aria-controls'])).toEqual([
+        'provider-settings-panel-connection',
+        'provider-settings-panel-models',
+        'provider-settings-panel-capabilities',
+        'provider-settings-panel-advanced'
+      ])
+      const initialPanel = renderer.root.findByProps({ role: 'tabpanel' })
+      expect(initialPanel.props.id).toBe('provider-settings-panel-connection')
+      expect(initialPanel.props['aria-labelledby']).toBe('provider-settings-tab-connection')
+      expect(activePanelText(renderer)).toContain('Provider connection')
+      expect(activePanelText(renderer)).not.toContain('Provider models')
+      expect(renderer.root.findAllByType('select').some((select) => select.props.value === 'messages')).toBe(true)
+      expect(rendererText(renderer)).toContain('Enter provider API key')
+      expect(rendererText(renderer)).not.toContain('Inherit API key')
 
-  it('renders retry status codes without spaces and explains comma separation before retry fields', () => {
-    const provider = defaultModelProviderSettings()
-    const customProvider = {
-      id: 'retry-provider',
-      name: 'Retry Provider',
-      apiKey: 'sk-test',
-      baseUrl: 'https://api.example.com/v1',
-      endpointFormat: 'chat_completions',
-      retry: {
-        maxAttempts: 3,
-        initialDelayMs: 3000,
-        httpStatusCodes: [429, 503]
-      },
-      models: ['retry-model'],
-      modelProfiles: {}
-    } satisfies ModelProviderProfileV1
-    const html = renderToStaticMarkup(createElement(ProvidersSettingsSection, {
-      ctx: {
+      const preventDefault = vi.fn()
+      const tabFocusTargets = Array.from({ length: 4 }, () => ({ focus: vi.fn() }))
+      await act(async () => tabs[0].props.onKeyDown({
+        key: 'ArrowRight',
+        preventDefault,
+        currentTarget: {
+          parentElement: { querySelectorAll: () => tabFocusTargets }
+        }
+      }))
+      expect(preventDefault).toHaveBeenCalledOnce()
+      expect(tabFocusTargets[1].focus).toHaveBeenCalledOnce()
+      expect(renderer.root.findAllByProps({ role: 'tab' }).map((tab) => tab.props.tabIndex))
+        .toEqual([-1, 0, -1, -1])
+      expect(activePanelText(renderer)).toContain('Provider models')
+      expect(activePanelText(renderer)).toContain('Fetch models')
+      expect(activePanelText(renderer)).not.toContain('Provider connection')
+
+      await clickProviderTab(renderer, 'Capabilities')
+      expect(activePanelText(renderer)).toContain('Image capability')
+      expect(activePanelText(renderer)).toContain('Speech-to-text capability')
+      expect(activePanelText(renderer)).toContain('Speech generation capability')
+      expect(activePanelText(renderer)).toContain('Music generation capability')
+      expect(activePanelText(renderer)).toContain('Video generation capability')
+      expect(activePanelText(renderer)).toContain('Needs configuration')
+      const imageCapabilityConfigure = renderer.root.findByProps({
+        'aria-label': 'Configure: Image capability'
+      })
+      expect(imageCapabilityConfigure.props['aria-controls']).toBe('provider-capability-image')
+
+      await clickProviderTab(renderer, 'Advanced')
+      const customIdInput = renderer.root.findAllByType('input')
+        .find((input) => input.props.value === 'custom-provider-2')
+      expect(customIdInput?.props.readOnly).toBe(false)
+      expect(activePanelText(renderer)).toContain('Provider identity')
+      expect(activePanelText(renderer)).toContain('Failure retry')
+      expect(rendererText(renderer)).toContain('Danger zone')
+
+      await act(async () => findButtonContaining(renderer, 'DeepSeek').props.onClick())
+      expect(renderer.root.findAllByProps({ role: 'tab' })
+        .find((tab) => instanceText(tab) === 'Advanced')?.props['aria-selected']).toBe(true)
+      expect(activePanelText(renderer)).toContain('Provider identity')
+      expect(renderer.root.findAllByType('input')
+        .find((input) => input.props.value === DEFAULT_MODEL_PROVIDER_ID)?.props.readOnly).toBe(true)
+      expect(rendererText(renderer)).not.toContain('Danger zone')
+    })
+
+    it('renders retry status codes in the Advanced task without spaces', async () => {
+      const provider = defaultModelProviderSettings()
+      const customProvider = {
+        id: 'retry-provider',
+        name: 'Retry Provider',
+        apiKey: 'sk-test',
+        baseUrl: 'https://api.example.com/v1',
+        endpointFormat: 'chat_completions',
+        retry: {
+          maxAttempts: 3,
+          initialDelayMs: 3000,
+          httpStatusCodes: [429, 503]
+        },
+        models: ['retry-model'],
+        modelProfiles: {}
+      } satisfies ModelProviderProfileV1
+      const renderer = await mountProviders({
         ...baseCtx(),
         provider: {
           ...provider,
@@ -616,24 +1135,24 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           ...defaultKunRuntimeSettings(),
           providerId: customProvider.id
         }
-      }
-    }))
+      })
 
-    expect(html).toContain('Failure retry')
-    expect(html).toContain('Retry HTTP status codes')
-    expect(html).toContain('value="429,503"')
-    expect(html).not.toContain('value="429, 503"')
-    expect(html).toContain('Separate multiple status codes with commas, for example 429,503.')
-    expect(html.indexOf('Separate multiple status codes with commas, for example 429,503.'))
-      .toBeLessThan(html.indexOf('Retry attempts'))
-  })
+      await clickProviderTab(renderer, 'Advanced')
+      const panelText = activePanelText(renderer)
+      expect(panelText).toContain('Failure retry')
+      expect(panelText).toContain('Retry HTTP status codes')
+      expect(renderer.root.findAllByType('input').some((input) => input.props.value === '429,503')).toBe(true)
+      expect(renderer.root.findAllByType('input').some((input) => input.props.value === '429, 503')).toBe(false)
+      expect(panelText).toContain('Separate multiple status codes with commas, for example 429,503.')
+      expect(panelText.indexOf('Separate multiple status codes with commas, for example 429,503.'))
+        .toBeLessThan(panelText.indexOf('Retry attempts'))
+    })
 
-  it('locks preset and default provider ids and shows the danger zone only for removable providers', () => {
-    const provider = defaultModelProviderSettings()
-    const xiaomi = getModelProviderPreset('xiaomi')
-    expect(xiaomi).not.toBeNull()
-    const html = renderToStaticMarkup(createElement(ProvidersSettingsSection, {
-      ctx: {
+    it('locks preset IDs, blocks probes without required credentials, and limits the danger zone', async () => {
+      const provider = defaultModelProviderSettings()
+      const xiaomi = getModelProviderPreset('xiaomi')
+      expect(xiaomi).not.toBeNull()
+      const renderer = await mountProviders({
         ...baseCtx(),
         provider: {
           ...provider,
@@ -643,27 +1162,460 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           ...defaultKunRuntimeSettings(),
           providerId: 'xiaomi'
         }
-      }
-    }))
-    const providerIdInput = html.match(/<input[^>]+value="xiaomi"[^>]*>/)?.[0]
+      })
 
-    expect(providerIdInput).toBeTruthy()
-    expect(providerIdInput?.toLowerCase()).toContain('readonly')
-    expect(html).toContain('Provider ID locked')
-    expect(html).toContain('Danger zone')
-  })
+      expect(rendererText(renderer)).toContain('Needs configuration')
+      expect(rendererText(renderer)).toContain('No API key')
+      expect(findButton(renderer, 'Test connection').props.disabled).toBe(true)
+      expect(findButton(renderer, 'Test connection').props.title).toBe('Enter this provider API key first.')
 
-  it('hides the danger zone for the default provider', () => {
-    const html = renderToStaticMarkup(createElement(ProvidersSettingsSection, {
-      ctx: {
+      await clickProviderTab(renderer, 'Advanced')
+      const providerIdInput = renderer.root.findAllByType('input')
+        .find((input) => input.props.value === 'xiaomi')
+      expect(providerIdInput?.props.readOnly).toBe(true)
+      expect(rendererText(renderer)).toContain('Provider ID locked')
+      expect(rendererText(renderer)).toContain('Danger zone')
+
+      await act(async () => findButtonContaining(renderer, 'DeepSeek').props.onClick())
+      expect(rendererText(renderer)).not.toContain('Danger zone')
+      expect(rendererText(renderer)).toContain('Needs configuration')
+      expect(findButton(renderer, 'Test connection').props.disabled).toBe(true)
+    })
+
+    it('allows an agent SDK subscription to use its host login without an API key', async () => {
+      const provider = defaultModelProviderSettings()
+      const claudeSubscription = getModelProviderPreset('claude-subscription')
+      expect(claudeSubscription).not.toBeNull()
+      const profile = modelProviderPresetProfile(claudeSubscription!)
+      expect(profile.kind).toBe('agent-sdk')
+      expect(profile.apiKey).toBe('')
+
+      const renderer = await mountProviders({
         ...baseCtx(),
-        provider: defaultModelProviderSettings(),
-        kun: defaultKunRuntimeSettings()
-      }
-    }))
+        provider: {
+          ...provider,
+          providers: [...provider.providers, profile]
+        },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: profile.id
+        }
+      })
 
-    expect(html).not.toContain('Danger zone')
-    expect(html).toContain('Test connection')
+      expect(rendererText(renderer)).toContain('Ready')
+      expect(rendererText(renderer)).not.toContain('Needs configuration')
+      const testConnection = findButton(renderer, 'Test connection')
+      expect(testConnection.props.disabled).toBe(false)
+      claudeSubscriptionStatus.mockClear()
+
+      await act(async () => {
+        testConnection.props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(claudeSubscriptionStatus).toHaveBeenCalledOnce()
+      expect(probeModelProvider).not.toHaveBeenCalled()
+      expect(rendererText(renderer)).toContain('Connected · 0ms')
+    })
+
+    it('filters the add dialog and keeps custom providers local until confirmation', async () => {
+      const provider = defaultModelProviderSettings()
+      const inspectedProvider = {
+        id: 'inspection-provider',
+        name: 'Inspection Provider',
+        apiKey: 'sk-inspection',
+        baseUrl: 'https://api.inspection.example/v1',
+        endpointFormat: 'chat_completions',
+        models: ['inspection-model'],
+        modelProfiles: {}
+      } satisfies ModelProviderProfileV1
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: {
+          ...provider,
+          providers: [...provider.providers, inspectedProvider]
+        },
+        kun: defaultKunRuntimeSettings(),
+        update
+      })
+
+      await act(async () => findButtonContaining(renderer, 'Inspection Provider').props.onClick())
+
+      await act(async () => findButton(renderer, 'Add provider').props.onClick())
+      const dialog = renderer.root.findByProps({ role: 'dialog' })
+      expect(dialog.props['aria-modal']).toBe('true')
+      expect(instanceText(dialog)).toContain('Choose a preset or create a custom provider.')
+
+      const searchInput = renderer.root.findByProps({ 'aria-label': 'Search provider presets…' })
+      await act(async () => searchInput.props.onChange({ target: { value: 'xiaomi' } }))
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('Xiaomi')
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).not.toContain('MiniMax')
+
+      await act(async () => findButtonContaining(renderer, 'Custom provider…').props.onClick())
+      expect(renderer.root.findAllByProps({ role: 'dialog' })).toHaveLength(0)
+      expect(rendererText(renderer)).toContain('Unsaved')
+      expect(rendererText(renderer)).toContain('Add this provider')
+      expect(activePanelText(renderer)).toContain('Provider connection')
+      expect(renderer.root.findAllByProps({ role: 'tab' })
+        .find((tab) => instanceText(tab) === 'Connection')?.props['aria-selected']).toBe(true)
+      expect(update).not.toHaveBeenCalled()
+
+      await act(async () => findButton(renderer, 'Cancel').props.onClick())
+      expect(rendererText(renderer)).not.toContain('Unsaved')
+      expect(update).not.toHaveBeenCalled()
+      expect(renderer.root.findAllByType('button')
+        .find((button) => button.props['aria-pressed'] === true && instanceText(button).includes('Inspection Provider')))
+        .toBeTruthy()
+
+      await act(async () => findButton(renderer, 'Add provider').props.onClick())
+      await act(async () => findButtonContaining(renderer, 'Custom provider…').props.onClick())
+      const apiKeyInput = renderer.root.findAllByType('input')
+        .find((input) => input.props.placeholder === 'Enter provider API key')
+      expect(apiKeyInput).toBeTruthy()
+      await act(async () => apiKeyInput!.props.onChange({ target: { value: 'sk-custom' } }))
+      expect(rendererText(renderer)).toContain('Click Add to save this provider and switch to it.')
+
+      await act(async () => findButton(renderer, 'Add').props.onClick())
+      expect(update).toHaveBeenCalledTimes(1)
+      expect(update.mock.calls[0][0]).toMatchObject({
+        provider: {
+          providers: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'custom-provider-3',
+              apiKey: 'sk-custom'
+            })
+          ])
+        },
+        agents: {
+          kun: expect.objectContaining({ providerId: 'custom-provider-3' })
+        }
+      })
+      expect(rendererText(renderer)).not.toContain('Unsaved')
+    })
+
+    it('adds repeated Token Plan accounts with independent numbered identities', async () => {
+      const settings = defaultModelProviderSettings()
+      const minimax = getModelProviderPreset('minimax')
+      const first = modelProviderTokenPlanProfile(minimax!, 'sk-first')!
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, first] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: first.id, model: first.models[0] },
+        update
+      })
+
+      await act(async () => findButton(renderer, 'Add provider').props.onClick())
+      const dialog = renderer.root.findByProps({ role: 'dialog' })
+      expect(instanceText(dialog)).toContain('1 accounts')
+      const minimaxPlanEntry = dialog.findAllByType('button')
+        .find((button) => {
+          const text = instanceText(button)
+          return text.includes('MiniMax') && text.includes('Token Plan') && text.includes('1 accounts')
+        })
+      expect(minimaxPlanEntry).toBeDefined()
+      expect(instanceText(minimaxPlanEntry!)).toContain('Add an independent account')
+
+      await act(async () => minimaxPlanEntry!.props.onClick())
+      expect(renderer.root.findAllByProps({ role: 'dialog' })).toHaveLength(0)
+      expect(rendererText(renderer)).toContain('Unsaved')
+      expect(rendererText(renderer)).toContain('MiniMax Token Plan 2')
+
+      await act(async () => findButton(renderer, 'Cancel').props.onClick())
+      expect(rendererText(renderer)).not.toContain('Unsaved')
+      expect(update).not.toHaveBeenCalled()
+
+      await act(async () => findButton(renderer, 'Add provider').props.onClick())
+      const reopenedDialog = renderer.root.findByProps({ role: 'dialog' })
+      const reopenedEntry = reopenedDialog.findAllByType('button')
+        .find((button) => {
+          const text = instanceText(button)
+          return text.includes('MiniMax') && text.includes('Token Plan') && text.includes('1 accounts')
+        })
+      await act(async () => reopenedEntry!.props.onClick())
+
+      const apiKeyInput = renderer.root.findAllByType('input')
+        .find((input) => input.props.placeholder === 'Enter provider API key')
+      await act(async () => apiKeyInput!.props.onChange({ target: { value: 'sk-second' } }))
+      await act(async () => findButton(renderer, 'Add').props.onClick())
+
+      const savedProviders = update.mock.calls[0]?.[0]?.provider?.providers as ModelProviderProfileV1[]
+      expect(savedProviders.filter((provider) => provider.presetSource?.presetId === 'minimax')).toEqual([
+        expect.objectContaining({
+          id: 'minimax-token-plan',
+          name: 'MiniMax Token Plan',
+          apiKey: 'sk-first',
+          presetSource: { presetId: 'minimax', mode: 'token-plan' }
+        }),
+        expect.objectContaining({
+          id: 'minimax-token-plan-2',
+          name: 'MiniMax Token Plan 2',
+          apiKey: 'sk-second',
+          presetSource: { presetId: 'minimax', mode: 'token-plan' }
+        })
+      ])
+      expect(update.mock.calls[0]?.[0]?.agents?.kun?.providerId).toBe('minimax-token-plan-2')
+    })
+
+    it('uses the canonical models.dev source for a numbered provider account', async () => {
+      const settings = defaultModelProviderSettings()
+      const kimi = getModelProviderPreset('kimi-code')!
+      const first = modelProviderPresetAccountProfile(kimi, 'api', [])!
+      const second = {
+        ...modelProviderPresetAccountProfile(kimi, 'api', [first])!,
+        apiKey: 'sk-second'
+      }
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, first, second] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: second.id, model: second.models[0] }
+      })
+
+      await clickProviderTab(renderer, 'Models')
+      await act(async () => {
+        findButton(renderer, 'Fetch models').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(fetchModelsDevCatalog).toHaveBeenCalledWith({
+        providerId: 'kimi-code',
+        baseUrl: second.baseUrl,
+        forceRefresh: true
+      })
+    })
+
+    it('continues to refresh a pay-as-you-go preset without creating a duplicate account', async () => {
+      const settings = defaultModelProviderSettings()
+      const xiaomi = getModelProviderPreset('xiaomi')!
+      const existing = {
+        ...modelProviderPresetProfile(xiaomi, 'sk-xiaomi'),
+        name: 'Work Xiaomi',
+        models: [...modelProviderPresetProfile(xiaomi).models, 'private-model']
+      }
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, existing] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: existing.id, model: existing.models[0] },
+        update
+      })
+
+      await act(async () => findButton(renderer, 'Add provider').props.onClick())
+      const dialog = renderer.root.findByProps({ role: 'dialog' })
+      const xiaomiEntry = dialog.findAllByType('button')
+        .find((button) => instanceText(button).includes('Xiaomi') && instanceText(button).includes('Update preset'))
+      await act(async () => {
+        xiaomiEntry!.props.onClick()
+        await Promise.resolve()
+      })
+
+      expect(update).toHaveBeenCalledTimes(1)
+      const savedProviders = update.mock.calls[0]?.[0]?.provider?.providers as ModelProviderProfileV1[]
+      const savedXiaomi = savedProviders.filter((provider) => provider.id === 'xiaomi')
+      expect(savedXiaomi).toHaveLength(1)
+      expect(savedXiaomi[0]).toMatchObject({
+        name: 'Work Xiaomi',
+        apiKey: 'sk-xiaomi',
+        models: expect.arrayContaining(['private-model']),
+        presetSource: { presetId: 'xiaomi', mode: 'api' }
+      })
+      expect(rendererText(renderer)).not.toContain('Unsaved')
+    })
+
+    it('separates readiness, save failure, and fresh probe state', async () => {
+      const provider = defaultModelProviderSettings()
+      const probeProvider = {
+        id: 'probe-provider',
+        name: 'Probe Provider',
+        apiKey: 'sk-probe',
+        baseUrl: 'https://api.example.com/v1',
+        endpointFormat: 'chat_completions',
+        models: ['probe-model'],
+        modelProfiles: {}
+      } satisfies ModelProviderProfileV1
+      const providerContext = (profile: ModelProviderProfileV1): Record<string, unknown> => ({
+        ...baseCtx(),
+        provider: {
+          ...provider,
+          providers: [...provider.providers, profile]
+        },
+        kun: {
+          ...defaultKunRuntimeSettings(),
+          providerId: profile.id
+        },
+        saveStatus: 'error',
+        saveError: 'Disk is read-only'
+      })
+      const renderer = await mountProviders(providerContext(probeProvider))
+
+      expect(rendererText(renderer)).toContain('Ready')
+      expect(rendererText(renderer)).toContain('Could not apply')
+      expect(renderer.root.findAllByType('span')
+        .filter((span) => span.props.title === 'Disk is read-only')).toHaveLength(1)
+      expect(findButton(renderer, 'Test connection').props.disabled).toBe(false)
+
+      await act(async () => {
+        findButton(renderer, 'Test connection').props.onClick()
+        await Promise.resolve()
+      })
+      expect(probeModelProvider).toHaveBeenCalledWith({
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'sk-probe',
+        endpointFormat: 'chat_completions'
+      })
+      expect(fetchModelsDevCatalog).not.toHaveBeenCalled()
+      expect(rendererText(renderer)).toContain('Connected · 18ms · 2 models')
+      expect(rendererText(renderer)).toContain('Could not apply')
+
+      const changedProvider = { ...probeProvider, baseUrl: 'https://api.changed.example/v1' }
+      await act(async () => {
+        renderer.update(createElement(ProvidersSettingsSection, { ctx: providerContext(changedProvider) }))
+      })
+      expect(rendererText(renderer)).not.toContain('Connected · 18ms · 2 models')
+      expect(rendererText(renderer)).toContain('Ready')
+
+      const invalidProvider = { ...probeProvider, baseUrl: 'api.changed.example/v1' }
+      await act(async () => {
+        renderer.update(createElement(ProvidersSettingsSection, { ctx: providerContext(invalidProvider) }))
+      })
+      expect(rendererText(renderer)).toContain('Needs configuration')
+      expect(rendererText(renderer)).toContain('URL must start with http:// or https://')
+      expect(findButton(renderer, 'Test connection').props.disabled).toBe(true)
+      expect(rendererText(renderer)).toContain('Could not apply')
+    })
+
+    it('fetches both model sources and persists metadata only for confirmed selections', async () => {
+      const settings = defaultModelProviderSettings()
+      const target = {
+        id: 'probe-provider',
+        name: 'Probe Provider',
+        apiKey: 'sk-probe',
+        baseUrl: 'https://api.example.com/v1',
+        endpointFormat: 'chat_completions',
+        models: [],
+        modelProfiles: {}
+      } satisfies ModelProviderProfileV1
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, target] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: target.id },
+        update
+      })
+
+      await act(async () => findButton(renderer, 'Models').props.onClick())
+      await act(async () => {
+        findButton(renderer, 'Fetch models').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(probeModelProvider).toHaveBeenCalledWith({
+        baseUrl: target.baseUrl,
+        apiKey: target.apiKey,
+        endpointFormat: target.endpointFormat
+      })
+      expect(fetchModelsDevCatalog).toHaveBeenCalledWith({
+        providerId: target.id,
+        baseUrl: target.baseUrl,
+        forceRefresh: true
+      })
+      expect(instanceText(renderer.root.findByProps({ role: 'dialog' }))).toContain('models.dev only')
+      expect(findButton(renderer, 'Import 2').props.disabled).toBe(false)
+
+      await act(async () => findButton(renderer, 'Import 2').props.onClick())
+
+      const updatedProviders = update.mock.calls[0]?.[0]?.provider?.providers as ModelProviderProfileV1[]
+      const updatedTarget = updatedProviders.find((item) => item.id === target.id)
+      expect(updatedTarget?.models).toEqual(['model-a', 'model-b'])
+      expect(updatedTarget?.models).not.toContain('catalog-only')
+      expect(updatedTarget?.modelProfiles['model-a']).toEqual(expect.objectContaining({
+        contextWindowTokens: 128_000,
+        maxOutputTokens: 16_000,
+        inputModalities: ['text', 'image'],
+        supportsToolCalling: true,
+        messageParts: ['text', 'image_url']
+      }))
+    })
+
+    it('applies catalog metadata to models that were already configured', async () => {
+      const settings = defaultModelProviderSettings()
+      const target = {
+        id: 'probe-provider',
+        name: 'Probe Provider',
+        apiKey: 'sk-probe',
+        baseUrl: 'https://api.example.com/v1',
+        endpointFormat: 'chat_completions',
+        models: ['model-a', 'model-b'],
+        modelProfiles: {}
+      } satisfies ModelProviderProfileV1
+      const update = vi.fn()
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, target] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: target.id },
+        update
+      })
+
+      await act(async () => findButton(renderer, 'Models').props.onClick())
+      await act(async () => {
+        findButton(renderer, 'Fetch models').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(findButton(renderer, 'Apply model metadata').props.disabled).toBe(false)
+      await act(async () => findButton(renderer, 'Apply model metadata').props.onClick())
+
+      const updatedProviders = update.mock.calls[0]?.[0]?.provider?.providers as ModelProviderProfileV1[]
+      const updatedTarget = updatedProviders.find((item) => item.id === target.id)
+      expect(updatedTarget?.models).toEqual(target.models)
+      expect(updatedTarget?.modelProfiles['model-a']).toEqual(expect.objectContaining({
+        contextWindowTokens: 128_000,
+        maxOutputTokens: 16_000,
+        inputModalities: ['text', 'image'],
+        supportsToolCalling: true,
+        messageParts: ['text', 'image_url']
+      }))
+    })
+
+    it('keeps catalog-only candidates unchecked when the provider model request fails', async () => {
+      probeModelProvider.mockResolvedValueOnce({ ok: false, message: '401 unauthorized' })
+      const settings = defaultModelProviderSettings()
+      const target = {
+        id: 'probe-provider',
+        name: 'Probe Provider',
+        apiKey: 'sk-probe',
+        baseUrl: 'https://api.example.com/v1',
+        endpointFormat: 'chat_completions',
+        models: [],
+        modelProfiles: {}
+      } satisfies ModelProviderProfileV1
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, target] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: target.id }
+      })
+
+      await act(async () => findButton(renderer, 'Models').props.onClick())
+      await act(async () => {
+        findButton(renderer, 'Fetch models').props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      const dialogText = instanceText(renderer.root.findByProps({ role: 'dialog' }))
+      expect(dialogText).toContain('Provider verification failed: 401 unauthorized')
+      expect(dialogText).toContain('models.dev only')
+      expect(findButton(renderer, 'Import 0').props.disabled).toBe(true)
+    })
   })
 
   it('keeps advanced agent controls behind collapsed disclosures', () => {
@@ -671,6 +1623,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     expect(html).toContain('Assistant advanced settings')
     expect(html).toContain('Storage, model context, and tool guards')
+    expect(html).toContain('Maximum concurrent turns')
+    expect(html).toContain('value="256"')
     expect(html).toContain('Maximum turn duration')
     expect(html).toContain('value="86400000"')
     expect(html).toContain('MCP advanced settings')

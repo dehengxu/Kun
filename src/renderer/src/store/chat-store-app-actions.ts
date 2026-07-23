@@ -97,6 +97,10 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
     workspaceLabelFromPath,
     normalizeWorkspaceRoot
   } = options
+  // Settings may finish saving while the startup model read is still in
+  // flight. Keep one follow-up read so the composer does not retain the
+  // stale provider list returned by that earlier request.
+  let queuedComposerModelReload: Promise<void> | null = null
 
   return {
     setError: (message) => set({ error: message }),
@@ -162,7 +166,18 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
     },
 
     loadComposerModels: async () => {
-      if (getComposerModelLoadPromise()) return getComposerModelLoadPromise()!
+      const existingLoad = getComposerModelLoadPromise()
+      if (existingLoad) {
+        if (!queuedComposerModelReload) {
+          queuedComposerModelReload = existingLoad
+            .catch(() => undefined)
+            .then(() => get().loadComposerModels())
+            .finally(() => {
+              queuedComposerModelReload = null
+            })
+        }
+        return queuedComposerModelReload
+      }
       if (typeof window.kunGui === 'undefined') return
       const task = (async () => {
         const [res, extensionProviders] = await Promise.all([

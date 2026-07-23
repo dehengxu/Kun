@@ -10,6 +10,8 @@ import {
   KUN_MEMORY_TEMPLATE,
   KUN_MCP_OAUTH_SERVER_TEMPLATE,
   KUN_MCP_OAUTH_TEMPLATE,
+  KUN_MODEL_ROUTES_TEMPLATE,
+  KUN_MODEL_ROUTE_TEST_TEMPLATE,
   KUN_RUNTIME_INFO_TEMPLATE,
   KUN_RUNTIME_TOOLS_TEMPLATE,
   KUN_SUPPLY_CHAIN_AUDIT_TEMPLATE,
@@ -26,13 +28,15 @@ import {
   KUN_THREAD_TURN_TEMPLATE,
   KUN_THREAD_TURNS_TEMPLATE,
   KUN_THREAD_INTERRUPT_TEMPLATE,
+  KUN_THREAD_MODEL_REQUESTS_TEMPLATE,
   KUN_THREAD_STEER_TEMPLATE,
   KUN_THREAD_TEMPLATE,
   KUN_USER_INPUT_TEMPLATE,
   KUN_USAGE_TEMPLATE,
   KUN_DEBUG_LLM_ROUNDS_TEMPLATE,
   KUN_BACKGROUND_SHELLS_TEMPLATE,
-  KUN_BACKGROUND_SHELL_TEMPLATE
+  KUN_BACKGROUND_SHELL_TEMPLATE,
+  KUN_DELEGATION_PROFILES_TEMPLATE
 } from '../../../shared/kun-endpoints'
 import { MODEL_ENDPOINT_FORMATS } from '../../../shared/app-settings'
 import { MAX_BODY_BYTES, MAX_URL_LENGTH, trimmedString } from './common'
@@ -41,6 +45,21 @@ export const providerProbePayloadSchema = z
     baseUrl: trimmedString(MAX_URL_LENGTH),
     apiKey: z.string().max(8_192),
     endpointFormat: z.enum(MODEL_ENDPOINT_FORMATS)
+  })
+  .strict()
+
+export const modelsDevCatalogPayloadSchema = z
+  .object({
+    providerId: trimmedString(128),
+    // SDK-backed subscription providers (Cursor and Antigravity) deliberately
+    // have no HTTP endpoint. Their canonical provider id is enough for
+    // deterministic models.dev matching, so an empty Base URL is valid here.
+    baseUrl: z.string().trim().max(MAX_URL_LENGTH),
+    forceRefresh: z.boolean().optional(),
+    modelHints: z.array(z.object({
+      id: trimmedString(512),
+      aliases: z.array(trimmedString(512)).max(32).optional()
+    }).strict()).max(500).optional()
   })
   .strict()
 
@@ -76,6 +95,8 @@ const ENDPOINTS: readonly EndpointTemplate[] = [
   compileEndpoint(KUN_HEALTH_TEMPLATE, ['GET']),
   compileEndpoint(KUN_RUNTIME_INFO_TEMPLATE, ['GET']),
   compileEndpoint(KUN_RUNTIME_TOOLS_TEMPLATE, ['GET']),
+  compileEndpoint(KUN_MODEL_ROUTES_TEMPLATE, ['GET']),
+  compileEndpoint(KUN_MODEL_ROUTE_TEST_TEMPLATE, ['POST']),
   compileEndpoint(KUN_SUPPLY_CHAIN_AUDIT_TEMPLATE, ['POST']),
   compileEndpoint(KUN_SUPPLY_CHAIN_UPDATE_CHECK_TEMPLATE, ['POST']),
   compileEndpoint(KUN_SKILLS_TEMPLATE, ['GET']),
@@ -100,13 +121,15 @@ const ENDPOINTS: readonly EndpointTemplate[] = [
   compileEndpoint(KUN_THREAD_TURN_TEMPLATE, ['GET']),
   compileEndpoint(KUN_THREAD_STEER_TEMPLATE, ['POST']),
   compileEndpoint(KUN_THREAD_INTERRUPT_TEMPLATE, ['POST']),
+  compileEndpoint(KUN_THREAD_MODEL_REQUESTS_TEMPLATE, ['GET']),
   compileEndpoint(KUN_USER_INPUT_TEMPLATE, ['POST']),
   compileEndpoint(KUN_SESSION_RESUME_TEMPLATE, ['POST']),
   compileEndpoint(KUN_USAGE_TEMPLATE, ['GET']),
   compileEndpoint(KUN_DEBUG_LLM_ROUNDS_TEMPLATE, ['GET']),
   compileEndpoint(KUN_BACKGROUND_SHELLS_TEMPLATE, ['GET']),
   compileEndpoint(KUN_BACKGROUND_SHELL_TEMPLATE, ['GET']),
-  compileEndpoint(`${KUN_BACKGROUND_SHELL_TEMPLATE}/stop`, ['POST'])
+  compileEndpoint(`${KUN_BACKGROUND_SHELL_TEMPLATE}/stop`, ['POST']),
+  compileEndpoint(KUN_DELEGATION_PROFILES_TEMPLATE, ['GET'])
 ]
 
 function isAllowedRuntimeRequest(value: { path: string; method?: string }): boolean {

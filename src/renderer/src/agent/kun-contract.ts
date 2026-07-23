@@ -225,6 +225,7 @@ export type CoreRuntimeCapabilityManifestJson = {
     lastInjectedBytes?: number
   }
   subagents: CoreRuntimeCapabilityStateJson & {
+    useExistingAgents?: boolean
     maxParallel: number
     maxChildRuns: number
     defaultToolPolicy?: 'readOnly' | 'inherit'
@@ -399,6 +400,7 @@ export type CoreChildRuntimeMetadataJson = {
   detached?: boolean
   childModel?: string
   childProfile?: string
+  childProfileName?: string
   childToolPolicy?: 'readOnly' | 'inherit'
   prefixReused?: boolean
   inheritedHistoryItems?: number
@@ -440,6 +442,7 @@ export type CoreTurnJson = {
   workspaceCheckpointId?: string
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
+  agentSurface?: 'code' | 'write' | 'design'
   error?: string
 }
 

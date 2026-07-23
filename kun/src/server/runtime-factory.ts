@@ -15,11 +15,21 @@ import { HybridSessionStore, HybridThreadStore } from '../adapters/hybrid/index.
 import { CompatModelClient } from '../adapters/model/compat-model-client.js'
 import { ExtensionModelProviderRegistry } from '../adapters/model/extension-model-provider.js'
 import { MultiProviderModelClient } from '../adapters/model/multi-provider-model-client.js'
+import { RoutePoolHealthStore, RoutePoolModelClient } from '../adapters/model/route-pool-model-client.js'
 import { CapabilityRegistry } from '../adapters/tool/capability-registry.js'
 import {
   createAgentSdkRuntime,
   type AgentSdkRuntimeFactoryDeps
 } from '../runtime/agent-sdk/agent-sdk-runtime-factory.js'
+import {
+  AntigravityCliRuntime,
+  type AntigravityCliRuntimeDeps
+} from '../runtime/antigravity/antigravity-cli-runtime.js'
+import {
+  CursorSdkRuntime,
+  type CursorSdkRuntimeDeps
+} from '../runtime/cursor/cursor-sdk-runtime.js'
+import { composeDelegatedTurnRuntimes } from '../runtime/delegated-turn-runtime.js'
 import { buildGoalLocalTools } from '../adapters/tool/goal-tools.js'
 import { buildTodoLocalTools } from '../adapters/tool/todo-tools.js'
 import { buildDesignCanvasLocalTools } from '../adapters/tool/design-canvas-tool.js'
@@ -98,6 +108,7 @@ import { ThreadService } from '../services/thread-service.js'
 import { TurnService } from '../services/turn-service.js'
 import { ReviewService } from '../services/review-service.js'
 import { UsageService } from '../services/usage-service.js'
+import { RoutePoolTestService } from '../services/route-pool-test-service.js'
 import type { UsageEvent } from '../contracts/events.js'
 import type {
   RuntimeConfigApplyRequest,
@@ -112,11 +123,19 @@ import { InstructionRuntime } from '../instructions/instruction-runtime.js'
 import { resolveConfiguredHooks, type HooksConfig } from '../hooks/hook-config.js'
 import { FileMemoryStore } from '../memory/memory-store.js'
 import { DelegationRuntime, FileDelegationStore } from '../delegation/delegation-runtime.js'
-import { createChildAgentExecutor } from '../delegation/child-agent-executor.js'
+import {
+  createChildAgentExecutor,
+  type ChildDelegatedRuntimeFactory
+} from '../delegation/child-agent-executor.js'
+import { SubagentRouter } from '../delegation/subagent-router.js'
 import { BackgroundShellRuntime } from '../services/background-shell-runtime.js'
 import { stopBashSessionById, createBashLocalTool } from '../adapters/tool/builtin-bash-tool.js'
 import { createBackgroundShellTool } from '../adapters/tool/background-shell-tool.js'
-import { createSecretEncryptor, defaultSecretCommandRunner } from '../security/secret-store.js'
+import {
+  createSecretEncryptor,
+  defaultSecretCommandRunner,
+  hasPersistedSecretKeyMaterial
+} from '../security/secret-store.js'
 import type { LocalTool } from '../adapters/tool/local-tool-host.js'
 import type { FaultInjectionController } from '../services/fault-injection-controller.js'
 import { InMemoryPublisherTrustStore } from '../supplychain/publisher-trust-store.js'
@@ -150,6 +169,7 @@ import {
   LegacyProviderCredentialMigrationService,
   materializeLegacyProviderCredential
 } from '../services/legacy-provider-credential-migration.js'
+import { GrokOAuthCredentialRefresher } from '../services/grok-oauth-credential-refresher.js'
 import { ExtensionViewSessionService } from '../services/extension-view-session-service.js'
 import { ExtensionViewHostGenerationTracker } from '../extensions/view-host-generation-tracker.js'
 import { ExtensionSecretRevealConsentService } from '../services/extension-secret-reveal-consent.js'
@@ -167,6 +187,7 @@ import { ExtensionMediaArchiveJobService } from '../services/extension-media-arc
 import { ExtensionVisualAnalysisService } from '../services/extension-visual-analysis-service.js'
 import { RuntimeMigrationService } from '../services/runtime-migration-service.js'
 import { RuntimeMigrationImportService } from '../services/runtime-migration-import-service.js'
+import type { LocalModelGatewayConfig, ModelRoutePoolConfig } from '../contracts/model-route-pool.js'
 
 export type KunServeRuntimeOptions = {
   host: string
@@ -198,6 +219,8 @@ export type KunServeRuntimeOptions = {
    * Empty/absent → runtime stays single-provider (current behavior).
    */
   providers?: Record<string, ServeProviderConfig>
+  routePools?: ModelRoutePoolConfig[]
+  localModelGateway?: LocalModelGatewayConfig
   model: string
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
@@ -267,6 +290,9 @@ export async function createKunServeRuntime(
   const ids = new RandomIdGenerator()
   const nowIso = () => new Date().toISOString()
   const allocateSeq = (threadId: string) => eventBus.allocateSeq(threadId)
+  // Agent Perspective covers both HTTP-backed providers and delegated
+  // subscription transports. Records are private, thread-scoped JSONL.
+  const llmDebug = new LlmDebugRecorder({ dataDir: activeOptions.dataDir })
   const agentObservability = createAgentObservabilityRecorder({
     config: activeOptions.observability,
     dataDir: activeOptions.dataDir
@@ -303,11 +329,12 @@ export async function createKunServeRuntime(
       abortThreadExecution?.(threadId)
       await stopThreadAuxiliaryWork?.(threadId)
     },
-    onDeleted: (threadId) => {
+    onDeleted: async (threadId) => {
       eventStreamRegistry.closeThread(threadId)
       usageService.reset(threadId)
       events.clearThread(threadId)
       eventBus.clearThread(threadId)
+      await llmDebug.deleteThread(threadId)
     }
   })
   const artifactStore = new FileArtifactStore(join(activeOptions.dataDir, 'artifacts'), nowIso)
@@ -316,18 +343,19 @@ export async function createKunServeRuntime(
     models: activeOptions.models
   })
   const modelCapabilities = (model: string) => modelCapabilitiesForModel(model, modelProfiles)
-  const llmDebug = activeOptions.runtime?.llmDebug?.enabled ? new LlmDebugRecorder() : undefined
-  // Providers whose kind is 'agent-sdk' don't get an HTTP client — their turns
-  // are delegated to the embedded Claude Agent SDK (subscription) instead.
+  // Provider-native subscription transports don't get an HTTP client.
   const agentSdkProviderIds = agentSdkProviderIdsForOptions(activeOptions)
-  let agentSdkSignature = agentSdkProviderSignature(activeOptions)
+  const antigravityProviderIds = antigravityProviderIdsForOptions(activeOptions)
+  const cursorSdkProviderIds = cursorSdkProviderIdsForOptions(activeOptions)
+  let delegatedProviderSignature = delegatedProviderSignatureForOptions(activeOptions)
   const extensionProviderAccounts = new ExtensionProviderAccountStore({
     dataDir: activeOptions.dataDir,
     nowIso
   })
   const extensionCredentialKeyProvider = await createSecretEncryptor({
     keyFilePath: join(activeOptions.dataDir, 'secret.key'),
-    run: defaultSecretCommandRunner
+    run: defaultSecretCommandRunner,
+    canBootstrapKeyFileFallback: async () => !(await hasPersistedSecretKeyMaterial(activeOptions.dataDir))
   })
   const extensionCredentials = new ExtensionCredentialStore({
     dataDir: activeOptions.dataDir,
@@ -353,6 +381,24 @@ export async function createKunServeRuntime(
     credentials: extensionCredentials,
     nowIso
   })
+  const grokCredentialRefresher = new GrokOAuthCredentialRefresher(
+    legacyCredentialMigration
+  )
+  const resolveLegacyRequestCredentials = async (
+    sourceId: string,
+    rejectedAccessToken?: string
+  ): Promise<{
+    apiKey: string
+    headers?: Record<string, string>
+    refreshable: boolean
+  }> => {
+    const resolved = await grokCredentialRefresher.resolve(sourceId, rejectedAccessToken)
+    const material = materializeLegacyProviderCredential(resolved.rawApiKey)
+    return {
+      ...material,
+      refreshable: resolved.refreshable
+    }
+  }
   const migrateLegacyProviderCredentials = async (): Promise<void> => {
     const sources = [
       ...(activeOptions.apiKey.trim() && !activeOptions.credentialSourceId ? [{
@@ -381,15 +427,54 @@ export async function createKunServeRuntime(
   }
   await migrateLegacyProviderCredentials()
   activeOptions = await hydrateLegacyCredentialOptions(activeOptions, legacyCredentialMigration)
-  const modelClient = new MultiProviderModelClient(
-    buildModelClientRouterInput(activeOptions, modelCapabilities, llmDebug)
+  const directModelClient = new MultiProviderModelClient(
+    buildModelClientRouterInput(
+      activeOptions,
+      modelCapabilities,
+      llmDebug,
+      resolveLegacyRequestCredentials
+    )
   )
+  const routeHealth = new RoutePoolHealthStore(join(activeOptions.dataDir, 'model-routing', 'health.json'))
+  await routeHealth.load()
+  const modelClient = new RoutePoolModelClient(
+    directModelClient,
+    activeOptions.routePools ?? [],
+    modelCapabilities,
+    routeHealth
+  )
+  const routePoolTests = new RoutePoolTestService(
+    modelClient,
+    () => modelClient.routePools(),
+    routeHealth
+  )
+  const subagentRouter = new SubagentRouter({
+    modelClient,
+    roles: () => activeOptions.roles,
+    defaultModel: () => activeOptions.model,
+    recordUsage: async ({ threadId, turnId, model, usage }) => {
+      const cumulative = usageService.record(threadId, usage)
+      await events.record({
+        kind: 'usage',
+        threadId,
+        turnId,
+        model,
+        usage: cumulative
+      })
+    }
+  })
   const replaceRoutedModelClients = (): void => {
-    const next = buildModelClientRouterInput(activeOptions, modelCapabilities, llmDebug)
+    const next = buildModelClientRouterInput(
+      activeOptions,
+      modelCapabilities,
+      llmDebug,
+      resolveLegacyRequestCredentials
+    )
     for (const [providerId, client] of extensionModelProviders.clientMap()) {
       next.providers.set(providerId, client)
     }
-    modelClient.replace(next)
+    directModelClient.replace(next)
+    modelClient.replacePools(activeOptions.routePools ?? [])
   }
   const stopExtensionModelListener = extensionModelProviders.onDidChange(replaceRoutedModelClients)
   const hasMcpOAuth = Object.values(activeOptions.capabilities?.mcp?.servers ?? {}).some((server) =>
@@ -585,6 +670,86 @@ export async function createKunServeRuntime(
     readTracker: true,
     ...(resolvedHooks.length ? { hooks: resolvedHooks } : {})
   })
+  const defaultIsAgentSdk = process.env.KUN_RUNTIME_PROVIDER_KIND === 'agent-sdk'
+  const defaultIsAntigravity = process.env.KUN_RUNTIME_PROVIDER_KIND === 'antigravity-cli'
+  const defaultIsCursorSdk = process.env.KUN_RUNTIME_PROVIDER_KIND === 'cursor-sdk'
+  const createChildDelegatedRuntime: ChildDelegatedRuntimeFactory = (child) =>
+    composeDelegatedTurnRuntimes([
+    ...(agentSdkProviderIds.size > 0 || defaultIsAgentSdk
+      ? [createAgentSdkRuntime({
+          registry: childRegistry,
+          toolHost: childToolHost,
+          turns: child.turns,
+          sessionStore: child.sessionStore,
+          threadStore: child.threadStore,
+          events: child.events,
+          ids: child.ids,
+          prefix: child.prefix,
+          providerConfigs: activeOptions.providers ?? {},
+          agentSdkProviderIds,
+          defaultApprovalPolicy: activeOptions.approvalPolicy,
+          defaultSandboxMode: activeOptions.sandboxMode,
+          defaultModel: activeOptions.model,
+          defaultIsAgentSdk,
+          defaultToken: activeOptions.apiKey,
+          turnLimits: activeOptions.runtime?.turnLimits,
+          approvalGate,
+          instructionRuntime,
+          allowSdkBuiltins: false,
+          toolContextBoundary: {
+            ...(child.allowedProviderIds ? { allowedProviderIds: child.allowedProviderIds } : {}),
+            ...(child.allowedToolNames ? { allowedToolNames: child.allowedToolNames } : {}),
+            ...(child.blockedProviderIds ? { blockedProviderIds: child.blockedProviderIds } : {}),
+            ...(child.blockedToolNames ? { blockedToolNames: child.blockedToolNames } : {}),
+            ...(child.blockedSkillIds ? { blockedSkillIds: child.blockedSkillIds } : {})
+          },
+          ...(child.skillsEnabled ? { skillRuntime } : {}),
+          ...(child.memoryEnabled && memoryStore ? { memoryStore } : {}),
+          ...(attachmentStore ? { attachmentStore } : {}),
+          ...(process.env.KUN_CLAUDE_BINARY
+            ? { pathToClaudeCodeExecutable: process.env.KUN_CLAUDE_BINARY }
+            : {}),
+          nowIso
+        })]
+      : []),
+    ...(antigravityProviderIds.size > 0 || defaultIsAntigravity
+      ? [new AntigravityCliRuntime({
+          providerConfigs: activeOptions.providers ?? {},
+          providerIds: antigravityProviderIds,
+          defaultIsAntigravity,
+          defaultModel: activeOptions.model,
+          systemPrompt: child.prefix.systemPrompt,
+          binaryPath: process.env.KUN_ANTIGRAVITY_BINARY,
+          threadStore: child.threadStore,
+          sessionStore: child.sessionStore,
+          turns: child.turns,
+          events: child.events,
+          ids: child.ids,
+          debugSink: llmDebug,
+          turnLimits: activeOptions.runtime?.turnLimits,
+          enforceReadOnly: child.toolPolicy === 'readOnly'
+        })]
+      : []),
+    ...(cursorSdkProviderIds.size > 0 || defaultIsCursorSdk
+      ? [new CursorSdkRuntime({
+          providerConfigs: activeOptions.providers ?? {},
+          providerIds: cursorSdkProviderIds,
+          defaultIsCursor: defaultIsCursorSdk,
+          defaultApiKey: activeOptions.apiKey,
+          defaultModel: activeOptions.model,
+          systemPrompt: child.prefix.systemPrompt,
+          threadStore: child.threadStore,
+          sessionStore: child.sessionStore,
+          turns: child.turns,
+          events: child.events,
+          ids: child.ids,
+          debugSink: llmDebug,
+          ...(attachmentStore ? { attachmentStore } : {}),
+          turnLimits: activeOptions.runtime?.turnLimits,
+          enforceReadOnly: child.toolPolicy === 'readOnly'
+        })]
+      : [])
+    ])
 	  let delegationRuntime = activeOptions.capabilities?.subagents.enabled
 	    ? new DelegationRuntime({
 	        config: mergeBuiltinSubagentProfiles(activeOptions.capabilities.subagents),
@@ -606,6 +771,8 @@ export async function createKunServeRuntime(
 	          skillRuntime,
 	          instructionRuntime,
 	          tokenEconomy,
+          approvalGate,
+          createDelegatedRuntime: createChildDelegatedRuntime,
           // Persist the child as a hidden `side` thread on the shared stores +
           // event bus so its session is loadable and streams live in the GUI.
           sessionStore,
@@ -707,7 +874,7 @@ export async function createKunServeRuntime(
       available: true,
       tools: [taskGraphTool]
     },
-    ...buildDelegationToolProviders(delegationRuntime),
+    ...buildDelegationToolProviders(delegationRuntime, subagentRouter),
     ...buildComponentDesignToolProviders(delegationRuntime)
   ])
   let prepareExtensionContributions: ((context?: ToolHostContext) => Promise<void>) | undefined
@@ -734,12 +901,8 @@ export async function createKunServeRuntime(
       // ignore duplicate/colliding registration
     }
   })
-  // Subscription engine: only constructed when at least one provider is the
-  // 'agent-sdk' kind. Owns the delegated turn for those providers' threads.
-  // The runtime's own default provider can itself be agent-sdk (the Claude
-  // subscription set as the main model). kun-process signals that via env so we
-  // route default-provider turns to the SDK too, not just per-provider ones.
-	  const defaultIsAgentSdk = process.env.KUN_RUNTIME_PROVIDER_KIND === 'agent-sdk'
+  // Provider-native subscription engines own whole turns and share the same
+  // narrow delegated runtime boundary.
 	  let sdkRuntimeDeps: AgentSdkRuntimeFactoryDeps | undefined
 	  if (agentSdkProviderIds.size > 0 || defaultIsAgentSdk) {
 	    sdkRuntimeDeps = {
@@ -771,6 +934,43 @@ export async function createKunServeRuntime(
 	        : {})
 	    }
 	  }
+	  let antigravityRuntimeDeps: AntigravityCliRuntimeDeps | undefined
+	  if (antigravityProviderIds.size > 0 || defaultIsAntigravity) {
+	    antigravityRuntimeDeps = {
+	      providerConfigs: activeOptions.providers ?? {},
+	      providerIds: antigravityProviderIds,
+	      defaultIsAntigravity,
+	      defaultModel: activeOptions.model,
+        systemPrompt: prefix.systemPrompt,
+	      binaryPath: process.env.KUN_ANTIGRAVITY_BINARY,
+	      threadStore,
+	      sessionStore,
+	      turns: turnService,
+	      events,
+	      ids,
+	      debugSink: llmDebug,
+	      turnLimits: activeOptions.runtime?.turnLimits
+	    }
+	  }
+	  let cursorRuntimeDeps: CursorSdkRuntimeDeps | undefined
+	  if (cursorSdkProviderIds.size > 0 || defaultIsCursorSdk) {
+	    cursorRuntimeDeps = {
+	      providerConfigs: activeOptions.providers ?? {},
+	      providerIds: cursorSdkProviderIds,
+	      defaultIsCursor: defaultIsCursorSdk,
+	      defaultApiKey: activeOptions.apiKey,
+	      defaultModel: activeOptions.model,
+	      systemPrompt: prefix.systemPrompt,
+	      threadStore,
+	      sessionStore,
+	      turns: turnService,
+	      events,
+	      ids,
+	      debugSink: llmDebug,
+	      ...(attachmentStore ? { attachmentStore } : {}),
+	      turnLimits: activeOptions.runtime?.turnLimits
+	    }
+	  }
 
   // The main turn abort signal already reaches foreground children. Detached
   // children and background shells intentionally have independent lifetimes,
@@ -782,7 +982,11 @@ export async function createKunServeRuntime(
       Promise.resolve(delegationRuntime?.abortDetachedChildrenForThread(threadId) ?? 0)
     ])
   }
-	  const sdkRuntime = sdkRuntimeDeps ? createAgentSdkRuntime(sdkRuntimeDeps) : undefined
+	  const sdkRuntime = composeDelegatedTurnRuntimes([
+	    ...(sdkRuntimeDeps ? [createAgentSdkRuntime(sdkRuntimeDeps)] : []),
+	    ...(antigravityRuntimeDeps ? [new AntigravityCliRuntime(antigravityRuntimeDeps)] : []),
+	    ...(cursorRuntimeDeps ? [new CursorSdkRuntime(cursorRuntimeDeps)] : [])
+	  ])
 	  const loopOptions: AgentLoopOptions = {
 	    threadStore,
 	    sessionStore,
@@ -1338,12 +1542,19 @@ export async function createKunServeRuntime(
 	      mergeRuntimeConfigApplyOptions(activeOptions, request),
 	      legacyCredentialMigration
 	    )
-	    const nextAgentSdkSignature = agentSdkProviderSignature(nextOptions)
-	    if (nextAgentSdkSignature !== agentSdkSignature) {
+	    if (nextOptions.localModelGateway?.enabled && !isLoopbackHost(nextOptions.host)) {
+	      return {
+	        ok: false,
+	        code: 'invalid_config',
+	        message: 'unauthenticated local model gateway requires a loopback serve host'
+	      }
+	    }
+	    const nextDelegatedProviderSignature = delegatedProviderSignatureForOptions(nextOptions)
+	    if (nextDelegatedProviderSignature !== delegatedProviderSignature) {
 	      return {
 	        ok: false,
 	        code: 'restart_required',
-	        message: 'agent-sdk provider routing changed and requires a runtime restart'
+	        message: 'delegated subscription provider routing changed and requires a runtime restart'
 	      }
 	    }
 	    const nextSubagentsEnabled = nextOptions.capabilities?.subagents.enabled === true
@@ -1464,7 +1675,7 @@ export async function createKunServeRuntime(
 	        available: true,
 	        tools: [taskGraphTool]
 	      },
-	      ...buildDelegationToolProviders(delegationRuntime),
+	      ...buildDelegationToolProviders(delegationRuntime, subagentRouter),
 	      ...buildComponentDesignToolProviders(delegationRuntime)
 	    ])
 
@@ -1472,7 +1683,7 @@ export async function createKunServeRuntime(
 	    activeOptions = nextOptions
 	    modelProfiles = nextModelProfiles
 	    tokenEconomy = nextTokenEconomy
-	    agentSdkSignature = nextAgentSdkSignature
+	    delegatedProviderSignature = nextDelegatedProviderSignature
 	    replaceRoutedModelClients()
 	    await migrateLegacyProviderCredentials()
 	    skillRuntime.replaceWith(nextSkillRuntime)
@@ -1512,6 +1723,22 @@ export async function createKunServeRuntime(
 	        sdkRuntimeDeps.memoryStore = memoryStore
 	      } else {
 	        delete sdkRuntimeDeps.memoryStore
+	      }
+	    }
+	    if (antigravityRuntimeDeps) {
+	      antigravityRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
+	      antigravityRuntimeDeps.defaultModel = activeOptions.model
+	      antigravityRuntimeDeps.turnLimits = activeOptions.runtime?.turnLimits
+	    }
+	    if (cursorRuntimeDeps) {
+	      cursorRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
+	      cursorRuntimeDeps.defaultApiKey = activeOptions.apiKey
+	      cursorRuntimeDeps.defaultModel = activeOptions.model
+	      cursorRuntimeDeps.turnLimits = activeOptions.runtime?.turnLimits
+	      if (attachmentStore) {
+	        cursorRuntimeDeps.attachmentStore = attachmentStore
+	      } else {
+	        delete cursorRuntimeDeps.attachmentStore
 	      }
 	    }
 	    turnService.updateRuntimeConfig({
@@ -1615,6 +1842,12 @@ export async function createKunServeRuntime(
 	      bundledSeedResults
 	    },
 	    modelClient,
+	    modelGateway: {
+	      enabled: () => activeOptions.localModelGateway?.enabled === true,
+	      pools: () => modelClient.routePools(),
+	      health: routeHealth,
+	      tests: routePoolTests
+	    },
 	    get defaultModel() {
 	      return activeOptions.model
 	    },
@@ -1729,6 +1962,7 @@ export async function createKunServeRuntime(
 	        await migrationImportService.shutdown()
       } finally {
         try {
+          await llmDebug.shutdown()
           await agentObservability?.shutdown()
         } finally {
           await stores.shutdown?.()
@@ -1801,13 +2035,21 @@ async function hydrateLegacyCredentialOptions(
 function buildModelClientRouterInput(
   options: KunServeRuntimeOptions,
   modelCapabilities: (model: string) => ReturnType<typeof modelCapabilitiesForModel>,
-  llmDebug?: LlmDebugRecorder
-): { default: CompatModelClient; providers: Map<string, ModelClient> } {
+  llmDebug?: LlmDebugRecorder,
+  credentialResolver?: (
+    sourceId: string,
+    rejectedAccessToken?: string
+  ) => Promise<{
+    apiKey: string
+    headers?: Record<string, string>
+    refreshable: boolean
+  }>
+): { default: ModelClient; providers: Map<string, ModelClient> } {
   const streamIdleOverride =
     options.runtime?.streamIdleTimeoutMs !== undefined
       ? { streamIdleTimeoutMs: options.runtime.streamIdleTimeoutMs }
       : {}
-  const defaultClient = new CompatModelClient({
+  const defaultClient: ModelClient = new CompatModelClient({
     baseUrl: options.baseUrl,
     apiKey: options.apiKey,
     modelProxyUrl: options.modelProxyUrl,
@@ -1816,28 +2058,38 @@ function buildModelClientRouterInput(
     model: options.model,
     modelCapabilities,
     headers: options.headers,
+    ...(options.credentialSourceId && credentialResolver
+      ? {
+          resolveCredentials: (rejectedAccessToken?: string) =>
+            credentialResolver(options.credentialSourceId!, rejectedAccessToken)
+        }
+      : {}),
     ...(llmDebug ? { debugSink: llmDebug } : {}),
     ...streamIdleOverride
   })
   const providerClients = new Map<string, ModelClient>()
   for (const [providerId, provider] of Object.entries(options.providers ?? {})) {
     const trimmedId = providerId.trim()
-    if (!trimmedId || (provider.kind ?? 'http') === 'agent-sdk') continue
-    providerClients.set(
-      trimmedId,
-      new CompatModelClient({
-        baseUrl: provider.baseUrl ?? options.baseUrl ?? '',
-        apiKey: provider.apiKey,
-        modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
-        endpointFormat: provider.endpointFormat ?? options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
-        retry: provider.retry ?? options.retry,
-        model: options.model,
-        modelCapabilities,
-        headers: provider.headers,
-        ...(llmDebug ? { debugSink: llmDebug } : {}),
-        ...streamIdleOverride
-      })
-    )
+    if (!trimmedId || (provider.kind ?? 'http') !== 'http') continue
+    const client: ModelClient = new CompatModelClient({
+      baseUrl: provider.baseUrl ?? options.baseUrl ?? '',
+      apiKey: provider.apiKey,
+      modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
+      endpointFormat: provider.endpointFormat ?? options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
+      retry: provider.retry ?? options.retry,
+      model: options.model,
+      modelCapabilities,
+      headers: provider.headers,
+      ...(provider.credentialSourceId && credentialResolver
+        ? {
+            resolveCredentials: (rejectedAccessToken?: string) =>
+              credentialResolver(provider.credentialSourceId!, rejectedAccessToken)
+          }
+        : {}),
+      ...(llmDebug ? { debugSink: llmDebug } : {}),
+      ...streamIdleOverride
+    })
+    providerClients.set(trimmedId, client)
   }
   return { default: defaultClient, providers: providerClients }
 }
@@ -1851,8 +2103,30 @@ function agentSdkProviderIdsForOptions(options: KunServeRuntimeOptions): Set<str
   return out
 }
 
-function agentSdkProviderSignature(options: KunServeRuntimeOptions): string {
-  return [...agentSdkProviderIdsForOptions(options)].sort().join('\n')
+function antigravityProviderIdsForOptions(options: KunServeRuntimeOptions): Set<string> {
+  const out = new Set<string>()
+  for (const [providerId, provider] of Object.entries(options.providers ?? {})) {
+    const trimmedId = providerId.trim()
+    if (trimmedId && (provider.kind ?? 'http') === 'antigravity-cli') out.add(trimmedId)
+  }
+  return out
+}
+
+function cursorSdkProviderIdsForOptions(options: KunServeRuntimeOptions): Set<string> {
+  const out = new Set<string>()
+  for (const [providerId, provider] of Object.entries(options.providers ?? {})) {
+    const trimmedId = providerId.trim()
+    if (trimmedId && (provider.kind ?? 'http') === 'cursor-sdk') out.add(trimmedId)
+  }
+  return out
+}
+
+function delegatedProviderSignatureForOptions(options: KunServeRuntimeOptions): string {
+  return [
+    ...[...agentSdkProviderIdsForOptions(options)].map((id) => `agent-sdk:${id}`),
+    ...[...antigravityProviderIdsForOptions(options)].map((id) => `antigravity-cli:${id}`),
+    ...[...cursorSdkProviderIdsForOptions(options)].map((id) => `cursor-sdk:${id}`)
+  ].sort().join('\n')
 }
 
 function mergeRuntimeConfigApplyOptions(
@@ -1870,6 +2144,8 @@ function mergeRuntimeConfigApplyOptions(
     retry: serve.retry ?? current.retry,
     headers: serve.headers ?? current.headers,
     providers: serve.providers ?? current.providers,
+    routePools: serve.routePools ?? current.routePools,
+    localModelGateway: serve.localModelGateway ?? current.localModelGateway,
     model: serve.model ?? current.model,
     approvalPolicy: serve.approvalPolicy ?? current.approvalPolicy,
     sandboxMode: serve.sandboxMode ?? current.sandboxMode,

@@ -33,6 +33,7 @@ import type {
   ClawImInstallQrResult,
   ConversationWorkspaceCreateResult,
   DesktopCommand,
+  KunRuntimeSettingsSyncStatusPayload,
   RuntimeRequestResult,
   SystemNotificationResult,
   TurnCompleteNotificationPayload,
@@ -50,6 +51,7 @@ import {
   clawTaskFromTextPayloadSchema,
   computerUsePermissionKindSchema,
   conversationExportPayloadSchema,
+  cursorSubscriptionDiscoveryPayloadSchema,
   deepseekConfigContentSchema,
   desktopCommandSchema,
   defaultPathSchema,
@@ -62,6 +64,7 @@ import {
   logErrorPayloadSchema,
   notificationPayloadSchema,
   openEditorPathPayloadSchema,
+  modelsDevCatalogPayloadSchema,
   providerProbePayloadSchema,
   projectDesignMdLintPayloadSchema,
   promptOptimizationPayloadSchema,
@@ -147,11 +150,24 @@ import {
 } from '../agent-sdk-installer'
 import type { JsonSettingsStore } from '../settings-store'
 import { probeModelProvider } from '../provider-connection'
+import { fetchModelsDevCatalog } from '../models-dev-catalog'
 import type { ClawRuntime } from '../claw-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
 import { reloadRenderer } from '../dev-renderer-cache'
 import { verifyTelegramBotToken } from '../telegram-runtime'
 import { startCodexDeviceAuth, pollCodexDeviceAuth, startCodexBrowserAuth } from '../codex-auth'
+import {
+  startGrokBrowserAuth,
+  submitGrokBrowserAuthCode,
+  cancelGrokBrowserAuth
+} from '../grok-auth'
+import {
+  antigravityCliDownloadState,
+  fetchAntigravityModels,
+  resolveAntigravityCliBinary,
+  startAntigravityCliInstall
+} from '../antigravity-cli'
+import { discoverCursorSubscription } from '../cursor-subscription-models'
 import type { WorkflowRuntime } from '../workflow-runtime'
 import { checkWorkflowCode } from '../workflow-runtime'
 import {
@@ -303,6 +319,7 @@ type RegisterAppIpcHandlersOptions = {
     body?: string,
     headers?: Record<string, string>
   ) => Promise<RuntimeRequestResult>
+  getRuntimeSettingsSyncStatus: () => KunRuntimeSettingsSyncStatusPayload
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   getClawRuntime: () => ClawRuntime | null
@@ -535,6 +552,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     applySettingsPatch,
     saveSettingsPatch,
     runtimeRequest,
+    getRuntimeSettingsSyncStatus,
     restartRuntime,
     fetchUpstreamModels,
     getClawRuntime,
@@ -778,6 +796,37 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       binaryPath: claudeSubBinary()
     })
   )
+  const antigravityBinary = (): string | undefined =>
+    resolveAntigravityCliBinary(app.getPath('userData'))
+  ipcMain.handle('gemini-subscription:cli-status', async () => ({
+    installed: Boolean(antigravityBinary()),
+    ...(antigravityBinary() ? { path: antigravityBinary() } : {}),
+    download: antigravityCliDownloadState()
+  }))
+  ipcMain.handle('gemini-subscription:cli-install', async () =>
+    startAntigravityCliInstall(
+      { userDataDir: app.getPath('userData'), proxyUrl: resolveModelProviderProxyUrl(await store.load()) },
+      (state) => getMainWindow()?.webContents.send('gemini-subscription:cli-progress', state)
+    )
+  )
+  ipcMain.handle('gemini-subscription:models', async () => {
+    const binaryPath = antigravityBinary()
+    if (!binaryPath) {
+      throw new Error('Antigravity CLI is not installed. Install it from the Gemini subscription settings first.')
+    }
+    return fetchAntigravityModels({ binaryPath })
+  })
+  ipcMain.handle('cursor-subscription:discover', async (_event, payload: unknown) => {
+    const { apiKey } = parseIpcPayload(
+      'cursor-subscription:discover',
+      cursorSubscriptionDiscoveryPayloadSchema,
+      payload
+    )
+    return discoverCursorSubscription({
+      apiKey,
+      kunRoots: claudeSubKunDirs()
+    })
+  })
   ipcMain.handle('settings:set', async (event, partial: unknown) =>
     applyProtectedSettingsPatch(
       event,
@@ -855,12 +904,22 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
 
   ipcMain.handle('runtime:restart', async () => restartRuntime())
+  ipcMain.handle('runtime:settings-sync-status:get', () => getRuntimeSettingsSyncStatus())
 
   ipcMain.handle('upstream:models', async () => fetchUpstreamModels())
 
   ipcMain.handle('provider:probe', async (_, payload: unknown) => {
     const request = parseIpcPayload('provider:probe', providerProbePayloadSchema, payload)
     return probeModelProvider(request, await store.load())
+  })
+
+  ipcMain.handle('provider:models-dev-catalog', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'provider:models-dev-catalog',
+      modelsDevCatalogPayloadSchema,
+      payload
+    )
+    return fetchModelsDevCatalog(request, await store.load())
   })
 
   ipcMain.handle('prompt:optimize', async (_, payload: unknown) => {
@@ -1082,6 +1141,26 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     })
   })
 
+  ipcMain.handle('grok:auth:browser', async () => {
+    return startGrokBrowserAuth(async (url: string) => {
+      await shell.openExternal(url)
+    })
+  })
+
+  ipcMain.handle('grok:auth:browser:paste', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'grok:auth:browser:paste',
+      z.object({ code: z.string().min(1) }).strict(),
+      payload
+    )
+    return submitGrokBrowserAuthCode(request.code)
+  })
+
+  ipcMain.handle('grok:auth:browser:cancel', async () => {
+    cancelGrokBrowserAuth()
+    return { ok: true as const }
+  })
+
   ipcMain.handle('workspace:pick-directory', async (_, defaultPath: unknown): Promise<WorkspacePickResult> => {
     const normalizedDefaultPath = parseIpcPayload(
       'workspace:pick-directory',
@@ -1169,8 +1248,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
             : `${stamp.getMilliseconds()}${randomBytes(1).toString('hex')}`
           workspacePath = join(root, `${base}-${suffix}`)
         }
-        // 对话根目录由设置存储层创建；若用户改成自定义目录，则要求该目录已存在，
-        // 禁止在这里递归补建用户选择的路径。
+        // 用户显式创建对话时，补建其配置的根目录。不要在设置加载期间创建自定义
+        // 路径，避免应用启动时意外恢复不可用的网络盘或已删除的目录。
+        await mkdir(root, { recursive: true })
         await mkdir(workspacePath)
         return { ok: true, path: workspacePath }
       } catch (error) {

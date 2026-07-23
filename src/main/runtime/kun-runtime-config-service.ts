@@ -61,7 +61,9 @@ import {
 import {
   contextCompactionConfigForRuntime,
   modelConfigForRuntime,
+  localModelGatewayConfigForRuntime,
   providersConfigForRuntime,
+  routePoolsConfigForRuntime,
   rolesConfigForRuntime,
   storageConfigForRuntime,
   tokenEconomyConfigForRuntime,
@@ -117,6 +119,8 @@ export async function syncGuiManagedKunConfig(
   const providers = options?.scheduleMcp?.settings
     ? providersConfigForRuntime(options.scheduleMcp.settings)
     : undefined
+  const routePools = appSettings ? routePoolsConfigForRuntime(appSettings) : undefined
+  const localModelGateway = appSettings ? localModelGatewayConfigForRuntime(appSettings) : undefined
   const defaultModelProxyUrl = options?.scheduleMcp?.settings
     ? resolveModelProviderProxyUrl(options.scheduleMcp.settings)
     : undefined
@@ -139,7 +143,9 @@ export async function syncGuiManagedKunConfig(
       retry: runtime.retry,
       tokenEconomy: tokenEconomyConfigForRuntime(runtime.tokenEconomy, objectValue(serve.tokenEconomy)),
       toolOutputLimits: toolOutputLimitsConfigForRuntime(runtime.toolOutputLimits),
-      ...(providers && Object.keys(providers).length ? { providers } : {})
+      ...(providers && Object.keys(providers).length ? { providers } : {}),
+      ...(routePools ? { routePools } : {}),
+      ...(localModelGateway ? { localModelGateway } : {})
     },
     models: modelConfigForRuntime(objectValue(existing?.models), runtime.modelProfiles),
     contextCompaction: contextCompactionConfigForRuntime(
@@ -167,7 +173,9 @@ export async function syncGuiManagedKunConfig(
         ...objectValue(capabilities.instructions),
         enabled: runtime.instructions?.enabled ?? true
       },
-      subagents: subagentProfilesForRuntime(runtime.subagents ?? { enabled: true, profiles: [] }),
+      subagents: subagentProfilesForRuntime(
+        runtime.subagents ?? { enabled: true, useExistingAgents: true, profiles: [] }
+      ),
       mcp: {
         ...mcp,
         ...(options?.scheduleMcp || runtime.mcpSearch.enabled || hasImportedEnabledMcpServer || Object.keys(projectMcpServers).length > 0
@@ -251,7 +259,9 @@ export function buildManagedRuntimeHotApplyBody(
       tokenEconomyMode: runtime.tokenEconomyMode,
       tokenEconomy: runtime.tokenEconomy,
       toolOutputLimits: runtime.toolOutputLimits,
-      providers: serve.providers ?? {}
+      providers: serve.providers ?? {},
+      routePools: routePoolsConfigForRuntime(settings),
+      localModelGateway: localModelGatewayConfigForRuntime(settings)
     }
   })
 }

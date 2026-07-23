@@ -169,6 +169,13 @@ export type KunRuntimeStatusPayload = {
   at: string
 }
 
+export type KunRuntimeSettingsSyncStatusPayload = {
+  state: 'idle' | 'syncing' | 'synced' | 'unavailable' | 'failed'
+  generation: number
+  message?: string
+  at: string
+}
+
 export type RuntimeRequestResult = { ok: boolean; status: number; body: string }
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
 export type LocalFilesPickResult = { canceled: boolean; paths: string[] }
@@ -308,6 +315,65 @@ export type ModelProviderProbeRequest = {
 export type ModelProviderProbeResult =
   | { ok: true; latencyMs: number; modelIds: string[] }
   | { ok: false; message: string }
+export type ProviderModelCatalogSource = 'provider-api' | 'models-dev'
+export type ModelsDevCatalogModality = 'text' | 'audio' | 'image' | 'video' | 'pdf'
+export type CursorSubscriptionModelParameterValue = {
+  value: string
+  displayName?: string
+}
+export type CursorSubscriptionModelParameter = {
+  id: string
+  displayName?: string
+  values: CursorSubscriptionModelParameterValue[]
+}
+export type CursorSubscriptionModelVariant = {
+  displayName: string
+  description?: string
+  isDefault?: boolean
+  params: Array<{ id: string; value: string }>
+}
+export type CursorSubscriptionModel = {
+  id: string
+  displayName: string
+  description?: string
+  aliases?: string[]
+  parameters?: CursorSubscriptionModelParameter[]
+  variants?: CursorSubscriptionModelVariant[]
+}
+export type ModelsDevCatalogModelHint = {
+  id: string
+  aliases?: string[]
+}
+export type ModelsDevCatalogModel = {
+  id: string
+  providerKey?: string
+  name?: string
+  description?: string
+  inputModalities: ModelsDevCatalogModality[]
+  outputModalities: ModelsDevCatalogModality[]
+  reasoning?: boolean
+  toolCalling?: boolean
+  contextWindowTokens?: number
+  maxOutputTokens?: number
+}
+export type ModelsDevCatalogRequest = {
+  providerId: string
+  baseUrl: string
+  forceRefresh?: boolean
+  modelHints?: ModelsDevCatalogModelHint[]
+}
+export type ModelsDevCatalogMatchMode = 'catalog' | 'enrichment-only'
+export type ModelsDevCatalogResult =
+  | {
+      status: 'ok'
+      providerKey: string
+      providerName: string
+      matchMode: ModelsDevCatalogMatchMode
+      stale: boolean
+      models: ModelsDevCatalogModel[]
+    }
+  | { status: 'unmapped'; models: [] }
+  | { status: 'error'; message: string; models: [] }
 export type PromptOptimizationRequest = {
   text: string
 }
@@ -339,6 +405,21 @@ export type CodexBrowserAuthErrorCode = 'port_in_use'
 export type CodexBrowserAuthResult =
   | { ok: true; credentials: CodexOAuthCredentials }
   | { ok: false; message: string; code?: CodexBrowserAuthErrorCode }
+export type GrokOAuthCredentials = {
+  kind: 'grok-oauth'
+  accessToken: string
+  refreshToken: string
+  expiresAt: number
+  email?: string
+  userId?: string
+  issuer?: string
+  clientId?: string
+}
+export type GrokBrowserAuthErrorCode = 'port_in_use'
+export type GrokBrowserAuthResult =
+  | { ok: true; credentials: GrokOAuthCredentials }
+  | { ok: false; message: string; code?: GrokBrowserAuthErrorCode }
+export type GrokBrowserAuthCancelResult = { ok: true }
 export type ClawImTelegramConnectErrorCode = 'invalid_format' | 'rejected' | 'network' | 'unknown'
 export type ClawImTelegramConnectResult =
   | { ok: true; botId: number; botUsername: string; botFirstName: string }
@@ -473,9 +554,32 @@ export type KunGuiApi = ExtensionIpcApi & {
   claudeSubscriptionSdkInstall: () => Promise<SdkDownloadState>
   /** Subscribe to background-download progress; returns an unsubscribe fn. */
   onClaudeSubscriptionSdkProgress: (handler: (state: SdkDownloadState) => void) => () => void
+  /** Whether Google's official Antigravity CLI is available to Kun. */
+  geminiSubscriptionCliStatus: () => Promise<{
+    installed: boolean
+    path?: string
+    download?: SdkDownloadState | null
+  }>
+  /** Download the pinned official Antigravity CLI release on demand. */
+  geminiSubscriptionCliInstall: () => Promise<SdkDownloadState>
+  /** Subscribe to Antigravity CLI download progress. */
+  onGeminiSubscriptionCliProgress: (handler: (state: SdkDownloadState) => void) => () => void
+  /** Gemini models exposed by the user's current `agy` subscription login. */
+  geminiSubscriptionModels: () => Promise<string[]>
+  /** Validate a Cursor API key and list models visible to that Cursor account. */
+  cursorSubscriptionDiscover: (apiKey: string) => Promise<{
+    account: {
+      apiKeyName: string
+      userEmail?: string
+      userFirstName?: string
+      userLastName?: string
+    }
+    models: CursorSubscriptionModel[]
+  }>
   setSettings: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   saveSettingsSilent: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   runtimeRequest: (path: string, method?: string, body?: string) => Promise<RuntimeRequestResult>
+  getRuntimeSettingsSyncStatus: () => Promise<KunRuntimeSettingsSyncStatusPayload>
   uploadRuntimeImageAttachment: (
     request: RuntimeImageAttachmentUploadRequest
   ) => Promise<RuntimeImageAttachmentUploadResult>
@@ -483,6 +587,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   probeModelProvider: (payload: ModelProviderProbeRequest) => Promise<ModelProviderProbeResult>
+  fetchModelsDevCatalog: (payload: ModelsDevCatalogRequest) => Promise<ModelsDevCatalogResult>
   optimizePrompt: (payload: PromptOptimizationRequest) => Promise<PromptOptimizationResult>
   getClawStatus: () => Promise<ClawRuntimeStatus>
   runClawTask: (taskId: string) => Promise<ClawRunResult>
@@ -510,6 +615,10 @@ export type KunGuiApi = ExtensionIpcApi & {
   startCodexAuth: () => Promise<CodexAuthStartResult>
   pollCodexAuth: (deviceCode: string, userCode: string) => Promise<CodexAuthPollResult>
   startCodexBrowserAuth: () => Promise<CodexBrowserAuthResult>
+  startGrokBrowserAuth: () => Promise<GrokBrowserAuthResult>
+  /** Paste the authorization code (or callback URL) from accounts.x.ai. */
+  submitGrokBrowserAuthCode: (code: string) => Promise<GrokBrowserAuthResult>
+  cancelGrokBrowserAuth: () => Promise<GrokBrowserAuthCancelResult>
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
   workspaceDirectoryExists: (workspaceRoot: string) => Promise<boolean>
   pickLocalFiles: (defaultPath?: string) => Promise<LocalFilesPickResult>
@@ -699,6 +808,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   onClawChannelActivity: (handler: (payload: ClawChannelActivityPayload) => void) => () => void
   onTrayAction: (handler: (payload: TrayActionPayload) => void) => () => void
   onRuntimeStatus: (handler: (payload: KunRuntimeStatusPayload) => void) => () => void
+  onRuntimeSettingsSyncStatus: (
+    handler: (payload: KunRuntimeSettingsSyncStatusPayload) => void
+  ) => () => void
   mirrorClawChannelMessage: (
     threadId: string,
     text: string,

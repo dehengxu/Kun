@@ -229,7 +229,6 @@ const REQUIRED_PERMISSIONS: Readonly<Record<WorkbenchContributionPoint, readonly
 }
 
 const BUILTIN_PANEL_DEFINITIONS: readonly [string, string][] = [
-  [BUILTIN_RIGHT_PANEL_IDS.todo, 'Todo'],
   [BUILTIN_RIGHT_PANEL_IDS.plan, 'Plan'],
   [BUILTIN_RIGHT_PANEL_IDS.changes, 'Changes'],
   [BUILTIN_RIGHT_PANEL_IDS.browser, 'Preview'],
@@ -239,7 +238,9 @@ const BUILTIN_PANEL_DEFINITIONS: readonly [string, string][] = [
   [BUILTIN_RIGHT_PANEL_IDS.sideConversations, 'Branch conversations'],
   [BUILTIN_RIGHT_PANEL_IDS.sddAi, 'Requirement assistant'],
   [BUILTIN_RIGHT_PANEL_IDS.canvas, 'Whiteboard'],
-  [BUILTIN_RIGHT_PANEL_IDS.subagents, 'Subagents']
+  [BUILTIN_RIGHT_PANEL_IDS.subagents, 'Subagents'],
+  [BUILTIN_RIGHT_PANEL_IDS.mcpSkills, 'MCP & Skills'],
+  [BUILTIN_RIGHT_PANEL_IDS.agentPerspective, 'Agent Perspective']
 ]
 
 function payloadWhen(payload: ContributionPayloadMap[WorkbenchContributionPoint]): string | undefined {

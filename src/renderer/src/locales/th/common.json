@@ -1558,6 +1558,7 @@
   "composerVoiceFailed": "การถอดเสียงเป็นคำล้มเหลว: {{message}}",
   "composerImageUnavailable": "อินพุตรูปภาพไม่พร้อมใช้งานสำหรับรันไทม์นี้",
   "composerAttachmentUnavailable": "การอัปโหลดไฟล์แนบไม่พร้อมใช้งาน",
+  "composerDropFilesHere": "ปล่อยเพื่อเพิ่มไฟล์ในการสนทนานี้",
   "composerAttachmentModelUnsupported": "รุ่นที่เลือกไม่สามารถอ่านภาพได้ สลับไปใช้โมเดลการมองเห็นหรือลบไฟล์แนบออก",
   "composerPdfAttachmentUnavailable": "การแยกข้อความ PDF ไม่พร้อมใช้งานสำหรับไฟล์นี้",
   "composerPdfAttachmentNoText": "PDF นี้ไม่มีข้อความที่แยกได้ และ OCR ในตัวตรวจไม่พบข้อความที่อ่านได้ ลองสแกนให้ชัดเจนยิ่งขึ้นหรือวางหน้าที่เกี่ยวข้อง",
@@ -1583,8 +1584,8 @@
   "composerPlanPlaceholder": "แจกแจงเป้าหมาย ร่างขั้นตอน และเปลี่ยนแปลงขอบเขตก่อนดำเนินการ...",
   "composerSlashHint": "พิมพ์ / สำหรับคำสั่ง",
   "workingDirectory": "ไดเร็กทอรีการทำงาน",
-  "emptyHeroTitle": "เริ่มการสนทนาใหม่",
-  "emptyHeroSub": "เลือกงานหรือเพียงพิมพ์คำถามของคุณ",
+  "emptyHeroTitle": "วันนี้อยากทำอะไรกับ Kun?",
+  "emptyHeroSub": "อธิบายไอเดียของคุณ หรือเริ่มงานใหม่",
   "emptyHeroSubNoWorkspace": "เลือกไดเร็กทอรีการทำงานในเครื่องก่อน จากนั้นจึงเริ่มเธรดแรกของคุณ",
   "usageHeatmapBadge": "การใช้งานคุน",
   "usageHeatmapTitle": "จังหวะตัวแทนล่าสุดของคุณ",
@@ -1743,6 +1744,9 @@
   "queuedMessagesTitle": "{{count}} เข้าคิวแล้ว",
   "queuedMessagesHint": "ข้อความเหล่านี้จะถูกส่งโดยอัตโนมัติหลังจากการตอบกลับปัจจุบันเสร็จสิ้น",
   "queuedMessageRemove": "ลบข้อความที่อยู่ในคิว",
+  "queuedMessageMoreActions": "การดำเนินการเพิ่มเติมสำหรับข้อความ",
+  "queuedMessageEdit": "แก้ไขข้อความ",
+  "queuedMessageReorder": "ลากเพื่อจัดลำดับข้อความในคิว",
   "guideQueuedMessage": "คู่มือ",
   "guideQueuedMessagePending": "แนวทาง",
   "guideQueuedMessageHint": "เพิ่มอินพุตนี้ลงในการโต้ตอบโมเดลถัดไปของตัวแทน",
@@ -1833,6 +1837,11 @@
   "sidePanelTitle": "บทสนทนาของสาขา",
   "sidePanelOpen": "เปิดการสนทนาสาขา",
   "sidePanelNew": "บทสนทนาสาขาใหม่",
+  "sidePanelTabTitle": "บทสนทนาสาขา {{index}}",
+  "sidePanelNewTabTitle": "สาขาใหม่",
+  "sidePanelOriginMeta": "จาก “{{title}}” · {{time}}",
+  "sidePanelDraftOrigin": "สาขาใหม่จาก “{{title}}”",
+  "sidePanelSwitch": "สลับบทสนทนาสาขา",
   "sidePanelParentLabel": "จาก \"{{title}}\"",
   "sidePanelParentMissing": "การสนทนาสาขา",
   "sidePanelHide": "ซ่อนแผงสาขา",
@@ -1863,7 +1872,6 @@
   "rightPanelRuntime": "รันไทม์",
   "rightPanelPlan": "แผน",
   "rightPanelFiles": "ไฟล์",
-  "rightPanelTodo": "สิ่งที่ต้องทำ",
   "rightPanelCanvas": "ผ้าใบ",
   "rightPanelWhiteboard": "ไวท์บอร์ด",
   "canvasPanelNeedsThread": "เปิดหรือเริ่มการสนทนาเพื่อใช้แคนวาส",
@@ -1874,7 +1882,6 @@
   "rightPanelBrowserTool": "เบราว์เซอร์",
   "rightPanelNewBrowserTab": "แท็บใหม่",
   "rightPanelSideConversations": "บทสนทนาของสาขา",
-  "rightPanelTodoTool": "สิ่งที่ต้องทำ",
   "rightPanelChangesReview": "การเปลี่ยนแปลง / ทบทวน",
   "rightPanelTabs": "แท็บพื้นที่ทำงานด้านขวา",
   "rightPanelCloseTab": "ปิด {{title}}",
@@ -2139,15 +2146,6 @@
   },
   "goalUpdatedTimeline": "Goal {{status}}: {{objective}}",
   "goalClearedTimeline": "เคลียร์เป้าหมายแล้ว",
-  "todoPanelTitle": "หัวข้อสิ่งที่ต้องทำ",
-  "todoClear": "ล้างสิ่งที่ต้องทำ",
-  "todoEmptyTitle": "ยังไม่มีสิ่งที่ต้องทำ",
-  "todoEmptyDescription": "รายการตรวจสอบแผนและสิ่งที่ต้องทำที่เขียนแบบจำลองสำหรับกระทู้นี้จะปรากฏที่นี่",
-  "todoStatusPending": "รอดำเนินการ",
-  "todoStatusInProgress": "ใช้งานอยู่",
-  "todoStatusCompleted": "เสร็จแล้ว",
-  "todoMarkPending": "ทำเครื่องหมายว่ารอดำเนินการ",
-  "todoMarkCompleted": "ทำเครื่องหมายว่าเสร็จสมบูรณ์",
   "todoProgressStep": "ขั้นตอนที่ {{current}} / {{total}}",
   "todoProgressAria": "ความคืบหน้าของสิ่งที่ต้องทำ: ขั้นตอนที่ {{current}} จาก {{total}}",
   "todoProgressDetails": "รายละเอียดสิ่งที่ต้องทำ",
@@ -2165,6 +2163,18 @@
   "sidebarEmptySubOffline": "เชื่อมต่อรันไทม์ก่อน จากนั้นจึงสร้างเธรดแรกของคุณจากด้านบน",
   "sidebarWorkspaceEmpty": "ยังไม่มีกระทู้",
   "sidebarWorkspaceNewThread": "กระทู้ใหม่",
+  "sidebarFolderCreate": "โฟลเดอร์ใหม่",
+  "sidebarFolderCreatePrompt": "ตั้งชื่อโฟลเดอร์ โฟลเดอร์นี้ใช้จัดระเบียบแถบด้านข้างเท่านั้นและจะไม่ถูกสร้างบนดิสก์",
+  "sidebarFolderRename": "เปลี่ยนชื่อโฟลเดอร์",
+  "sidebarFolderRenamePrompt": "ป้อนชื่อโฟลเดอร์ใหม่",
+  "sidebarFolderNameExists": "มีโฟลเดอร์ชื่อนี้ในโปรเจกต์แล้ว",
+  "sidebarFolderDelete": "ลบโฟลเดอร์",
+  "sidebarFolderDeleteDialogTitle": "ลบ “{{name}}” หรือไม่",
+  "sidebarFolderDeleteDialogDescription": "การดำเนินการนี้จะลบเฉพาะโฟลเดอร์ในแถบด้านข้าง โดยไม่ลบการสนทนาหรือไฟล์โปรเจกต์",
+  "sidebarFolderDeleteDialogDetail": "เธรด {{count}} รายการในโฟลเดอร์นี้จะกลับไปยังรากของโปรเจกต์",
+  "sidebarFolderDeleteConfirmButton": "ลบโฟลเดอร์",
+  "sidebarFolderAriaLabel": "{{name}}, {{count}} เธรด",
+  "sidebarFolderEmpty": "ลากเธรดมาที่นี่",
   "sidebarWorkspaceShowMore": "แสดงเพิ่มเติม (อีก {{count}} รายการ)",
   "sidebarWorkspaceShowLess": "แสดงน้อยลง",
   "sidebarWorkspaceArchiveThreads": "เก็บกระทู้ทั้งหมดในโครงการนี้",
@@ -2691,6 +2701,8 @@
   "groupEditedFile": "แก้ไขแล้ว 1 ไฟล์",
   "turnChangeFilesOne": "แก้ไขแล้ว 1 ไฟล์",
   "turnChangeFilesMany": "แก้ไขแล้ว {{count}} ไฟล์",
+  "turnChangeShowMore": "แสดงอีก {{count}} ไฟล์",
+  "turnChangeShowFewer": "แสดงไฟล์น้อยลง",
   "groupRanCommands": "รันคำสั่ง {{count}}",
   "groupRanCommand": "รัน 1 คำสั่ง",
   "groupRanBackgroundCommands": "รันคำสั่งพื้นหลัง {{count}} คำสั่ง",
@@ -2770,6 +2782,9 @@
   "componentPrototypeIterate": "ปรับต่อไป",
   "componentPrototypeAdopt": "รับออกแบบ",
   "subagentDefaultName": "ตัวแทนย่อย",
+  "subagentAgentLabel": "เอเจนต์",
+  "subagentModelLabel": "โมเดล",
+  "subagentNotRecorded": "ไม่ได้บันทึก",
   "subagentStatusQueued": "เข้าคิว",
   "subagentStatusRunning": "วิ่ง",
   "subagentStatusDone": "เสร็จแล้ว",
@@ -2906,6 +2921,110 @@
   "expandSidebar": "ขยายแถบด้านข้าง",
   "rightPanelSubagents": "ตัวแทนย่อย",
   "rightPanelMcpSkills": "MCP และทักษะ",
+  "rightPanelAgentPerspective": "มุมมองเอเจนต์",
+  "agentPerspectiveTitle": "มุมมองเอเจนต์",
+  "agentPerspectiveSubtitle": "คำขอโมเดล {{count}} รายการในการสนทนานี้",
+  "agentPerspectiveRefresh": "รีเฟรชคำขอ",
+  "agentPerspectiveLoading": "กำลังโหลด…",
+  "agentPerspectiveEmpty": "ยังไม่มีคำขอ HTTP ของโมเดลที่บันทึกไว้สำหรับการสนทนานี้",
+  "agentPerspectiveUnsupported": "เลือกการสนทนา Code เพื่อตรวจสอบคำขอโมเดล",
+  "agentPerspectiveLoadError": "โหลดคำขอโมเดลไม่ได้: {{error}}",
+  "agentPerspectiveLoadOlder": "โหลดคำขอก่อนหน้า",
+  "agentPerspectiveDetailSections": "ส่วนรายละเอียดคำขอ",
+  "agentPerspectiveOverview": "ภาพรวม",
+  "agentPerspectiveRequest": "คำขอ",
+  "agentPerspectiveResponse": "การตอบกลับ",
+  "agentPerspectiveDecoded": "ผลที่ถอดรหัส",
+  "agentPerspectiveHeaders": "ส่วนหัว",
+  "agentPerspectiveBody": "เนื้อหาคำขอ",
+  "agentPerspectiveRawResponse": "การตอบกลับดิบ",
+  "agentPerspectiveRaw": "ดิบ",
+  "agentPerspectivePretty": "จัดรูปแบบ",
+  "agentPerspectiveCopy": "คัดลอก",
+  "agentPerspectiveCopied": "คัดลอกแล้ว",
+  "agentPerspectiveRedacted": "ค่าข้อมูลรับรองถูกปกปิดก่อนบันทึกการติดตามนี้",
+  "agentPerspectiveTruncated": "ตัดทอนแล้ว",
+  "agentPerspectiveTruncationNotice": "ถึงขีดจำกัดการบันทึกแล้ว คำขอที่ส่งให้ผู้ให้บริการไม่ถูกแก้ไข",
+  "agentPerspectiveNoResponse": "ไม่ได้รับการตอบกลับ HTTP สำหรับความพยายามนี้",
+  "agentPerspectiveNoDecoded": "ไม่มีผลลัพธ์โมเดลที่ถอดรหัสสำหรับความพยายามนี้",
+  "agentPerspectiveAttempt": "ความพยายาม",
+  "agentPerspectiveInitial": "ครั้งแรก",
+  "agentPerspectiveTransportRetry": "ลองส่งใหม่",
+  "agentPerspectiveStreamFallback": "โหมดสำรองสตรีม",
+  "agentPerspectivePending": "กำลังดำเนินการ",
+  "agentPerspectiveCompleted": "เสร็จสิ้น",
+  "agentPerspectiveTransportError": "ข้อผิดพลาดการส่ง",
+  "agentPerspectiveCaptureError": "ข้อผิดพลาดการบันทึก",
+  "agentPerspectiveDuration": "ระยะเวลา",
+  "agentPerspectiveTimeToHeaders": "เวลาถึงส่วนหัว",
+  "agentPerspectiveProvider": "ผู้ให้บริการ",
+  "agentPerspectiveModel": "โมเดล",
+  "agentPerspectiveEndpointFormat": "รูปแบบปลายทาง",
+  "agentPerspectiveStartedAt": "เริ่มเมื่อ",
+  "agentPerspectiveStatus": "สถานะ",
+  "agentPerspectiveUrl": "URL คำขอสุดท้าย",
+  "agentPerspectiveEventSubtitle": "{{events}} ขั้นตอน · {{requests}} คำขอโมเดล",
+  "agentPerspectiveSearch": "ค้นหาขั้นตอน",
+  "agentPerspectiveSearchPlaceholder": "ค้นหาโมเดล เครื่องมือ หรือชื่อเรื่อง…",
+  "agentPerspectiveFilterAll": "ทั้งหมด",
+  "agentPerspectiveFilterLlm": "LLM",
+  "agentPerspectiveFilterTools": "เครื่องมือ",
+  "agentPerspectiveFilterTitles": "ชื่อเรื่อง",
+  "agentPerspectiveNoMatchingEvents": "ไม่พบขั้นตอนที่ตรงกัน",
+  "agentPerspectiveSemanticRequest": "คำขอเชิงความหมาย",
+  "agentPerspectiveRawRequest": "คำขอดิบ",
+  "agentPerspectiveStreamEvents": "เหตุการณ์สตรีม",
+  "agentPerspectiveTiming": "เวลา",
+  "agentPerspectiveLlmRequest": "คำขอ LLM",
+  "agentPerspectiveToolCall": "การเรียกเครื่องมือ",
+  "agentPerspectiveTitleGeneration": "สร้างชื่อเรื่อง",
+  "agentPerspectiveTokens": "{{count}} tokens",
+  "agentPerspectiveCacheHit": "แคชฮิต {{rate}}%",
+  "agentPerspectiveRequestComposition": "องค์ประกอบคำขอ (ประมาณ)",
+  "agentPerspectiveSystemPrompt": "System prompt",
+  "agentPerspectiveSkills": "Skills",
+  "agentPerspectiveToolDefinitions": "คำจำกัดความเครื่องมือ",
+  "agentPerspectiveMessages": "ข้อความ",
+  "agentPerspectiveParameters": "พารามิเตอร์",
+  "agentPerspectiveNoSkills": "ไม่มี Skill ในคำขอนี้",
+  "agentPerspectiveNoTools": "ไม่ได้ส่งคำจำกัดความเครื่องมือ",
+  "agentPerspectiveNoMessages": "ไม่มีข้อความ",
+  "agentPerspectiveToolCompleted": "ได้รับผลลัพธ์เครื่องมือแล้ว",
+  "agentPerspectiveToolPending": "กำลังรอผลลัพธ์เครื่องมือ",
+  "agentPerspectiveCallId": "รหัสการเรียก",
+  "agentPerspectiveParentRequest": "คำขอต้นทาง",
+  "agentPerspectiveToolArguments": "อาร์กิวเมนต์เครื่องมือ",
+  "agentPerspectiveToolResult": "ผลลัพธ์เครื่องมือ",
+  "agentPerspectiveToolResultPending": "โมเดลเรียกเครื่องมือแล้ว แต่ผลลัพธ์ยังไม่ปรากฏในคำขอถัดไป",
+  "agentPerspectiveGeneratedTitle": "ชื่อเรื่องที่สร้าง",
+  "agentPerspectiveResponseOutput": "ผลลัพธ์โมเดล",
+  "agentPerspectiveReasoningOutput": "ผลลัพธ์การให้เหตุผล",
+  "agentPerspectiveToolCalls": "การเรียกเครื่องมือ",
+  "agentPerspectiveUsage": "การใช้งาน",
+  "agentPerspectiveResponseStartedAt": "เริ่มการตอบกลับ",
+  "agentPerspectiveFinishedAt": "เสร็จสิ้น",
+  "agentPerspectivePrivacyNotice": "ข้อมูลรับรองถูกปกปิด และเนื้อหาเก็บไว้ในอุปกรณ์นี้เท่านั้น",
+  "agentPerspectiveSkillActive": "ใช้งานอยู่",
+  "agentPerspectiveToolSourceSummary": "{{groups}} แหล่ง · {{tools}} เครื่องมือ",
+  "agentPerspectiveSourceKun": "ระบบ Kun",
+  "agentPerspectiveSourceMcp": "MCP",
+  "agentPerspectiveSourceExtension": "ส่วนขยาย",
+  "agentPerspectiveSourceUnclassified": "ยังไม่จัดประเภท",
+  "agentPerspectiveKunCore": "แกนหลักทั่วไป",
+  "agentPerspectiveKunGui": "เฉพาะ GUI",
+  "agentPerspectiveKunRuntime": "ความสามารถรันไทม์",
+  "agentPerspectiveMcpServer": "เซิร์ฟเวอร์ MCP",
+  "agentPerspectiveExtensionProvider": "Provider ส่วนขยาย",
+  "agentPerspectiveProviderUnknown": "ไม่ทราบแหล่งที่มา",
+  "agentPerspectiveKunManaged": "Kun จัดการ",
+  "agentPerspectiveMcpDiscovery": "การค้นหา",
+  "agentPerspectiveHistoricalInference": "อนุมานจากประวัติ",
+  "agentPerspectiveToolSource": "แหล่งเครื่องมือ",
+  "agentPerspectiveExpandToolSource": "สลับเครื่องมือ {{source}}",
+  "agentPerspectiveExpandToolProvider": "สลับกลุ่ม {{provider}}",
+  "agentPerspectiveExpandTool": "สลับรายละเอียด {{tool}}",
+  "agentPerspectiveNoToolDescription": "ไม่มีคำอธิบาย",
+  "agentPerspectiveToolSchema": "สคีมาอินพุตของ {{tool}}",
   "mcpSkillsPanel": {
     "projectScope": "โครงการปัจจุบัน",
     "globalScope": "ทั่วโลก",
@@ -2946,11 +3065,80 @@
     "system": "ระบบ · ภายใน",
     "global": "ทั่วโลก · แบ่งปันแล้ว",
     "newSubagent": "ตัวแทนย่อยใหม่",
+    "delegatableCount": "บทบาทที่มอบหมายได้ {{count}} รายการ",
+    "configuredCount": "ตั้งค่าแล้ว {{count}}",
+    "showingCount": "แสดง {{visible}} จาก {{total}}",
+    "policySummary": "ขีดจำกัดคิวและเซสชัน",
+    "search": "ค้นหาตัวแทนย่อย",
+    "searchPlaceholder": "ค้นหาชื่อ ความสามารถ หรือสถานการณ์",
+    "clearSearch": "ล้างการค้นหา",
+    "toggleCategory": "เปิดหรือปิดหมวดหมู่ {{category}}",
+    "batchModel": "ตั้งโมเดลเป็นชุด",
+    "mixedModels": "หลายโมเดล",
+    "mixedConfiguration": "หลายการตั้งค่า",
+    "categoryConfiguration": "การตั้งค่าเริ่มต้นของหมวดหมู่",
+    "categoryConfigurationDesc": "ใช้ค่าเริ่มต้นเดียวกันกับเอเจนต์ทั้งหมดในหมวดนี้",
+    "resetCategoryConfiguration": "รีเซ็ตเป็นค่าเริ่มต้น",
+    "effectiveModel": "โมเดลที่ใช้จริง",
+    "batchModelAria": "ตั้งโมเดลเดียวกันให้เอเจนต์ {{count}} ตัวใน {{category}}",
+    "reasoning": "ความเข้มของการคิด",
+    "mixedReasoning": "หลายระดับการคิด",
+    "batchReasoningAria": "ตั้งความเข้มการคิดเดียวกันให้เอเจนต์ {{count}} ตัวใน {{category}}",
+    "capabilities": "ความสามารถ",
+    "emptyTitle": "ไม่พบตัวแทนย่อยที่ตรงกัน",
+    "emptySearch": "ลองใช้ชื่อ ความสามารถ หรือสถานการณ์อื่น",
+    "emptyCategory": "เลือกหมวดหมู่อื่นเพื่อเรียกดูต่อ",
+    "surface": {
+      "shared": "พื้นฐาน",
+      "code": "Code",
+      "write": "เขียน",
+      "design": "ออกแบบ"
+    },
+    "surfaceInherited": "สืบทอดจากพื้นฐาน",
+    "surfaceAssigned": "ใช้ได้ในโหมดนี้",
+    "surfaceUnassigned": "ใช้ไม่ได้ในโหมดนี้",
+    "pagination": "หน้า Agent",
+    "pageSummary": "หน้า {{page}} จาก {{pages}} · {{count}} Agent",
+    "previousPage": "หน้าก่อนหน้า",
+    "nextPage": "หน้าถัดไป",
+    "extensionAgents": {
+      "title": "Agent ส่วนขยาย",
+      "description": "Agent นอกชุดพื้นฐาน · {{count}}",
+      "enabled": "เปิดใช้",
+      "disabled": "ปิดใช้",
+      "toggle": "สลับ Agent ส่วนขยาย",
+      "keepBaseOnly": "คงไว้เฉพาะ Agent พื้นฐาน",
+      "enableExtensions": "เปิดใช้ Agent ส่วนขยาย",
+      "baseAlwaysAvailable": "Agent พื้นฐานพร้อมใช้งานเสมอ"
+    },
+    "category": {
+      "all": "ทั้งหมด",
+      "baseAgent": "Agent พื้นฐาน",
+      "development": "พัฒนา",
+      "review": "ตรวจสอบ",
+      "quality": "คุณภาพ",
+      "planning": "วางแผน",
+      "operations": "ปฏิบัติการ",
+      "research": "วิจัย",
+      "custom": "กำหนดเอง"
+    },
     "smallModel": {
       "name": "รุ่นเล็ก",
       "desc": "ค่าเริ่มต้นสำหรับชื่อเรื่องและข้อมูลสรุป"
     },
     "role": {
+      "general": {
+        "name": "ทั่วไป",
+        "desc": "เครื่องมือครบครัน · งานหลายขั้นตอน"
+      },
+      "explore": {
+        "name": "สำรวจ",
+        "desc": "อ่านอย่างเดียว · ค้นหาและค้นหาโค้ด"
+      },
+      "component-designer": {
+        "name": "Component Designer",
+        "desc": "Focused interactive component prototype"
+      },
       "design-reviewer": {
         "name": "ทบทวนการออกแบบ",
         "desc": "ผู้ตรวจสอบการออกแบบ · อ่านอย่างเดียว"
@@ -2958,6 +3146,166 @@
       "over-engineering-reviewer": {
         "name": "การทบทวนทางวิศวกรรมมากเกินไป",
         "desc": "ผู้ตรวจสอบทางวิศวกรรมมากเกินไป · อ่านอย่างเดียว"
+      },
+      "code-reviewer": {
+        "name": "ผู้ตรวจสอบโค้ด",
+        "desc": "ตรวจสอบห้ามิติ · อ่านอย่างเดียว"
+      },
+      "test-engineer": {
+        "name": "วิศวกรทดสอบ",
+        "desc": "กลยุทธ์การทดสอบ · เขียนและรันการทดสอบได้"
+      },
+      "security-auditor": {
+        "name": "ผู้ตรวจสอบความปลอดภัย",
+        "desc": "ภัยคุกคามและความเสี่ยง OWASP · อ่านอย่างเดียว"
+      },
+      "web-performance-auditor": {
+        "name": "ผู้ตรวจสอบประสิทธิภาพเว็บ",
+        "desc": "Core Web Vitals · อิงหลักฐาน"
+      },
+      "api-and-interface-design": {
+        "name": "API & Interface Architect",
+        "desc": "Stable public contracts · compatibility and validation"
+      },
+      "browser-testing-with-devtools": {
+        "name": "Web QA Planner",
+        "desc": "Browser and accessibility verification plans · read-only"
+      },
+      "ci-cd-and-automation": {
+        "name": "CI/CD Engineer",
+        "desc": "Pipelines, quality gates, and rollback-safe releases"
+      },
+      "code-review-and-quality": {
+        "name": "Code Quality Reviewer",
+        "desc": "Multi-axis correctness and architecture review · read-only"
+      },
+      "code-simplification": {
+        "name": "Code Simplification Engineer",
+        "desc": "Reduce complexity · preserve behavior"
+      },
+      "context-engineering": {
+        "name": "Context Engineer",
+        "desc": "Minimal authoritative context pack · read-only"
+      },
+      "debugging-and-error-recovery": {
+        "name": "Root Cause Debugger",
+        "desc": "Reproduce, localize, fix, and regression-test"
+      },
+      "deprecation-and-migration": {
+        "name": "Migration Engineer",
+        "desc": "Staged compatibility, data migration, and rollback"
+      },
+      "documentation-and-adrs": {
+        "name": "Documentation & ADR Engineer",
+        "desc": "Architecture decisions, guides, and API docs"
+      },
+      "doubt-driven-development": {
+        "name": "Doubt-Driven Reviewer",
+        "desc": "Challenge assumptions and designs · read-only"
+      },
+      "frontend-ui-engineering": {
+        "name": "Frontend UI Engineer",
+        "desc": "Accessible, responsive, product-quality interfaces"
+      },
+      "git-workflow-and-versioning": {
+        "name": "Git Workflow Engineer",
+        "desc": "Branches, atomic commits, and history safety"
+      },
+      "idea-refine": {
+        "name": "Idea Refinement Partner",
+        "desc": "Compare options, MVP bounds, and validation · read-only"
+      },
+      "incremental-implementation": {
+        "name": "Incremental Implementation Engineer",
+        "desc": "Thin, buildable, continuously verified slices"
+      },
+      "interview-me": {
+        "name": "Requirements Interviewer",
+        "desc": "Find gaps and high-information questions · read-only"
+      },
+      "observability-and-instrumentation": {
+        "name": "Observability Engineer",
+        "desc": "Logs, metrics, traces, and actionable alerts"
+      },
+      "performance-optimization": {
+        "name": "Performance Engineer",
+        "desc": "Measure bottlenecks and prove before/after impact"
+      },
+      "planning-and-task-breakdown": {
+        "name": "Implementation Planner",
+        "desc": "Dependency-aware, acceptance-driven tasks · read-only"
+      },
+      "security-and-hardening": {
+        "name": "Security Hardening Engineer",
+        "desc": "Threat-model and implement scoped security fixes"
+      },
+      "shipping-and-launch": {
+        "name": "Release Readiness Engineer",
+        "desc": "Go/no-go, rollout, and rollback plans · read-only"
+      },
+      "source-driven-development": {
+        "name": "Source-Driven Researcher",
+        "desc": "Ground guidance in version-matched sources · read-only"
+      },
+      "spec-driven-development": {
+        "name": "Specification Engineer",
+        "desc": "Scenarios, interfaces, and acceptance criteria · read-only"
+      },
+      "test-driven-development": {
+        "name": "TDD Engineer",
+        "desc": "Red-green-refactor with behavior-focused proof"
+      },
+      "using-agent-skills": {
+        "name": "Engineering Workflow Advisor",
+        "desc": "Map work to the smallest suitable agent sequence · read-only"
+      },
+      "write-outline-architect": {
+        "name": "Outline Architect",
+        "desc": "Structure, arguments, and narrative progression · read-only"
+      },
+      "write-draft-author": {
+        "name": "Draft Author",
+        "desc": "Long-form drafts and focused section writing"
+      },
+      "write-developmental-editor": {
+        "name": "Developmental Editor",
+        "desc": "Improve logic, structure, pacing, and clarity"
+      },
+      "write-copy-editor": {
+        "name": "Copy Editor",
+        "desc": "Polish tone, terminology, and grammar"
+      },
+      "write-fact-checker": {
+        "name": "Fact Checker",
+        "desc": "Verify claims, figures, and uncertainty · read-only"
+      },
+      "write-citation-researcher": {
+        "name": "Citation Researcher",
+        "desc": "Authoritative sources and traceable citations · read-only"
+      },
+      "design-product-planner": {
+        "name": "Product Design Planner",
+        "desc": "Direction, goals, flows, and tradeoffs · read-only"
+      },
+      "design-ux-researcher": {
+        "name": "UX Researcher",
+        "desc": "User journeys and usability research · read-only"
+      },
+      "design-screen-designer": {
+        "name": "Screen Designer",
+        "desc": "Complete responsive screens and interaction states"
+      },
+      "design-system-architect": {
+        "name": "Design System Architect",
+        "desc": "Semantic tokens, components, and variant constraints"
+      },
+      "design-code-binder": {
+        "name": "Design Code Binder",
+        "desc": "Map design nodes to routes and source files"
+      },
+      "design-handoff-specialist": {
+        "name": "Design Handoff Specialist",
+        "desc": "DESIGN.md, implementation notes, and handoff assets"
       },
       "compaction": {
         "name": "การบดอัด",
@@ -2978,17 +3326,12 @@
       "summary": {
         "name": "สรุป",
         "desc": "LLM · มีค่าเริ่มต้นเป็นโมเดลขนาดเล็ก"
-      },
-      "general": {
-        "name": "ทั่วไป",
-        "desc": "เครื่องมือครบครัน · งานหลายขั้นตอน"
-      },
-      "explore": {
-        "name": "สำรวจ",
-        "desc": "อ่านอย่างเดียว · ค้นหาและค้นหาโค้ด"
       }
     },
-    "builtin": "บิวท์อิน"
+    "builtin": "บิวท์อิน",
+    "customTag": "กำหนดเอง",
+    "workspaceFile": "กำหนดใน {{path}}",
+    "workspaceReadOnly": "แก้ไขบทบาทนี้ใน .kun/agents/*.md"
   },
   "summarizeSession": "สรุป",
   "summarizing": "กำลังสรุป...",

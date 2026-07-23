@@ -87,6 +87,7 @@ export type RuntimeRequestInit = {
   body?: string
   headers?: Record<string, string>
   signal?: AbortSignal
+  timeoutMs?: number
 }
 
 export async function runtimeRequestViaHost(
@@ -106,14 +107,15 @@ export async function runtimeRequestViaHost(
     return await fetchRuntimeRequest(requestSettings, base, pathNorm, method, init)
   } catch (error) {
     if (init.signal?.aborted) throw error
+    // A request timeout is local to that operation. Let the watchdog decide
+    // whether the process is globally unhealthy instead of turning one slow
+    // attachment preview into an immediate managed-runtime restart.
+    if (!isRuntimeConnectionFailure(error)) throw error
     const retrySettings = await ensureRuntime(requestSettings)
     init.signal?.throwIfAborted()
     const nextSettings = retrySettings ?? requestSettings
     const nextBase = getRuntimeBaseUrlForSettings(nextSettings)
-    const safeToRetry =
-      method === 'GET' ||
-      method === 'HEAD' ||
-      (nextBase !== base && isRuntimeConnectionFailure(error))
+    const safeToRetry = method === 'GET' || method === 'HEAD' || nextBase !== base
     if (!safeToRetry) throw error
     return fetchRuntimeRequest(nextSettings, nextBase, pathNorm, method, init)
   }
@@ -139,7 +141,10 @@ async function fetchRuntimeRequest(
     method,
     headers: hdrs,
     body: init.body,
-    signal: requestSignal(init.signal, method === 'POST' ? 60_000 : 15_000)
+    signal: requestSignal(
+      init.signal,
+      init.timeoutMs ?? (method === 'POST' ? 60_000 : 15_000)
+    )
   })
   const text = await res.text()
   return { ok: res.ok, status: res.status, body: text }

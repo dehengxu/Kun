@@ -12,7 +12,11 @@ import {
   type AppSettingsV1,
   type ModelProviderProfileV1
 } from '../shared/app-settings'
-import { kunRuntimeConfigChanged, runtimeSettingsApplyMode } from './runtime-settings-apply-mode'
+import {
+  kunRuntimeConfigChanged,
+  runtimeSettingsApplyMode,
+  runtimeSettingsRollbackPatch
+} from './runtime-settings-apply-mode'
 
 function settings(): AppSettingsV1 {
   return {
@@ -173,6 +177,18 @@ describe('runtimeSettingsApplyMode', () => {
       ...prev,
       agents: { kun: { ...prev.agents.kun, memoryEnabled: true } }
     }
+    const withTurnCapacity = {
+      ...prev,
+      agents: {
+        kun: {
+          ...prev.agents.kun,
+          runtimeTuning: {
+            ...prev.agents.kun.runtimeTuning,
+            maxConcurrentTurns: 32
+          }
+        }
+      }
+    }
     const withSubagents = {
       ...prev,
       agents: {
@@ -202,6 +218,7 @@ describe('runtimeSettingsApplyMode', () => {
     expect(runtimeSettingsApplyMode(prev, withMcp)).toBe('hot')
     expect(runtimeSettingsApplyMode(prev, withProjectGrant)).toBe('hot')
     expect(runtimeSettingsApplyMode(prev, withMemory)).toBe('hot')
+    expect(runtimeSettingsApplyMode(prev, withTurnCapacity)).toBe('hot')
     expect(runtimeSettingsApplyMode(prev, withSubagents)).toBe('hot')
   })
 
@@ -262,6 +279,77 @@ describe('runtimeSettingsApplyMode', () => {
     expect(runtimeSettingsApplyMode(prev, withRemoved)).toBe('hot')
   })
 
+  it('hot-applies route pool and local gateway enablement changes', () => {
+    const prev = multiProviderSettings()
+    const targetProvider = prev.provider.providers.find((provider) => provider.id === 'minimax')!
+    const withPool = {
+      ...prev,
+      provider: {
+        ...prev.provider,
+        routePools: [{
+          id: 'minimax-pool',
+          name: 'MiniMax pool',
+          modelId: targetProvider.models[0]!,
+          enabled: true,
+          strategy: 'priority' as const,
+          targets: [{
+            id: 'primary',
+            providerId: targetProvider.id,
+            modelId: targetProvider.models[0]!,
+            enabled: true,
+            weight: 1
+          }],
+          failurePolicy: {
+            failoverHttpStatusCodes: [429, 503],
+            failoverOnNetworkError: true,
+            failoverOnTimeout: true,
+            failoverOnAuthError: true
+          },
+          healthPolicy: {
+            failureThreshold: 3,
+            cooldownMs: 60_000,
+            halfOpenMaxAttempts: 1
+          }
+        }]
+      }
+    }
+    const withGateway = {
+      ...withPool,
+      provider: {
+        ...withPool.provider,
+        localGateway: { ...withPool.provider.localGateway, enabled: true }
+      }
+    }
+
+    expect(runtimeSettingsApplyMode(prev, withPool)).toBe('hot')
+    expect(runtimeSettingsApplyMode(withPool, withGateway)).toBe('hot')
+  })
+
+  it('preserves desired route intent when restoring previous Runtime settings', () => {
+    const previous = multiProviderSettings()
+    const targetProvider = previous.provider.providers.find((provider) => provider.id === 'minimax')!
+    const desired = {
+      ...previous,
+      agents: { kun: { ...previous.agents.kun, port: previous.agents.kun.port + 1 } },
+      provider: {
+        ...previous.provider,
+        localGateway: { enabled: true, name: 'Team Relay' },
+        routePools: [{
+          id: 'durable-route', name: 'Durable route', modelId: 'durable-auto', enabled: true, strategy: 'priority' as const,
+          targets: [{ id: 'target', providerId: targetProvider.id, modelId: targetProvider.models[0], enabled: true, weight: 1 }],
+          failurePolicy: { failoverHttpStatusCodes: [429], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
+          healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
+        }]
+      }
+    }
+
+    const patch = runtimeSettingsRollbackPatch(previous, desired)
+    expect(patch.agents?.kun?.port).toBe(previous.agents.kun.port)
+    expect(patch.provider?.routePools).toEqual(desired.provider.routePools)
+    expect(patch.provider?.localGateway).toEqual(desired.provider.localGateway)
+    expect(patch.provider?.providers).toEqual(previous.provider.providers)
+  })
+
   it('ignores provider order and display-name-only changes', () => {
     const prev = multiProviderSettings()
     const reordered = {
@@ -272,9 +360,17 @@ describe('runtimeSettingsApplyMode', () => {
       }
     }
     const renamed = updateProvider(prev, 'minimax', { name: 'MiniMax Renamed' })
+    const gatewayRenamed = {
+      ...prev,
+      provider: {
+        ...prev.provider,
+        localGateway: { ...prev.provider.localGateway, name: 'Team Relay' }
+      }
+    }
 
     expect(runtimeSettingsApplyMode(prev, reordered)).toBe('none')
     expect(runtimeSettingsApplyMode(prev, renamed)).toBe('none')
+    expect(runtimeSettingsApplyMode(prev, gatewayRenamed)).toBe('none')
   })
 
   it('requires restart for process-level runtime changes', () => {

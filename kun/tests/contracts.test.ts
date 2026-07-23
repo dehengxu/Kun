@@ -681,7 +681,8 @@ describe('cli', () => {
     expect(config.mcp.search.mode).toBe('auto')
     expect(config.web.enabled).toBe(false)
     expect(config.skills.enabled).toBe(false)
-    expect(config.subagents.maxParallel).toBe(0)
+    expect(config.subagents.useExistingAgents).toBe(true)
+    expect(config.subagents.maxParallel).toBe(256)
     expect(config.attachments.allowedMimeTypes).toContain('image/png')
     expect(config.attachments.textFallbackMaxBase64Bytes).toBe(512 * 1024)
     expect(config.attachments.textFallbackMaxImageDimension).toBe(1280)
@@ -704,6 +705,7 @@ describe('cli', () => {
 
     expect(config.subagents).toMatchObject({
       enabled: true,
+      useExistingAgents: true,
       maxParallel: 2,
       maxChildRuns: 4
     })
@@ -718,7 +720,12 @@ describe('cli', () => {
         maxChildRuns: 10,
         defaultProfile: 'reviewer',
         profiles: {
-          reviewer: { model: 'deepseek-v4-pro', promptPreamble: 'Review for bugs.', toolPolicy: 'readOnly' },
+          reviewer: {
+            model: 'deepseek-v4-pro',
+            providerId: 'deepseek',
+            promptPreamble: 'Review for bugs.',
+            toolPolicy: 'readOnly'
+          },
           fixer: { toolPolicy: 'inherit' },
           helper: {}
         }
@@ -738,6 +745,11 @@ describe('cli', () => {
     expect(() => KunCapabilitiesConfig.parse({
       subagents: { enabled: true, maxParallel: 1, maxChildRuns: 1, defaultProfile: 'ghost' }
     })).toThrow(/defaultProfile/)
+    for (const inheritedName of ['constructor', 'toString', '__proto__']) {
+      expect(KunCapabilitiesConfig.safeParse({
+        subagents: { enabled: true, maxParallel: 1, maxChildRuns: 1, defaultProfile: inheritedName }
+      }).success).toBe(false)
+    }
   })
 
   it('surfaces subagent profiles and policy in the runtime capability manifest', () => {
@@ -746,15 +758,23 @@ describe('cli', () => {
       config: KunCapabilitiesConfig.parse({
         subagents: {
           enabled: true,
+          useExistingAgents: false,
           maxParallel: 2,
           maxChildRuns: 6,
           defaultProfile: 'reviewer',
-          profiles: { reviewer: { model: 'deepseek-v4-pro', toolPolicy: 'readOnly' } }
+          profiles: {
+            reviewer: {
+              model: 'deepseek-v4-pro',
+              providerId: 'deepseek',
+              toolPolicy: 'readOnly'
+            }
+          }
         }
       }),
       subagents: { available: true }
     })
     expect(manifest.subagents).toMatchObject({
+      useExistingAgents: false,
       maxParallel: 2,
       maxChildRuns: 6,
       defaultToolPolicy: 'inherit',

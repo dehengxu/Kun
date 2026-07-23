@@ -41,10 +41,16 @@ function nativeInstallArguments(arch, versions) {
     '--package-lock=false',
     '--ignore-scripts',
     '--include=optional',
+    // npm 11 validates direct platform-specific packages against the host
+    // architecture even when --cpu targets a different macOS build. This
+    // staging install is intentionally cross-architecture and the copied
+    // package manifests are verified below before they reach the app tree.
+    '--force',
     '--os=darwin',
     `--cpu=${arch}`,
     `sharp@${versions.sharp}`,
-    `@napi-rs/canvas@${versions.canvas}`
+    `@napi-rs/canvas@${versions.canvas}`,
+    `@cursor/sdk-darwin-${arch}@${versions.cursorSdk}`
   ]
 }
 
@@ -85,6 +91,23 @@ function installStagedTargetPackages(stagingRoot, root, arch) {
       rmSync(join(root, 'node_modules', scope, name), { recursive: true, force: true })
     }
   }
+
+  const cursorPackage = `sdk-darwin-${arch}`
+  const cursorSource = join(stagingRoot, 'node_modules', '@cursor', cursorPackage)
+  if (!existsSync(join(cursorSource, 'package.json'))) {
+    throw new Error(`Staged macOS ${arch} native install is missing @cursor/${cursorPackage}`)
+  }
+  const cursorDestination = join(root, 'kun', 'node_modules', '@cursor', cursorPackage)
+  rmSync(cursorDestination, { recursive: true, force: true })
+  mkdirSync(join(root, 'kun', 'node_modules', '@cursor'), { recursive: true })
+  cpSync(cursorSource, cursorDestination, { recursive: true, verbatimSymlinks: true })
+  for (const otherArch of SUPPORTED_ARCHITECTURES) {
+    if (otherArch === arch) continue
+    rmSync(
+      join(root, 'kun', 'node_modules', '@cursor', `sdk-darwin-${otherArch}`),
+      { recursive: true, force: true }
+    )
+  }
 }
 
 function ensureMacosNativeDependencies({
@@ -98,7 +121,8 @@ function ensureMacosNativeDependencies({
   }
   const versions = {
     sharp: installedPackageVersion(root, 'sharp'),
-    canvas: installedPackageVersion(root, '@napi-rs/canvas')
+    canvas: installedPackageVersion(root, '@napi-rs/canvas'),
+    cursorSdk: installedPackageVersion(join(root, 'kun'), '@cursor/sdk')
   }
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
   const stagingRoot = mkdtempSync(join(tmpdir(), `kun-macos-native-${arch}-`))
@@ -119,13 +143,15 @@ function ensureMacosNativeDependencies({
   assertTargetPackage(root, '@img', `sharp-darwin-${arch}`, arch)
   assertTargetPackage(root, '@img', `sharp-libvips-darwin-${arch}`, arch)
   assertTargetPackage(root, '@napi-rs', `canvas-darwin-${arch}`, arch)
+  assertTargetPackage(join(root, 'kun'), '@cursor', `sdk-darwin-${arch}`, arch)
   return { arch, versions }
 }
 
 function main() {
   const result = ensureMacosNativeDependencies({ arch: argumentValue('--arch') })
   process.stdout.write(
-    `Prepared Sharp ${result.versions.sharp} and Canvas ${result.versions.canvas} ` +
+    `Prepared Sharp ${result.versions.sharp}, Canvas ${result.versions.canvas}, and ` +
+    `Cursor SDK ${result.versions.cursorSdk} ` +
     `for darwin/${result.arch}\n`
   )
 }

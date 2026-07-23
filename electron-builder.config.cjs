@@ -175,6 +175,12 @@ module.exports = {
   ],
   extraResources: [
     {
+      // Ship third-party prompt attribution with packaged applications, not
+      // only in source checkouts.
+      from: 'THIRD_PARTY_NOTICES.md',
+      to: 'THIRD_PARTY_NOTICES.md'
+    },
+    {
       from: 'resources/bundled-extensions',
       to: 'bundled-extensions',
       filter: ['catalog.json', '*.kunx']

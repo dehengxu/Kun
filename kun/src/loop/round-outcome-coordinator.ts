@@ -46,6 +46,7 @@ export type RoundOutcomeInput = Readonly<{
   turn: Turn
   prepared: PreparedTurnContext
   modelProviderId?: string
+  modelReasoningEffort?: string
   toolProviderMetadata: ReadonlyMap<string, RoundToolProviderMetadata>
   toolKinds: ReadonlyMap<string, ToolCallLike['toolKind'] | undefined>
   toolProviderKinds: ReadonlyMap<string, ToolProviderKind | undefined>
@@ -426,8 +427,10 @@ export class RoundOutcomeCoordinator {
       activePlanContext: prepared.activePlanContext,
       guiDesignCanvas: input.turn.guiDesignCanvas === true,
       guiDesignMode: input.turn.guiDesignMode === true,
+      agentSurface: input.turn.agentSurface ?? 'code',
       guiDesignArtifact: input.turn.guiDesignArtifact,
       modelProviderId: input.modelProviderId,
+      reasoningEffort: input.modelReasoningEffort,
       modelCapabilities: prepared.modelCapabilities,
       activeSkillIds: prepared.skillResolution.activeSkillIds,
       allowedToolNames: prepared.allowedToolNames,

@@ -84,7 +84,6 @@ describe('WorkbenchSideRail', () => {
         onToggleRightPanelMode: vi.fn(),
         planPanelEnabled: true,
         canvasEnabled: true,
-        sideChatCount: 0,
         sideChatRunningCount: 0,
         sideChatOpen: false,
         sideChatEnabled: true,
@@ -98,7 +97,7 @@ describe('WorkbenchSideRail', () => {
 
     for (const label of [
       'Open branch conversation',
-      'Todo',
+      'Agent Perspective',
       'Plan',
       'Changes',
       'Preview',
@@ -110,6 +109,8 @@ describe('WorkbenchSideRail', () => {
       expect(html).toContain(`aria-label="${label}"`)
       expect(html).not.toContain(`title="${label}"`)
     }
+
+    expect(html).not.toContain('data-tooltip="Todo"')
 
     expect(html).toContain('data-tooltip="Issues"')
     expect(html).toContain('data-tooltip="MCP &amp; Skills"')
@@ -129,6 +130,10 @@ describe('WorkbenchSideRail', () => {
     expect(html.indexOf('data-tooltip="MCP &amp; Skills"')).toBeLessThan(
       html.indexOf('data-tooltip="Files"')
     )
+    expect(html.indexOf('data-tooltip="Files"')).toBeLessThan(
+      html.indexOf('data-contribution-id="extension:acme.issues/summary"')
+    )
+    expect(html).toContain('ds-extension-side-rail-group')
     expect(html).not.toContain('data-tooltip="Extension Views"')
     expect(html).not.toContain('aria-label="Open extension Views"')
     expect(html).not.toContain('data-contribution-id="extension:acme.issues/dashboard"')
@@ -137,6 +142,36 @@ describe('WorkbenchSideRail', () => {
     expect(html).not.toContain(`data-tooltip="Terminal"`)
 
     expect(html.match(/ds-side-rail-button/g)?.length).toBeGreaterThanOrEqual(8)
+  })
+
+  it('disables Agent Perspective until a Code conversation is selected', () => {
+    let renderer!: ReturnType<typeof createRenderer>
+    act(() => {
+      renderer = createRenderer(createElement(WorkbenchSideRail, {
+        rightPanelMode: null,
+        onToggleRightPanelMode: vi.fn(),
+        agentPerspectiveEnabled: false
+      }))
+    })
+    const button = renderer.root.findByProps({ 'aria-label': 'Agent Perspective' })
+    expect(button.props.disabled).toBe(true)
+    act(() => renderer.unmount())
+  })
+
+  it('keeps the branch rail launcher free of a numeric count badge', () => {
+    let renderer!: ReturnType<typeof createRenderer>
+    act(() => {
+      renderer = createRenderer(createElement(WorkbenchSideRail, {
+        rightPanelMode: null,
+        onToggleRightPanelMode: vi.fn(),
+        onOpenSideChat: vi.fn(),
+        sideChatRunningCount: 0
+      }))
+    })
+
+    const button = renderer.root.findByProps({ 'aria-label': 'Open branch conversation' })
+    expect(button.findAllByType('span')).toHaveLength(0)
+    act(() => renderer.unmount())
   })
 
   it('routes an untrusted rail launcher to permission review without opening a panel', () => {

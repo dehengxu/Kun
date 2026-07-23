@@ -863,7 +863,7 @@ function EnvVarsModal({
         className="flex max-h-[80vh] w-[560px] flex-col overflow-hidden rounded-2xl border border-ds-border bg-ds-card shadow-xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="flex items-center justify-between border-b border-ds-border px-5 py-3.5">
+        <header className="flex shrink-0 items-center justify-between border-b border-ds-border px-5 py-3.5">
           <div className="flex flex-col">
             <span className="text-[14px] font-semibold text-ds-ink">{t('workflowEnvVars')}</span>
             <span className="text-[11.5px] text-ds-faint">{t('workflowEnvVarsHint')}</span>
@@ -876,7 +876,7 @@ function EnvVarsModal({
             <X className="h-4 w-4" strokeWidth={1.8} />
           </button>
         </header>
-        <div className="flex flex-col gap-2 overflow-y-auto px-5 py-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-5 py-4">
           {env.length === 0 ? (
             <p className="py-6 text-center text-[12.5px] text-ds-faint">{t('workflowEnvEmpty')}</p>
           ) : (

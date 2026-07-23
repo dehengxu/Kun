@@ -30,6 +30,10 @@ import type { ExtensionComposerContextEvent } from '@shared/extension-ipc'
 export type QueuedUserMessage = {
   id: string
   text: string
+  /** Pending items are visible; starting/in-flight items remain durable until the turn settles. */
+  deliveryState?: 'pending' | 'starting' | 'in_flight'
+  deliveryTurnId?: string
+  deliveryUserMessageItemId?: string
   displayText?: string
   mode?: string
   model?: string
@@ -58,6 +62,7 @@ export type QueuedUserMessage = {
   guiDesignCanvas?: boolean
   /** True only for the product Design surface; Code whiteboards leave this unset. */
   guiDesignMode?: boolean
+  agentSurface?: 'code' | 'write' | 'design'
   guiDesignArtifact?: GuiDesignArtifactMessageContext
   writeContext?: WriteAssistantMessageContext
 }
@@ -104,6 +109,7 @@ export type SendMessageOverrides = {
   guiPlan?: GuiPlanMessageContext
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
+  agentSurface?: 'code' | 'write' | 'design'
   guiDesignArtifact?: GuiDesignArtifactMessageContext
   attachmentIds?: string[]
   attachments?: AttachmentReference[]
@@ -168,6 +174,11 @@ export type SideConversation = {
 export type SidePanelState = {
   open: boolean
   activeSideId: string | null
+}
+
+export type SideConversationDraftOptions = {
+  model?: string
+  reasoningEffort?: string
 }
 
 export type ChatState = {
@@ -339,6 +350,11 @@ export type ChatState = {
   reviewActiveThread: (target: ReviewTarget) => Promise<boolean>
   drainQueuedMessages: () => Promise<void>
   removeQueuedMessage: (id: string) => void
+  reorderQueuedMessage: (
+    id: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ) => void
   guideQueuedMessage: (id: string) => Promise<boolean>
   attachExtensionComposerContext: (event: ExtensionComposerContextEvent) => void
   removeExtensionComposerContext: (attachmentId: string) => void
@@ -366,7 +382,10 @@ export type ChatState = {
    * while the active thread is running. Does not change `activeThreadId`.
    * If `seedText` is provided, immediately sends it as the first turn.
    */
-  spawnSideConversation: (seedText?: string) => Promise<string | null>
+  spawnSideConversation: (
+    seedText?: string,
+    options?: SideConversationDraftOptions
+  ) => Promise<string | null>
   /**
    * Open the side chat surface without creating an underlying side
    * thread. The first draft send will create the side thread.

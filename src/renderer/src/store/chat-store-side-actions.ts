@@ -7,7 +7,12 @@ import type {
   ToolEventPayload
 } from '../agent/types'
 import { DEFAULT_KUN_MODEL, MODEL_REASONING_EFFORTS } from '@shared/app-settings'
-import type { ChatState, SideConversation, SidePanelState } from './chat-store-types'
+import type {
+  ChatState,
+  SideConversation,
+  SideConversationDraftOptions,
+  SidePanelState
+} from './chat-store-types'
 import { upsertUserBlock } from './chat-store-runtime-helpers'
 
 type SideContext = {
@@ -357,7 +362,7 @@ export function createSideActions(ctx: SideContext): Pick<
     | 'discardSideConversation'
     | 'promoteSideConversation'
   > = {
-    spawnSideConversation: async (seedText) => {
+    spawnSideConversation: async (seedText, options?: SideConversationDraftOptions) => {
       const state = ctx.get()
       const parentId = state.activeThreadId
       if (!parentId) {
@@ -389,6 +394,9 @@ export function createSideActions(ctx: SideContext): Pick<
       }
       const now = new Date().toISOString()
       const inheritedAt = new Date().toISOString()
+      const draftModel = options?.model?.trim() || defaultSideModel(state, parentId)
+      const draftReasoningEffort =
+        sideReasoningEffortRequestValue(options?.reasoningEffort ?? '') ?? 'max'
       const side: SideConversation = {
         threadId: forked.id,
         parentThreadId: parentId,
@@ -400,8 +408,8 @@ export function createSideActions(ctx: SideContext): Pick<
         liveAssistant: '',
         lastSeq: 0,
         input: '',
-        model: defaultSideModel(state, parentId),
-        reasoningEffort: 'max',
+        model: draftModel,
+        reasoningEffort: draftReasoningEffort,
         busy: false,
         turnId: null,
         userItemId: null,
