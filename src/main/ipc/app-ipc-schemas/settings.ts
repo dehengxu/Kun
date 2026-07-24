@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import {
+  APP_LOCALES,
   IMAGE_GENERATION_QUALITIES,
   IMAGE_GENERATION_PROTOCOLS,
   IMAGE_GENERATION_RESOLUTIONS,
@@ -39,7 +40,7 @@ import {
   optionalTrimmedString,
   trimmedString
 } from './common'
-const localeSchema = z.enum(['en', 'zh'])
+const localeSchema = z.enum(APP_LOCALES)
 const themeSchema = z.enum(['system', 'light', 'dark'])
 const uiFontScaleSchema = z.union([
   z.number().min(UI_FONT_SCALE_MIN).max(UI_FONT_SCALE_MAX),
@@ -59,6 +60,11 @@ const clawTaskStatusSchema = z.enum(['idle', 'queued', 'running', 'success', 'er
 export const scheduleReasoningEffortSchema = z.enum(SCHEDULE_REASONING_EFFORT_IDS)
 export const modelIdSchema = z.string().trim().min(1).max(MAX_MODEL_ID_LENGTH)
 export const optionalModelIdSchema = z.string().trim().max(MAX_MODEL_ID_LENGTH).optional()
+export const cursorSubscriptionDiscoveryPayloadSchema = z
+  .object({
+    apiKey: z.string().trim().min(1).max(MAX_BODY_BYTES)
+  })
+  .strict()
 const writeInlineCompletionModelSchema = z.union([
   z.enum(WRITE_INLINE_COMPLETION_MODEL_IDS),
   modelIdSchema
@@ -121,6 +127,10 @@ const modelProviderPatchSchema = z.object({
   providers: z.array(z.object({
     id: z.string().trim().min(1).max(64).optional(),
     name: z.string().trim().min(1).max(80).optional(),
+    presetSource: z.object({
+      presetId: z.string().trim().min(1).max(64),
+      mode: z.enum(['api', 'token-plan'])
+    }).strict().optional(),
     apiKey: z.string().max(MAX_BODY_BYTES).optional(),
     baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
     endpointFormat: modelEndpointFormatSchema.optional(),
@@ -129,7 +139,7 @@ const modelProviderPatchSchema = z.object({
       initialDelayMs: z.number().int().min(0).max(600_000).optional(),
       httpStatusCodes: z.array(z.number().int().min(400).max(599)).max(64).optional()
     }).strict().optional(),
-    kind: z.enum(['http', 'agent-sdk']).optional(),
+    kind: z.enum(['http', 'agent-sdk', 'antigravity-cli', 'cursor-sdk', 'gemini-code-assist']).optional(),
     // Some third-party aggregators (litellm, oneapi, …) advertise 500+ chat
     // models in a single /v1/models response. The previous 200/50 caps caused
     // settings:set to silently fail with no toast (#397). Raised to leave
@@ -166,7 +176,36 @@ const modelProviderPatchSchema = z.object({
       baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
       models: z.array(modelIdSchema).max(500).optional()
     }).strict().nullable().optional()
-  }).strict()).max(50).optional()
+  }).strict()).max(50).optional(),
+  routePools: z.array(z.object({
+    id: z.string().trim().min(1).max(64).optional(),
+    name: z.string().trim().min(1).max(80).optional(),
+    modelId: modelIdSchema.optional(),
+    enabled: z.boolean().optional(),
+    strategy: z.enum(['priority', 'round-robin', 'weighted-round-robin', 'least-latency', 'adaptive']).optional(),
+    targets: z.array(z.object({
+      id: z.string().trim().min(1).max(64),
+      providerId: z.string().trim().min(1).max(64),
+      modelId: modelIdSchema,
+      enabled: z.boolean(),
+      weight: z.number().int().min(1).max(100)
+    }).strict()).max(50).optional(),
+    failurePolicy: z.object({
+      failoverHttpStatusCodes: z.array(z.number().int().min(400).max(599)).max(64),
+      failoverOnNetworkError: z.boolean(),
+      failoverOnTimeout: z.boolean(),
+      failoverOnAuthError: z.boolean()
+    }).strict().optional(),
+    healthPolicy: z.object({
+      failureThreshold: z.number().int().min(1).max(20),
+      cooldownMs: z.number().int().min(1000).max(3_600_000),
+      halfOpenMaxAttempts: z.number().int().min(1).max(10)
+    }).strict().optional()
+  }).strict()).max(100).optional(),
+  localGateway: z.object({
+    enabled: z.boolean().optional(),
+    name: z.string().trim().min(1).max(80).optional()
+  }).strict().optional()
 }).strict()
 
 // Subagent profile patch. `.passthrough()` so a field the GUI adds later is
@@ -197,7 +236,8 @@ const subagentProfilePatchSchema = z
 const subagentsPatchSchema = z
   .object({
     enabled: z.boolean().optional(),
-    maxParallel: z.number().int().nonnegative().max(64).optional(),
+    useExistingAgents: z.boolean().optional(),
+    maxParallel: z.number().int().positive().max(256).optional(),
     maxChildRuns: z.number().int().nonnegative().max(10_000).optional(),
     defaultToolPolicy: z.enum(['readOnly', 'inherit']).optional(),
     defaultProfile: z.string().max(128).optional(),
@@ -251,6 +291,12 @@ const kunRuntimePatchSchema = z.object({
     topKMax: z.number().int().positive().optional(),
     minScore: z.number().nonnegative().optional()
   }).strict().optional(),
+  projectConfig: z.object({
+    grants: z.array(z.object({
+      workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+      configDigest: z.string().trim().regex(/^[a-fA-F0-9]{64}$/)
+    }).strict()).max(64).optional()
+  }).strict().optional(),
   storage: z.object({
     backend: kunStorageBackendSchema.optional(),
     sqlitePath: defaultPathSchema
@@ -266,6 +312,8 @@ const kunRuntimePatchSchema = z.object({
     summaryProviderId: z.string().trim().max(64).optional()
   }).strict().optional(),
   runtimeTuning: z.object({
+    maxConcurrentTurns: z.number().int().positive().max(256).optional(),
+    maxWallTimeMs: z.number().int().positive().max(86_400_000).optional(),
     streamIdleTimeoutMs: z.number().int().min(0).max(3_600_000).optional(),
     toolStorm: z.object({
       enabled: z.boolean().optional(),
@@ -376,6 +424,9 @@ const kunRuntimePatchSchema = z.object({
   codeReviewModel: optionalModelIdSchema,
   codeReviewProviderId: z.string().trim().max(64).optional(),
   codeReviewAccountId: z.string().trim().max(256).optional(),
+  planModel: optionalModelIdSchema,
+  planProviderId: z.string().trim().max(64).optional(),
+  planAccountId: z.string().trim().max(256).optional(),
   // Per-role reasoning depth. Default 'off' is omitted by the normalizer.
   titleReasoningEffort: modelReasoningEffortSchema.optional(),
   summaryReasoningEffort: modelReasoningEffortSchema.optional(),

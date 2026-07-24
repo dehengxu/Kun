@@ -31,6 +31,7 @@ import {
   normalizeModelEndpointFormat
 } from '../contracts/model-endpoint-format.js'
 import { HooksConfigSchema } from '../hooks/hook-config.js'
+import { LocalModelGatewayConfigSchema, ModelRoutePoolConfigSchema, isLoopbackHost as isGatewayLoopbackHost } from '../contracts/model-route-pool.js'
 import { isLoopbackHost } from '../server/loopback-host.js'
 
 export const DEFAULT_SERVE_PORT = 18899
@@ -49,6 +50,7 @@ export const ServeOptionsSchema = z.object({
   host: z.string().default('127.0.0.1'),
   port: z.number().int().min(0).max(65_535).default(DEFAULT_SERVE_PORT),
   dataDir: z.string().min(1),
+  bundledExtensionsDir: z.string().min(1).max(4096).optional(),
   runtimeToken: z.string().default(''),
   apiKey: z.string().default(''),
   credentialSourceId: z.string().min(1).max(256).optional(),
@@ -67,6 +69,8 @@ export const ServeOptionsSchema = z.object({
   observability: ObservabilityConfigSchema.optional(),
   headers: z.record(z.string(), z.string()).optional(),
   providers: z.record(z.string().min(1), ServeProviderConfigSchema).optional(),
+  routePools: z.array(ModelRoutePoolConfigSchema).max(100).optional(),
+  localModelGateway: LocalModelGatewayConfigSchema.optional(),
   models: ModelConfigSchema.optional(),
   contextCompaction: ContextCompactionConfigSchema.optional(),
   runtime: RuntimeTuningConfigSchema.optional(),
@@ -80,6 +84,13 @@ export const ServeOptionsSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['insecure'],
       message: '--insecure is allowed only with a loopback host'
+    })
+  }
+  if (value.localModelGateway?.enabled && !isGatewayLoopbackHost(value.host)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['localModelGateway', 'enabled'],
+      message: 'unauthenticated local model gateway requires a loopback host'
     })
   }
 })

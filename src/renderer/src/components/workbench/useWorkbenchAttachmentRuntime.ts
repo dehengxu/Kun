@@ -10,6 +10,7 @@ import { useCanvasImageAutoAttachment } from '../design/useCanvasImageAutoAttach
 import {
   composerAttachmentScopeForSurface,
   createEmptyComposerAttachmentsByScope,
+  removeComposerAttachmentsById,
   updateComposerAttachmentsByScope,
   type ComposerAttachmentScope,
   type ComposerAttachmentUpdater
@@ -17,15 +18,6 @@ import {
 import { useWorkbenchAttachmentController } from './useWorkbenchAttachmentController'
 import type { RightPanelMode } from '../chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../../extensions/contribution-ids'
-
-function base64ToFile(dataBase64: string, name: string, mimeType: string): File {
-  const binary = atob(dataBase64)
-  const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index)
-  }
-  return new File([bytes], name || 'image', { type: mimeType })
-}
 
 type WorkbenchAttachmentRuntimeOptions = {
   activeThreadId: string | null
@@ -119,13 +111,23 @@ export function useWorkbenchAttachmentRuntime({
     activeThreadId,
     attachmentCapabilities: runtimeInfo?.capabilities.attachments,
     setComposerAttachmentsForScope,
-    getActiveWorkspace: activeComposerWorkspace,
-    createFile: base64ToFile
+    getActiveWorkspace: activeComposerWorkspace
   })
 
   const clearComposerAttachments = (scope = composerAttachmentScopeRef.current): void => {
     setComposerAttachmentsForScope(scope, [])
     if (scope === 'design') clearCanvasImageAutoAttachment()
+  }
+
+  const removeComposerAttachments = (
+    ids: readonly string[],
+    scope = composerAttachmentScopeRef.current
+  ): void => {
+    if (ids.length === 0) return
+    setComposerAttachmentsForScope(
+      scope,
+      (current) => removeComposerAttachmentsById(current, ids)
+    )
   }
 
   const {
@@ -142,8 +144,7 @@ export function useWorkbenchAttachmentRuntime({
     setComposerAttachmentsForScope,
     setComposerAttachments,
     getAttachmentScope: () => composerAttachmentScopeRef.current,
-    getActiveWorkspace: activeComposerWorkspace,
-    createFile: base64ToFile
+    getActiveWorkspace: activeComposerWorkspace
   })
 
   return {
@@ -155,6 +156,7 @@ export function useWorkbenchAttachmentRuntime({
     getAttachmentScope: () => composerAttachmentScopeRef.current,
     handlePasteClipboardImage,
     handlePickAttachments,
+    removeComposerAttachments,
     removeComposerAttachment,
     setAttachmentUploadError,
     webAccessAvailable

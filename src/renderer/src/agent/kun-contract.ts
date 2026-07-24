@@ -1,4 +1,7 @@
 import { GUI_PLAN_CREATE_PLAN_TOOL_NAME } from '@shared/gui-plan'
+import type { ComposerContextAttachment } from '@kun/extension-api'
+
+export type CoreComposerContextAttachmentJson = ComposerContextAttachment
 
 export type CoreThreadStatus = 'idle' | 'running' | 'archived' | 'deleted'
 export type CoreTurnStatus = 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
@@ -222,6 +225,7 @@ export type CoreRuntimeCapabilityManifestJson = {
     lastInjectedBytes?: number
   }
   subagents: CoreRuntimeCapabilityStateJson & {
+    useExistingAgents?: boolean
     maxParallel: number
     maxChildRuns: number
     defaultToolPolicy?: 'readOnly' | 'inherit'
@@ -396,6 +400,7 @@ export type CoreChildRuntimeMetadataJson = {
   detached?: boolean
   childModel?: string
   childProfile?: string
+  childProfileName?: string
   childToolPolicy?: 'readOnly' | 'inherit'
   prefixReused?: boolean
   inheritedHistoryItems?: number
@@ -427,6 +432,7 @@ export type CoreTurnJson = {
   finishedAt?: string
   items?: CoreTurnItemJson[]
   attachmentIds?: string[]
+  composerContexts?: CoreComposerContextAttachmentJson[]
   activeSkillIds?: string[]
   injectedMemoryIds?: string[]
   injectedMemorySummaries?: Array<{ id: string; content: string }>
@@ -436,6 +442,7 @@ export type CoreTurnJson = {
   workspaceCheckpointId?: string
   guiDesignCanvas?: boolean
   guiDesignMode?: boolean
+  agentSurface?: 'code' | 'write' | 'design'
   error?: string
 }
 
@@ -490,6 +497,7 @@ export type CoreTurnItemJson = {
   details?: unknown
   severity?: 'info' | 'warning' | 'error'
   attachmentIds?: string[]
+  composerContexts?: CoreComposerContextAttachmentJson[]
   fileReferences?: CoreUserFileReferenceJson[]
   workspaceCheckpointId?: string
   activeSkillIds?: string[]
@@ -501,6 +509,23 @@ export type CoreTurnItemJson = {
   target?: CoreReviewTargetJson
   title?: string
   reviewText?: string
+}
+
+export type CoreComponentPrototypeJson = {
+  version: 1
+  status: 'preparing' | 'running' | 'completed' | 'failed'
+  artifactId: string
+  title: string
+  relativePath: string
+  viewport: { width: number; height: number }
+  /** Missing on historical component-designer payloads. */
+  producer?: 'main-agent' | 'component-designer'
+  profile?: 'component-designer'
+  childId?: string
+  byteSize?: number
+  contentHash?: string
+  summary?: string
+  error?: string
 }
 
 export type CoreReviewTargetJson =
@@ -655,6 +680,7 @@ export type CoreRuntimeEventJson = {
   label?: string
   details?: unknown
   summary?: string
+  reason?: string
   prompt?: string
   inputId?: string
   questions?: Array<{

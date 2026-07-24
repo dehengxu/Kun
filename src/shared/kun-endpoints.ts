@@ -17,6 +17,13 @@ export const KUN_RUNTIME_INFO_TEMPLATE = '/v1/runtime/info'
 export const KUN_RUNTIME_TOOLS_PATH = '/v1/runtime/tools'
 export const KUN_RUNTIME_TOOLS_TEMPLATE = '/v1/runtime/tools'
 
+export const KUN_MODEL_ROUTES_PATH = '/v1/model-routes'
+export const KUN_MODEL_ROUTES_TEMPLATE = '/v1/model-routes'
+export const KUN_MODEL_ROUTE_TEST_TEMPLATE = '/v1/model-routes/{id}/test'
+export function kunModelRouteTestPath(poolId: string): string {
+  return `/v1/model-routes/${encodeURIComponent(poolId)}/test`
+}
+
 export const KUN_SUPPLY_CHAIN_AUDIT_PATH = '/v1/supply-chain/audit'
 export const KUN_SUPPLY_CHAIN_AUDIT_TEMPLATE = '/v1/supply-chain/audit'
 export const KUN_SUPPLY_CHAIN_UPDATE_CHECK_PATH = '/v1/supply-chain/update-check'
@@ -52,6 +59,13 @@ export const KUN_MEMORY_DIAGNOSTICS_TEMPLATE = '/v1/memory/diagnostics'
 export const KUN_MEMORY_RECORD_TEMPLATE = '/v1/memory/{id}'
 export function kunMemoryRecordPath(memoryId: string): string {
   return `/v1/memory/${encodeURIComponent(memoryId)}`
+}
+
+export const KUN_DELEGATION_PROFILES_PATH = '/v1/delegation/profiles'
+export const KUN_DELEGATION_PROFILES_TEMPLATE = '/v1/delegation/profiles'
+export function kunDelegationProfilesPath(workspace?: string): string {
+  if (!workspace?.trim()) return KUN_DELEGATION_PROFILES_PATH
+  return `${KUN_DELEGATION_PROFILES_PATH}?workspace=${encodeURIComponent(workspace.trim())}`
 }
 
 export const KUN_THREADS_PATH = '/v1/threads'
@@ -97,19 +111,29 @@ export function kunThreadTurnsPath(threadId: string): string {
   return `${kunThreadPath(threadId)}/turns`
 }
 
+export const KUN_THREAD_TURN_TEMPLATE = '/v1/threads/{id}/turns/{turn}'
+export function kunThreadTurnPath(threadId: string, turnId: string): string {
+  return `${kunThreadTurnsPath(threadId)}/${encodeURIComponent(turnId)}`
+}
+
 export const KUN_THREAD_STEER_TEMPLATE = '/v1/threads/{id}/turns/{turn}/steer'
 export function kunThreadSteerPath(threadId: string, turnId: string): string {
-  return `${kunThreadTurnsPath(threadId)}/${encodeURIComponent(turnId)}/steer`
+  return `${kunThreadTurnPath(threadId, turnId)}/steer`
 }
 
 export const KUN_THREAD_INTERRUPT_TEMPLATE = '/v1/threads/{id}/turns/{turn}/interrupt'
 export function kunThreadInterruptPath(threadId: string, turnId: string): string {
-  return `${kunThreadTurnsPath(threadId)}/${encodeURIComponent(turnId)}/interrupt`
+  return `${kunThreadTurnPath(threadId, turnId)}/interrupt`
 }
 
 export const KUN_THREAD_EVENTS_TEMPLATE = '/v1/threads/{id}/events'
 export function kunThreadEventsPath(threadId: string): string {
   return `${kunThreadPath(threadId)}/events`
+}
+
+export const KUN_THREAD_MODEL_REQUESTS_TEMPLATE = '/v1/threads/{id}/model-requests'
+export function kunThreadModelRequestsPath(threadId: string): string {
+  return `${kunThreadPath(threadId)}/model-requests`
 }
 
 export const KUN_APPROVAL_TEMPLATE = '/v1/approvals/{id}'

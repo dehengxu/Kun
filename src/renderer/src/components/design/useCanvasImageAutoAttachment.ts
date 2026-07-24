@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { AttachmentReference } from '../../agent/types'
-import { getProvider } from '../../agent/registry'
 import {
   canvasAutoAttachmentReference,
   parseCanvasImageDataUrl,
@@ -8,10 +7,8 @@ import {
   selectedCanvasImageAttachmentCandidate
 } from '../../design/canvas/canvas-image-auto-attachment'
 import type { CanvasDocument } from '../../design/canvas/canvas-types'
-import {
-  prepareImageAttachmentUpload,
-  type ImageAttachmentUploadCapabilities
-} from '../../lib/image-attachment-upload'
+import type { ImageAttachmentUploadCapabilities } from '../../lib/image-attachment-upload'
+import { uploadRuntimeImageAttachment } from '../../lib/runtime-image-attachment'
 import type { ComposerAttachmentUpdater } from '../workbench-composer-attachments'
 
 export type CanvasImageAutoAttachmentOptions = {
@@ -26,7 +23,6 @@ export type CanvasImageAutoAttachmentOptions = {
     updater: ComposerAttachmentUpdater
   ) => void
   getActiveWorkspace: () => string | undefined
-  createFile: (dataBase64: string, name: string, mimeType: string) => File
 }
 
 export type CanvasImageAutoAttachmentState = {
@@ -81,35 +77,31 @@ export function useCanvasImageAutoAttachment(
         }
         if (seqRef.current !== seq) return
 
-        const provider = getProvider()
-        if (typeof provider.uploadAttachment !== 'function') return
         const caps = dynamicRef.current.attachmentCapabilities
-        if (!caps) return
-
-        const file = dynamicRef.current.createFile(
-          imageData.dataBase64,
-          candidate.shapeName,
-          imageData.mimeType
-        )
-        const prepared = await prepareImageAttachmentUpload(file, caps)
+        if (!caps || typeof window.kunGui?.uploadRuntimeImageAttachment !== 'function') return
         if (seqRef.current !== seq) return
 
         const workspace = dynamicRef.current.getActiveWorkspace()
         const threadId = dynamicRef.current.activeThreadId
-        const uploaded = await provider.uploadAttachment({
-          name: file.name,
-          mimeType: prepared.mimeType,
-          dataBase64: prepared.dataBase64,
-          textFallback: prepared.textFallback,
+        const result = await uploadRuntimeImageAttachment({
+          source: {
+            kind: 'base64',
+            dataBase64: imageData.dataBase64,
+            mimeType: imageData.mimeType
+          },
+          name: candidate.shapeName,
           ...(threadId ? { threadId } : {}),
           ...(workspace ? { workspace } : {})
         })
         if (seqRef.current !== seq) return
 
         clearAutoAttachment()
-        const ref = canvasAutoAttachmentReference({ uploaded, prepared })
+        const ref = canvasAutoAttachmentReference({
+          uploaded: result.attachment,
+          preview: result.preview
+        })
         dynamicRef.current.setComposerAttachmentsForScope('design', (cur) => [...cur, ref])
-        autoAttachmentIdRef.current = uploaded.id
+        autoAttachmentIdRef.current = result.attachment.id
       } catch {
         // Keep canvas selection interactions quiet if an image cannot be uploaded.
       }

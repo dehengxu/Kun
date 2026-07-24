@@ -1,6 +1,10 @@
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { createSecretEncryptor, defaultSecretCommandRunner } from '../../kun/src/security/secret-store.js'
+import {
+  createSecretEncryptor,
+  defaultSecretCommandRunner,
+  hasPersistedSecretKeyMaterial
+} from '../../kun/src/security/secret-store.js'
 import { ExtensionCredentialStore } from '../../kun/src/services/extension-credential-store.js'
 import { LegacyProviderCredentialMigrationService } from '../../kun/src/services/legacy-provider-credential-migration.js'
 import { ExtensionProviderAccountStore } from '../../kun/src/services/extension-provider-account-store.js'
@@ -45,6 +49,13 @@ export class LegacyProviderSettingsMigrationCoordinator {
   ): Promise<PreparedLegacyProviderSettingsMigration> {
     const dataDir = resolveSettingsDataDir(settings)
     const { service } = await this.runtime(dataDir)
+    // Save path only: an empty apiKey means the caller intentionally cleared
+    // credentials (disconnect / revoke). Drop the secure binding so hydrate
+    // cannot resurrect the previous secret. Load path keeps empty plaintext
+    // + existing bindings so restart still restores logged-in sessions.
+    if (options.replaceCommitted === true) {
+      await service.forgetSources(collectClearedLegacyCredentialSourceIds(settings))
+    }
     const sources = collectLegacyCredentialSources(settings)
     const migrations = await service.migrate(sources, {
       replaceCommitted: options.replaceCommitted === true
@@ -116,6 +127,17 @@ function collectLegacyCredentialSources(settings: AppSettingsV1) {
   return sources
 }
 
+/** Source ids whose plaintext is empty and should be forgotten on save. */
+function collectClearedLegacyCredentialSourceIds(settings: AppSettingsV1): string[] {
+  const providerSettings = getModelProviderSettings(settings)
+  const runtime = getKunRuntimeSettings(settings)
+  const sourceIds = providerSettings.providers
+    .filter((provider) => !provider.apiKey.trim())
+    .map((provider) => legacyProviderCredentialSourceId(provider.id))
+  if (!runtime.apiKey.trim()) sourceIds.push(LEGACY_RUNTIME_OVERRIDE_SOURCE_ID)
+  return sourceIds
+}
+
 function stripMigratedPlaintext(
   settings: AppSettingsV1,
   migratedSourceIds: ReadonlySet<string>
@@ -151,12 +173,15 @@ async function hydrateSettingsFromBindings(
   const provider = getModelProviderSettings(settings)
   const providers: ModelProviderProfileV1[] = []
   for (const entry of provider.providers) {
-    const resolved = await service.resolveApiKey(legacyProviderCredentialSourceId(entry.id))
+    const resolved = await resolveLegacyApiKey(
+      service,
+      legacyProviderCredentialSourceId(entry.id)
+    )
     providers.push(resolved ? { ...entry, apiKey: resolved.apiKey } : entry)
   }
   const defaultProvider = providers.find((entry) => entry.id === DEFAULT_MODEL_PROVIDER_ID) ?? providers[0]
   const runtime = getKunRuntimeSettings(settings)
-  const runtimeOverride = await service.resolveApiKey(LEGACY_RUNTIME_OVERRIDE_SOURCE_ID)
+  const runtimeOverride = await resolveLegacyApiKey(service, LEGACY_RUNTIME_OVERRIDE_SOURCE_ID)
   return {
     ...settings,
     provider: {
@@ -168,6 +193,25 @@ async function hydrateSettingsFromBindings(
       ...settings.agents,
       kun: runtimeOverride ? { ...runtime, apiKey: runtimeOverride.apiKey } : runtime
     }
+  }
+}
+
+async function resolveLegacyApiKey(
+  service: LegacyProviderCredentialMigrationService,
+  sourceId: string
+): Promise<Awaited<ReturnType<LegacyProviderCredentialMigrationService['resolveApiKey']>>> {
+  try {
+    return await service.resolveApiKey(sourceId)
+  } catch (error) {
+    // Credential records can outlive the key that encrypted them after an OS
+    // keychain reset, profile restore, or copied data directory. One unreadable
+    // legacy record must not make settings:set fail for a different provider:
+    // keep that profile unhydrated so the user can replace its key explicitly.
+    console.warn('[kun-gui] Legacy provider credential could not be restored; the saved profile will require a new key.', {
+      sourceId,
+      message: error instanceof Error ? error.message : String(error)
+    })
+    return null
   }
 }
 
@@ -193,7 +237,8 @@ function resolveSettingsDataDir(settings: AppSettingsV1): string {
 async function createMigrationRuntime(dataDir: string): Promise<MigrationRuntime> {
   const keyProvider = await createSecretEncryptor({
     keyFilePath: join(dataDir, 'secret.key'),
-    run: defaultSecretCommandRunner
+    run: defaultSecretCommandRunner,
+    canBootstrapKeyFileFallback: async () => !(await hasPersistedSecretKeyMaterial(dataDir))
   })
   const accounts = new ExtensionProviderAccountStore({ dataDir })
   const credentials = new ExtensionCredentialStore({

@@ -19,9 +19,11 @@ import type { MemoryStore } from '../memory/memory-store.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import type { ModelClient } from '../ports/model-client.js'
 import { RandomIdGenerator } from '../ports/id-generator.js'
+import type { ApprovalGate } from '../ports/approval-gate.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { ToolHost } from '../ports/tool-host.js'
+import type { DelegatedTurnRuntime } from '../runtime/delegated-turn-runtime.js'
 import type { SkillRuntime } from '../skills/skill-runtime.js'
 import type { InstructionRuntime } from '../instructions/instruction-runtime.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
@@ -29,6 +31,23 @@ import { ThreadService } from '../services/thread-service.js'
 import { TurnService } from '../services/turn-service.js'
 import { UsageService } from '../services/usage-service.js'
 import type { ChildRunExecutor } from './delegation-runtime.js'
+
+export type ChildDelegatedRuntimeFactory = (input: {
+  turns: TurnService
+  sessionStore: SessionStore
+  threadStore: ThreadStore
+  events: RuntimeEventRecorder
+  ids: { next(prefix: string): string }
+  prefix: ImmutablePrefix
+  toolPolicy: 'readOnly' | 'inherit'
+  allowedToolNames?: readonly string[]
+  allowedProviderIds?: readonly string[]
+  blockedToolNames?: readonly string[]
+  blockedProviderIds?: readonly string[]
+  blockedSkillIds?: readonly string[]
+  skillsEnabled: boolean
+  memoryEnabled: boolean
+}) => DelegatedTurnRuntime | undefined
 
 export type ChildAgentExecutorOptions = {
   model: ModelClient
@@ -47,6 +66,13 @@ export type ChildAgentExecutorOptions = {
   instructionRuntime?: InstructionRuntime
   memoryStore?: MemoryStore
   artifactStore?: ArtifactStore
+  /** Runtime-owned approval channel shared with the HTTP decision endpoint. */
+  approvalGate?: ApprovalGate
+  /**
+   * Host-owned provider-native runtime composition. The callback receives the
+   * already narrowed child capability envelope and child turn services.
+   */
+  createDelegatedRuntime?: ChildDelegatedRuntimeFactory
   /**
    * Persistence wiring. When the main runtime's stores + event recorder are
    * supplied, the child runs as a persisted `relation: 'side'` thread on the
@@ -63,6 +89,10 @@ export type ChildAgentExecutorOptions = {
 
 export function createChildAgentExecutor(options: ChildAgentExecutorOptions): ChildRunExecutor {
   return async (input) => {
+    const blockedSkillIds = unique([
+      ...(input.security?.blockedSkillIds ?? []),
+      ...(input.blockedSkills ?? [])
+    ])
     const nowIso = options.nowIso ?? (() => new Date().toISOString())
     // Persist into the main runtime's stores + event bus when supplied, so the
     // child session is queryable and streams live; otherwise stay isolated in
@@ -108,42 +138,64 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ids,
       nowIso
     })
-    // Tool gating, most-specific first: an explicit allow-list wins; else a
-    // read-only policy restricts to investigation tools; else (inherit) the
-    // child sees the parent agent's FULL tool set — no forced allow-list, so
-    // it can edit/run shell exactly like the parent. The capability registry
-    // enforces an explicit list twice (dropped from the model's tool schema
-    // and rejected at execute), but `inherit` leaves it undefined so nothing
-    // is forced. The child is not an escalation: the per-run parent security
-    // snapshot below takes precedence over broader runtime defaults.
-    const forcedAllowedToolNames = input.allowedTools
-      ? [...input.allowedTools]
-      : input.toolPolicy === 'readOnly'
-        ? [...SUBAGENT_READ_ONLY_TOOL_NAMES]
-        : undefined
-    // GUI "custom" capability scope: deny-lists layered on top of inherit.
-    // Built-in tools block by name; MCP servers block at the provider level
-    // (`mcp:<serverId>`, drift-proof — new tools from a blocked server stay
-    // hidden); skills block by id. All three only REMOVE access, so they
-    // compose with the parent intersection and can never escalate the child.
-    const blockedToolNames = input.blockedTools?.length ? [...input.blockedTools] : undefined
-    const blockedProviderIds = input.blockedMcpServers?.length
-      ? input.blockedMcpServers.map((serverId) => `mcp:${serverId}`)
-      : undefined
-    const blockedSkillIds = input.blockedSkills?.length ? [...input.blockedSkills] : undefined
+    // Every allow-list is an upper bound. readOnly is host-defined and cannot
+    // be widened by a profile's allowedTools; the parent turn's allow-list is
+    // intersected last, so a child can only lose capabilities.
+    const forcedAllowedToolNames = intersectDefinedLists(
+      input.toolPolicy === 'readOnly' ? SUBAGENT_READ_ONLY_TOOL_NAMES : undefined,
+      input.allowedTools,
+      input.security?.allowedToolNames
+    )
+    const blockedToolNames = unique([
+      ...(input.security?.blockedToolNames ?? []),
+      ...(input.blockedTools ?? [])
+    ])
+    const blockedProviderIds = unique([
+      ...(input.security?.blockedProviderIds ?? []),
+      ...(input.blockedMcpServers ?? []).map((serverId) => `mcp:${serverId}`)
+    ])
     // A custom system prompt augments the base prefix (kun tool/safety
     // conventions stay) on a distinct fingerprint, so same-agent calls still
     // hit the prompt cache; cross-agent reuse is intentionally given up.
-    const childPrefix = input.systemPrompt?.trim()
-      ? setSystemPrompt(options.prefix, `${options.prefix.systemPrompt}\n\n${input.systemPrompt.trim()}`.trim())
+    // omitBasePrompt replaces the base with the role prompt when present.
+    const rolePrompt = input.systemPrompt?.trim()
+    const childPrefix = rolePrompt
+      ? setSystemPrompt(
+        options.prefix,
+        input.omitBasePrompt === true
+          ? rolePrompt
+          : `${options.prefix.systemPrompt}\n\n${rolePrompt}`.trim()
+      )
       : options.prefix
+    const model = input.model?.trim() || options.defaultModel
+    const approvalPolicy = input.approvalPolicy ?? options.approvalPolicy ?? 'auto'
+    const sandboxMode = input.sandboxMode ?? options.sandboxMode
+    const delegatedRuntime = options.createDelegatedRuntime?.({
+      turns,
+      sessionStore,
+      threadStore,
+      events,
+      ids,
+      prefix: childPrefix,
+      toolPolicy: input.toolPolicy,
+      ...(forcedAllowedToolNames ? { allowedToolNames: forcedAllowedToolNames } : {}),
+      ...(input.security?.allowedProviderIds
+        ? { allowedProviderIds: input.security.allowedProviderIds }
+        : {}),
+      ...(blockedToolNames.length ? { blockedToolNames } : {}),
+      ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
+      ...(blockedSkillIds.length ? { blockedSkillIds } : {}),
+      skillsEnabled: input.skillsEnabled !== false,
+      memoryEnabled: input.security?.memoryEnabled !== false
+    })
     const loop = new AgentLoop({
       threadStore,
       sessionStore,
-      approvalGate: new InMemoryApprovalGate(),
+      approvalGate: options.approvalGate ?? new InMemoryApprovalGate(),
       userInputGate: new InMemoryUserInputGate(),
       model: options.model,
       toolHost: options.toolHost,
+      ...(delegatedRuntime ? { sdkRuntime: delegatedRuntime } : {}),
       usage,
       events,
       turns,
@@ -154,23 +206,25 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ids,
       nowIso,
       ...(forcedAllowedToolNames ? { forcedAllowedToolNames } : {}),
-      ...(blockedToolNames ? { blockedToolNames } : {}),
-      ...(blockedProviderIds ? { blockedProviderIds } : {}),
-      ...(blockedSkillIds ? { blockedSkillIds } : {}),
+      ...(input.security?.allowedProviderIds ? { allowedProviderIds: input.security.allowedProviderIds } : {}),
+      ...(blockedToolNames.length ? { blockedToolNames } : {}),
+      ...(blockedProviderIds.length ? { blockedProviderIds } : {}),
+      ...(blockedSkillIds.length ? { blockedSkillIds } : {}),
       ...(options.modelCapabilities ? { modelCapabilities: options.modelCapabilities } : {}),
-      ...(options.skillRuntime ? { skillRuntime: options.skillRuntime } : {}),
+      ...(input.skillsEnabled !== false && options.skillRuntime ? { skillRuntime: options.skillRuntime } : {}),
       ...(options.instructionRuntime ? { instructionRuntime: options.instructionRuntime } : {}),
-      ...(options.memoryStore ? { memoryStore: options.memoryStore } : {}),
+      ...(options.memoryStore && input.security?.memoryEnabled !== false ? { memoryStore: options.memoryStore } : {}),
       ...(options.artifactStore ? { artifactStore: options.artifactStore } : {}),
       ...(options.contextCompaction ? { contextCompaction: options.contextCompaction } : {}),
       ...(options.tokenEconomy ? { tokenEconomy: options.tokenEconomy } : {}),
+      // A delegated child settles only when it completes or an explicit
+      // parent/user cancellation reaches its signal. Do not inherit the
+      // generic AgentLoop wall-clock deadline.
+      disableWallTimeLimit: true,
       ...(options.runtime?.toolStorm ? { toolStorm: options.runtime.toolStorm } : {}),
       ...(options.runtime?.toolArgumentRepair ? { toolArgumentRepair: options.runtime.toolArgumentRepair } : {})
     })
 
-    const model = input.model?.trim() || options.defaultModel
-    const approvalPolicy = input.approvalPolicy ?? options.approvalPolicy ?? 'auto'
-    const sandboxMode = input.sandboxMode ?? options.sandboxMode
     const title = childThreadTitle(input.childId, input.label, input.profile)
     const thread = await threads.create({
       title,
@@ -268,9 +322,9 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(evidence ? { evidence } : {}),
       usage: usage.forThread(thread.id),
       toolInvocations,
-      // The child loop was constructed with the main agent's immutable
-      // prefix; only the small delegation prompt is appended fresh.
-      prefixReused: true,
+      // A role system prompt changes the immutable prefix fingerprint. Only a
+      // child with no role prompt can report exact main-prefix reuse.
+      prefixReused: !input.systemPrompt?.trim(),
       inheritedHistoryItems: 0
     }
   }
@@ -284,12 +338,45 @@ function childToolEvidence(items: readonly TurnItem[], turnId: string): string[]
   return items
     .filter((item): item is Extract<TurnItem, { kind: 'tool_call' }> =>
       item.turnId === turnId && item.kind === 'tool_call')
+    .filter((item) => {
+      const result = results.get(item.callId)
+      return Boolean(result && !result.isError && result.status === 'completed')
+    })
     .slice(0, 32)
     .map((item) => {
-      const result = results.get(item.callId)
+      const result = results.get(item.callId)!
       const target = toolEvidenceTarget(item.arguments)
-      return `${item.toolName}${target ? ` ${target}` : ''}: ${result?.isError ? 'failed' : 'completed'}`
+      const digest = evidenceDigest(result.output)
+      return `${item.toolName}${target ? ` ${target}` : ''}: completed${digest ? ` — ${digest}` : ''}`
     })
+}
+
+function evidenceDigest(output: unknown): string {
+  const serialized = typeof output === 'string' ? output : safeJson(output)
+  return serialized.replace(/\s+/g, ' ').trim().slice(0, 500)
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function intersectDefinedLists(...lists: Array<readonly string[] | undefined>): string[] | undefined {
+  const defined = lists.filter((list): list is readonly string[] => Boolean(list))
+  if (!defined.length) return undefined
+  let result = unique(defined[0] ?? [])
+  for (const list of defined.slice(1)) {
+    const allowed = new Set(list)
+    result = result.filter((value) => allowed.has(value))
+  }
+  return result
+}
+
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values)]
 }
 
 function toolEvidenceTarget(args: Record<string, unknown>): string {

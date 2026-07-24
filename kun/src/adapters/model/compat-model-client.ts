@@ -68,6 +68,14 @@ export type CompatModelClientConfig = {
   endpointFormat?: ModelEndpointFormat
   /** Optional extra headers, e.g. project or session ids. */
   headers?: Record<string, string>
+  /**
+   * Resolves protected request credentials immediately before each HTTP call.
+   * Passing the rejected access token after a 401 lets OAuth implementations
+   * rotate it once without racing concurrent requests.
+   */
+  resolveCredentials?: (
+    rejectedAccessToken?: string
+  ) => Promise<{ apiKey: string; headers?: Record<string, string>; refreshable: boolean }>
   /** HTTP fetch implementation. Defaults to global `fetch`. */
   fetchImpl?: typeof fetch
   /** Optional proxy URL used only for model HTTP requests. */
@@ -177,19 +185,32 @@ export class CompatModelClient implements ModelClient {
       yield* this.streamInner(request, null)
       return
     }
-    const round = sink.start({
+    const round = ignoreModelTraceFailure(() => sink.start({
       threadId: request.threadId,
       turnId: request.turnId,
       provider: this.provider,
-      model: request.model?.trim() || this.config.model
-    })
+      model: request.model?.trim() || this.config.model,
+      toolCatalog: request.tools.map((tool) => ({
+        name: tool.name,
+        ...(tool.providerKind ? { providerKind: tool.providerKind } : {}),
+        ...(tool.providerId ? { providerId: tool.providerId } : {})
+      }))
+    })) ?? null
+    if (!round) {
+      yield* this.streamInner(request, null)
+      return
+    }
     try {
       for await (const chunk of this.streamInner(request, round)) {
-        sink.captureChunk(round, chunk)
+        ignoreModelTraceFailure(() => sink.captureChunk(round, chunk))
         yield chunk
       }
     } finally {
-      sink.finish(round)
+      try {
+        await sink.finish(round)
+      } catch {
+        warnModelTraceFailure()
+      }
     }
   }
 
@@ -217,30 +238,74 @@ export class CompatModelClient implements ModelClient {
     const url = buildModelEndpointUrl(this.config.baseUrl, configuredEndpointFormat)
     const stream = request.stream ?? !this.config.nonStreaming
     const body = this.buildRequestBody(request, stream, { endpointFormat })
-    if (round) {
-      this.config.debugSink?.captureRequest(round, body, redactUrlForLog(url))
+    let credentials: { apiKey: string; headers?: Record<string, string>; refreshable: boolean }
+    try {
+      credentials = this.config.resolveCredentials
+        ? await this.config.resolveCredentials()
+        : { apiKey: this.config.apiKey, headers: this.config.headers, refreshable: false }
+    } catch (error) {
+      yield {
+        kind: 'error',
+        code: 'credential_refresh_failed',
+        message: error instanceof Error ? error.message : String(error)
+      }
+      return
     }
-    const headers = this.buildHeaders(
-      stream,
-      endpointFormat,
-      this.config.baseUrl.includes('chatgpt.com/backend-api/codex') &&
-        this.capabilitiesForModel(requestModel).responsesMode === 'lite'
-    )
+    const responsesLite = this.config.baseUrl.includes('chatgpt.com/backend-api/codex') &&
+      this.capabilitiesForModel(requestModel).responsesMode === 'lite'
+    let headers = this.buildHeaders(stream, endpointFormat, responsesLite, credentials)
     const retry = normalizeModelRequestRetryConfig(this.config.retry)
     const modelStreamLimits = normalizeModelStreamLimits(this.config.streamLimits)
     const maxErrorBodyBytes = Math.min(modelStreamLimits.maxTotalBytes, 1 * 1024 * 1024)
     const retryStatuses = new Set(retry.httpStatusCodes)
-    let result = await this.postChatCompletion(url, headers, body, request.abortSignal)
-    for (let attempt = 0; attempt < retry.maxAttempts; attempt += 1) {
-      if (result.kind === 'error') break
-      if (result.response.ok || !retryStatuses.has(result.response.status)) break
-      const delayMs = retryDelayMs(result.response, retry.initialDelayMs, attempt)
+    let attemptOrdinal = 0
+    const post = (
+      requestBody: Record<string, unknown>,
+      reason: 'initial' | 'transport_retry' | 'credential_refresh' | 'stream_options_fallback'
+    ) => this.postChatCompletion(url, headers, requestBody, request.abortSignal, {
+      round,
+      endpointFormat,
+      attempt: ++attemptOrdinal,
+      reason,
+      apiKey: credentials.apiKey
+    })
+    let result = await post(body, 'initial')
+    let transportRetryAttempt = 0
+    let credentialRefreshAttempted = false
+    while (result.kind === 'response' && !result.response.ok) {
+      if (
+        result.response.status === 401 &&
+        credentials.refreshable &&
+        this.config.resolveCredentials &&
+        !credentialRefreshAttempted
+      ) {
+        credentialRefreshAttempted = true
+        await result.response.body?.cancel().catch(() => {})
+        try {
+          credentials = await this.config.resolveCredentials(credentials.apiKey)
+        } catch (error) {
+          yield {
+            kind: 'error',
+            code: 'credential_refresh_failed',
+            message: error instanceof Error ? error.message : String(error)
+          }
+          return
+        }
+        headers = this.buildHeaders(stream, endpointFormat, responsesLite, credentials)
+        result = await post(body, 'credential_refresh')
+        continue
+      }
+      if (
+        transportRetryAttempt >= retry.maxAttempts ||
+        !retryStatuses.has(result.response.status)
+      ) break
+      const delayMs = retryDelayMs(result.response, retry.initialDelayMs, transportRetryAttempt)
       const status = result.response.status
       await result.response.body?.cancel().catch(() => {})
       yield {
         kind: 'retrying',
         status,
-        attempt: attempt + 1,
+        attempt: transportRetryAttempt + 1,
         maxAttempts: retry.maxAttempts,
         delayMs
       }
@@ -249,10 +314,11 @@ export class CompatModelClient implements ModelClient {
         yield { kind: 'error', message: 'request was aborted during retry backoff' }
         return
       }
-      result = await this.postChatCompletion(url, headers, body, request.abortSignal)
+      transportRetryAttempt += 1
+      result = await post(body, 'transport_retry')
     }
     if (result.kind === 'error') {
-      yield { kind: 'error', message: result.message }
+      yield { kind: 'error', message: result.message, failure: result.failure }
       return
     }
     let response = result.response
@@ -269,10 +335,9 @@ export class CompatModelClient implements ModelClient {
       const text = errorBody.text
       if (usesChatCompletionsShape(endpointFormat) && shouldRetryWithoutStreamUsage(response.status, text, body)) {
         const retryBody = this.buildRequestBody(request, stream, { endpointFormat, includeStreamUsage: false })
-        if (round) this.config.debugSink?.captureRequest(round, retryBody, redactUrlForLog(url))
-        const retry = await this.postChatCompletion(url, headers, retryBody, request.abortSignal)
+        const retry = await post(retryBody, 'stream_options_fallback')
         if (retry.kind === 'error') {
-          yield { kind: 'error', message: retry.message }
+          yield { kind: 'error', message: retry.message, failure: retry.failure }
           return
         }
         response = retry.response
@@ -324,11 +389,12 @@ export class CompatModelClient implements ModelClient {
           configuredEndpointFormat,
           model: requestModel
         })
-        const retryClassified = await this.classifyHttpError(response.status, retryText)
+        const retryClassified = await this.classifyHttpError(response.status, retryText, response.headers.get('retry-after'))
         yield {
           kind: 'error',
           message: retryClassified.message,
-          code: retryClassified.code
+          code: retryClassified.code,
+          failure: retryClassified.failure
         }
         return
       }
@@ -340,11 +406,12 @@ export class CompatModelClient implements ModelClient {
         configuredEndpointFormat,
         model: requestModel
       })
-      const classified = await this.classifyHttpError(response.status, text)
+      const classified = await this.classifyHttpError(response.status, text, response.headers.get('retry-after'))
       yield {
         kind: 'error',
         message: classified.message,
-        code: classified.code
+        code: classified.code,
+        failure: classified.failure
       }
       return
     }
@@ -424,17 +491,46 @@ export class CompatModelClient implements ModelClient {
     url: string,
     headers: Record<string, string>,
     body: Record<string, unknown>,
-    signal: AbortSignal
-  ): Promise<{ kind: 'response'; response: Response } | { kind: 'error'; message: string }> {
+    signal: AbortSignal,
+    trace: {
+      round: LlmDebugRound | null
+      endpointFormat: ModelEndpointFormat
+      attempt: number
+      reason: 'initial' | 'transport_retry' | 'credential_refresh' | 'stream_options_fallback'
+      apiKey: string
+    }
+  ): Promise<{ kind: 'response'; response: Response } | { kind: 'error'; message: string; failure: import('../../contracts/model-route-pool.js').ModelFailureMetadata }> {
+    const bodyText = JSON.stringify(body)
+    const traceRound = trace.round
+    const traceSink = this.config.debugSink
+    const traceRecord = traceRound && traceSink
+      ? ignoreModelTraceFailure(() => traceSink.beginHttpAttempt(traceRound, {
+          endpointFormat: trace.endpointFormat,
+          attempt: trace.attempt,
+          reason: trace.reason,
+          url,
+          headers,
+          bodyText,
+          secretValues: [trace.apiKey]
+        }))
+      : undefined
     try {
       const response = await this.fetchImpl(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body: bodyText,
         signal
       })
+      if (traceRound && traceSink && traceRecord) {
+        ignoreModelTraceFailure(() => {
+          traceSink.captureHttpResponse(traceRound, traceRecord, response)
+        })
+      }
       return { kind: 'response', response }
     } catch (error) {
+      if (traceRecord) {
+        ignoreModelTraceFailure(() => traceSink?.captureHttpError(traceRecord, error))
+      }
       const message = error instanceof Error ? error.message : String(error)
       // Only blame the proxy for genuine transport failures. A user-initiated
       // abort (turn cancelled, idle-timeout watchdog) also surfaces here as an
@@ -444,30 +540,46 @@ export class CompatModelClient implements ModelClient {
       const proxyHint = !aborted && this.config.modelProxyUrl?.trim()
         ? '. Check the configured model-request proxy in Settings > Providers.'
         : ''
-      return { kind: 'error', message: `model request failed: ${message}${proxyHint}` }
+      const timeout = /timeout|timed out/i.test(message)
+      return {
+        kind: 'error',
+        message: `model request failed: ${message}${proxyHint}`,
+        failure: { category: timeout ? 'timeout' : 'network', failoverAllowed: !aborted }
+      }
     }
   }
 
   private buildHeaders(
     stream: boolean,
     endpointFormat: ModelEndpointFormat,
-    responsesLite = false
+    responsesLite = false,
+    credentials: {
+      apiKey: string
+      headers?: Record<string, string>
+    } = {
+      apiKey: this.config.apiKey,
+      headers: this.config.headers
+    }
   ): Record<string, string> {
     return buildCompatRequestHeaders({
-      apiKey: this.config.apiKey,
-      configuredHeaders: this.config.headers,
+      apiKey: credentials.apiKey,
+      configuredHeaders: {
+        ...(this.config.headers ?? {}),
+        ...(credentials.headers ?? {})
+      },
       stream,
       endpointFormat,
       responsesLite
     })
   }
 
-  private async classifyHttpError(status: number, text: string): Promise<{ message: string; code: string }> {
+  private async classifyHttpError(status: number, text: string, retryAfter?: string | null) {
     return classifyCompatHttpError({
       status,
       text,
       baseUrl: this.config.baseUrl,
-      fetchImpl: this.fetchImpl
+      fetchImpl: this.fetchImpl,
+      retryAfter
     })
   }
 
@@ -1044,6 +1156,23 @@ function normalizeModelStreamLimits(input: Partial<ModelStreamLimits> | undefine
       DEFAULT_MODEL_STREAM_LIMITS.maxCompletedToolArgumentBytes
     )
   }
+}
+
+let modelTraceFailureWarned = false
+
+function ignoreModelTraceFailure<T>(operation: () => T): T | undefined {
+  try {
+    return operation()
+  } catch {
+    warnModelTraceFailure()
+    return undefined
+  }
+}
+
+function warnModelTraceFailure(): void {
+  if (modelTraceFailureWarned) return
+  modelTraceFailureWarned = true
+  console.warn('[kun:model] model request observability capture failed; the provider request continues unchanged')
 }
 
 type LimitedResponseJson =

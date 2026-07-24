@@ -71,7 +71,16 @@ describe('ReadTracker cross-turn edits (#640)', () => {
     })
 
     expect(verdict.ok).toBe(false)
-    if (!verdict.ok) expect(verdict.message).toContain('Read the current file contents')
+    if (!verdict.ok) {
+      expect(verdict.message).toContain('has not been read')
+      expect(verdict.message).toContain('Call read with path')
+      expect(verdict.guidance).toContain('fetch the current disk contents')
+      expect(verdict.guidance).toContain('Do not bypass this guard with bash')
+      expect(verdict.nextAction).toEqual({
+        tool: 'read',
+        arguments: { path: 'file.ts' }
+      })
+    }
   })
 
   it('still blocks a cross-turn edit when the oldText is not in the cached read', () => {
@@ -84,7 +93,99 @@ describe('ReadTracker cross-turn edits (#640)', () => {
     })
 
     expect(verdict.ok).toBe(false)
-    if (!verdict.ok) expect(verdict.message).toContain('was not present in the latest read output')
+    if (!verdict.ok) {
+      expect(verdict.message).toContain('was not present in the latest read output')
+      expect(verdict.message).toContain('then retry edit')
+      expect(verdict.guidance).toContain('Rebuild every oldText fragment')
+      expect(verdict.nextAction).toEqual({
+        tool: 'read',
+        arguments: { path: 'file.ts' }
+      })
+    }
+  })
+
+  it('does not block edits based on a bounded read that omitted the target', () => {
+    const tracker = new ReadTracker(normalizeReadTrackerOptions(true))
+    tracker.observeToolResult({
+      ...readResult('turn_a', 'file.ts', 'const value = 42\n'),
+      output: { path: 'file.ts', content: 'const value = 42\n', truncated: true }
+    })
+
+    expect(tracker.validateBeforeTool({
+      context: context('turn_b'),
+      call: editCall('file.ts', 'const other = 99')
+    })).toEqual({ ok: true })
+  })
+
+  it('treats a line window as partial even when the read itself was not byte-truncated', () => {
+    const tracker = new ReadTracker(normalizeReadTrackerOptions(true))
+    tracker.observeToolResult({
+      ...readResult('turn_a', 'file.ts', 'first line\n'),
+      output: {
+        path: 'file.ts',
+        content: 'first line\n',
+        truncated: false,
+        start_line: 1,
+        end_line: 1,
+        total_lines: 4
+      }
+    })
+
+    expect(tracker.validateBeforeTool({
+      context: context('turn_b'),
+      call: editCall('file.ts', 'fourth line')
+    })).toEqual({ ok: true })
+  })
+
+  it('treats a window that reaches EOF as partial when it omitted leading lines', () => {
+    const tracker = new ReadTracker(normalizeReadTrackerOptions(true))
+    tracker.observeToolResult({
+      ...readResult('turn_a', 'file.ts', 'third line\nfourth line\n'),
+      output: {
+        path: 'file.ts',
+        content: 'third line\nfourth line\n',
+        truncated: false,
+        start_line: 3,
+        end_line: 4,
+        total_lines: 4
+      }
+    })
+
+    expect(tracker.validateBeforeTool({
+      context: context('turn_b'),
+      call: editCall('file.ts', 'first line')
+    })).toEqual({ ok: true })
+  })
+
+  it('keeps complete-snapshot validation when line metadata covers the whole file', () => {
+    const tracker = new ReadTracker(normalizeReadTrackerOptions(true))
+    tracker.observeToolResult({
+      ...readResult('turn_a', 'file.ts', 'first line\nsecond line'),
+      output: {
+        path: 'file.ts',
+        content: 'first line\nsecond line',
+        truncated: false,
+        start_line: 1,
+        end_line: 2,
+        total_lines: 2
+      }
+    })
+
+    const verdict = tracker.validateBeforeTool({
+      context: context('turn_b'),
+      call: editCall('file.ts', 'missing line')
+    })
+    expect(verdict.ok).toBe(false)
+  })
+
+  it('uses the same newline and Unicode normalization as the edit matcher', () => {
+    const tracker = new ReadTracker(normalizeReadTrackerOptions(true))
+    tracker.observeToolResult(readResult('turn_a', 'file.ts', 'const label = “ready”\r\n'))
+
+    expect(tracker.validateBeforeTool({
+      context: context('turn_b'),
+      call: editCall('file.ts', 'const label = "ready"')
+    })).toEqual({ ok: true })
   })
 
   it('allows a cross-turn multi-edit when every oldText fragment is present', () => {

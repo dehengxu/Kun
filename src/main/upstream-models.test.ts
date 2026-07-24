@@ -13,6 +13,8 @@ import {
   defaultWorkflowSettings,
   defaultWriteSettings,
   defaultTerminalSettings,
+  getModelProviderPreset,
+  modelProviderPresetAccountProfile,
   type AppSettingsV1
 } from '../shared/app-settings'
 import { fetchUpstreamModelIds, readConfiguredKunModelIds } from './upstream-models'
@@ -143,6 +145,116 @@ describe('upstream model picker list', () => {
       const deepseekGroup = result.modelGroups?.find((group) => group.providerId === 'deepseek')
       expect(deepseekGroup?.modelIds).not.toContain('deepseek-chat')
       expect(deepseekGroup?.modelIds).not.toContain('deepseek-reasoner')
+    }
+  })
+
+  it('keeps a chat model when another provider uses the same id for media', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'deepseek-gui-models-'))
+    await mkdir(dataDir, { recursive: true })
+    const configured = settings(dataDir)
+    const chatProvider = configured.provider.providers.find((provider) => provider.id === 'custom-provider')!
+    chatProvider.models.push('gemini-3.5-flash')
+    chatProvider.modelProfiles['gemini-3.5-flash'] = {
+      inputModalities: ['text', 'image'],
+      outputModalities: ['text'],
+      supportsToolCalling: true,
+      messageParts: ['text', 'image_url']
+    }
+    configured.provider.providers.push({
+      id: 'speech-provider',
+      name: 'Speech Provider',
+      apiKey: 'sk-speech',
+      baseUrl: 'https://speech.example/v1',
+      endpointFormat: 'chat_completions',
+      models: ['speech-model'],
+      modelProfiles: {},
+      speech: {
+        protocol: 'openai-transcriptions',
+        baseUrl: 'https://speech.example/v1',
+        models: ['gemini-3.5-flash']
+      }
+    })
+
+    const result = await fetchUpstreamModelIds(configured)
+
+    expect(result).toMatchObject({ ok: true })
+    if (result.ok) {
+      expect(result.modelIds).toContain('gemini-3.5-flash')
+      expect(result.modelGroups?.find((group) => group.providerId === 'custom-provider')?.modelIds)
+        .toContain('gemini-3.5-flash')
+    }
+  })
+
+  it('groups multiple route aliases under one local gateway provider', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'deepseek-gui-models-'))
+    await mkdir(dataDir, { recursive: true })
+    const routed = settings(dataDir)
+    const deepseek = routed.provider.providers.find((provider) => provider.id === 'deepseek')!
+    routed.provider.localGateway = { enabled: true, name: 'Team Relay' }
+    routed.provider.routePools = [
+      {
+        id: 'general',
+        name: 'General',
+        modelId: 'team-general',
+        enabled: true,
+        strategy: 'priority',
+        targets: [{ id: 'general-primary', providerId: deepseek.id, modelId: deepseek.models[0], enabled: true, weight: 1 }],
+        failurePolicy: { failoverHttpStatusCodes: [429, 503], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
+        healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
+      },
+      {
+        id: 'coding',
+        name: 'Coding',
+        modelId: 'team-coding',
+        enabled: true,
+        strategy: 'adaptive',
+        targets: [{ id: 'coding-primary', providerId: 'custom-provider', modelId: 'custom-provider-model', enabled: true, weight: 1 }],
+        failurePolicy: { failoverHttpStatusCodes: [429, 503], failoverOnNetworkError: true, failoverOnTimeout: true, failoverOnAuthError: true },
+        healthPolicy: { failureThreshold: 3, cooldownMs: 60_000, halfOpenMaxAttempts: 1 }
+      }
+    ]
+
+    const result = await fetchUpstreamModelIds(routed, '')
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const routeGroups = result.modelGroups?.filter((group) =>
+        group.providerId === 'route-gateway:local'
+      )
+      expect(routeGroups).toHaveLength(1)
+      expect(routeGroups?.[0]).toMatchObject({
+        label: 'Team Relay',
+        modelIds: ['team-coding', 'team-general']
+      })
+      expect(result.modelGroups?.some((group) => group.providerId.startsWith('route-pool:'))).toBe(false)
+    }
+  })
+
+  it('keeps duplicate subscription accounts as separate composer provider groups', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'deepseek-gui-models-'))
+    await mkdir(dataDir, { recursive: true })
+    const configured = settings(dataDir)
+    const kimi = getModelProviderPreset('kimi-code')!
+    const first = modelProviderPresetAccountProfile(kimi, 'api', [])!
+    const second = modelProviderPresetAccountProfile(kimi, 'api', [first])!
+    configured.provider.providers.push(first, second)
+
+    const result = await fetchUpstreamModelIds(configured, '')
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.modelGroups).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          providerId: 'kimi-code',
+          label: 'Kimi Code',
+          modelIds: ['kimi-for-coding']
+        }),
+        expect.objectContaining({
+          providerId: 'kimi-code-2',
+          label: 'Kimi Code 2',
+          modelIds: ['kimi-for-coding']
+        })
+      ]))
     }
   })
 

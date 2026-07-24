@@ -175,6 +175,7 @@ describe('RoundOutcomeCoordinator', () => {
         imContext: true
       }),
       modelProviderId: 'provider_main',
+      modelReasoningEffort: 'high',
       toolProviderMetadata: new Map([[
         CREATE_PLAN_TOOL_NAME,
         { providerId: 'provider_tool', providerKind: 'built-in' }
@@ -196,6 +197,7 @@ describe('RoundOutcomeCoordinator', () => {
       }
     })
     expect(h.dispatches[0]?.calls[0]).toMatchObject({ providerId: 'provider_tool', toolKind: 'file_change' })
+    expect(h.dispatches[0]?.reasoningEffort).toBe('high')
     expect(Object.hasOwn(h.dispatches[0] ?? {}, 'userInputDisabled')).toBe(false)
     expect(Object.hasOwn(h.dispatches[0] ?? {}, 'imContext')).toBe(false)
   })
@@ -212,7 +214,7 @@ describe('RoundOutcomeCoordinator', () => {
     expect(h.items[0]).toMatchObject({ kind: 'error', code: 'required_tool_missing' })
   })
 
-  it('allows one empty post-tool recovery before failing in event-then-item order', async () => {
+  it('allows continuation and final-answer recovery before failing in event-then-item order', async () => {
     const fileChange = makeToolCallItem({
       id: 'file_change',
       threadId,
@@ -227,6 +229,9 @@ describe('RoundOutcomeCoordinator', () => {
 
     await expect(h.coordinator.resolve(round)).resolves.toBe('continue')
     expect(h.coordinator.hasEmptyPostToolRecovery(turnId)).toBe(true)
+    expect(h.coordinator.emptyPostToolRecoverySteps(turnId)).toBe(1)
+    await expect(h.coordinator.resolve(round)).resolves.toBe('continue')
+    expect(h.coordinator.emptyPostToolRecoverySteps(turnId)).toBe(2)
     await expect(h.coordinator.resolve(round)).resolves.toBe('failed')
     expect(h.failures).toEqual([
       expect.objectContaining({ code: 'empty_post_tool_continuation' })

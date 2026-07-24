@@ -71,6 +71,7 @@ export type TurnContextResolverDeps = {
   getMemoryStore?: () => Pick<MemoryStore, 'retrieve' | 'setLastInjected'> | undefined
   interactiveToolBridge: Pick<InteractiveToolBridge, 'awaitUserInput'>
   forcedAllowedToolNames?: readonly string[]
+  allowedProviderIds?: readonly string[]
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -146,6 +147,7 @@ export class TurnContextResolver {
       ...(input.mode.activePlanContext ? { activePlanContext: input.mode.activePlanContext } : {}),
       ...(input.turn.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
       ...(input.turn.guiDesignMode ? { guiDesignMode: true } : {}),
+      agentSurface: input.turn.agentSurface ?? 'code',
       ...(input.turn.guiDesignArtifact ? { guiDesignArtifact: input.turn.guiDesignArtifact } : {}),
       ...(input.turn.imContext ? { imContext: true } : {}),
       modelCapabilities: input.modelCapabilities,
@@ -160,6 +162,7 @@ export class TurnContextResolver {
       signal: input.signal
     }, {
       memoryEnabled: Boolean(memoryStore),
+      ...(this.deps.allowedProviderIds ? { allowedProviderIds: this.deps.allowedProviderIds } : {}),
       ...(this.deps.blockedProviderIds ? { blockedProviderIds: this.deps.blockedProviderIds } : {}),
       ...(this.deps.blockedToolNames ? { blockedToolNames: this.deps.blockedToolNames } : {}),
       ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {}),

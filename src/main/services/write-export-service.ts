@@ -515,6 +515,15 @@ async function renderHtmlDocument(html: string, format: 'pdf' | 'png'): Promise<
   }
 }
 
+export async function renderMarkdownDocumentToPdf(options: {
+  sourcePath: string
+  content: string
+  title: string
+}): Promise<Buffer> {
+  const html = await buildWriteExportHtmlDocument(options)
+  return renderHtmlDocument(html, 'pdf')
+}
+
 async function showExportSaveDialog(
   sourcePath: string,
   format: WriteExportFormat,

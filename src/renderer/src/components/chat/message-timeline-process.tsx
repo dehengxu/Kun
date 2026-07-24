@@ -55,7 +55,7 @@ export function isSubagentBlock(block: ChatBlock): boolean {
   const meta = block.meta
   if (meta?.child && typeof meta.child === 'object') return true
   const toolName = typeof meta?.toolName === 'string' ? meta.toolName.trim() : ''
-  return toolName === 'delegate_task'
+  return toolName === 'delegate_task' || toolName === 'generate_subagent'
 }
 
 function subagentParentTurnId(block: ChatBlock): string {
@@ -210,7 +210,8 @@ export function ProcessSectionRow({
   singleReasoningSection,
   workspaceRoot,
   viewportRef,
-  onOpenChildThread
+  onOpenChildThread,
+  allowThreadActions = true
 }: {
   section: ProcessSection
   processing: boolean
@@ -219,6 +220,7 @@ export function ProcessSectionRow({
   workspaceRoot: string
   viewportRef: RefObject<HTMLDivElement | null>
   onOpenChildThread?: OpenChildThreadHandler
+  allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null)
@@ -263,7 +265,14 @@ export function ProcessSectionRow({
   if (section.kind === 'execution' && section.blocks.length === 1) {
     const [block] = section.blocks
     if (block) {
-      return <ProcessEntryRow block={block} processing={processing} workspaceRoot={workspaceRoot} />
+      return (
+        <ProcessEntryRow
+          block={block}
+          processing={processing}
+          workspaceRoot={workspaceRoot}
+          allowThreadActions={allowThreadActions}
+        />
+      )
     }
   }
 
@@ -277,6 +286,7 @@ export function ProcessSectionRow({
               block={block}
               detail={getProcessDetail(block)}
               processing={processing}
+              allowThreadActions={allowThreadActions}
             />
           ))}
         </div>
@@ -341,7 +351,12 @@ export function ProcessSectionRow({
               />
             </div>
           ) : (
-            <ProcessStackRows blocks={section.blocks} processing={processing} workspaceRoot={workspaceRoot} />
+            <ProcessStackRows
+              blocks={section.blocks}
+              processing={processing}
+              workspaceRoot={workspaceRoot}
+              allowThreadActions={allowThreadActions}
+            />
           )
           ) : null}
         </div>
@@ -378,11 +393,13 @@ function processBlockHasError(block: ChatBlock): boolean {
 function ProcessStackRows({
   blocks,
   processing,
-  workspaceRoot
+  workspaceRoot,
+  allowThreadActions = true
 }: {
   blocks: ChatBlock[]
   processing: boolean
   workspaceRoot: string
+  allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const [openBlockId, setOpenBlockId] = useState<string | null>(null)
@@ -399,7 +416,9 @@ function ProcessStackRows({
         const autoOpenPending = processBlockIsAutoOpenPending(block, processing) || isPendingApproval(block)
         const errorTone = processBlockErrorTone(block)
         const isError = errorTone !== null
-        const defaultOpen = processing && isError
+        // Keep failed tool payloads tucked away while the turn continues. The
+        // warning-toned row still surfaces the failure and remains expandable.
+        const defaultOpen = processing && isError && block.kind !== 'tool'
         const forceOpen = autoOpenPending || autoOpenRequestInput
         const userClosed = closedBlockIds.has(block.id)
         const userOpened = openBlockId === block.id
@@ -479,11 +498,21 @@ function ProcessStackRows({
             {open ? (
               detail.kind === 'assistant' ? (
                 <div className="ml-1 mt-1">
-                  <ProcessEntryDetail block={block} detail={detail} processing={processing} />
+                  <ProcessEntryDetail
+                    block={block}
+                    detail={detail}
+                    processing={processing}
+                    allowThreadActions={allowThreadActions}
+                  />
                 </div>
               ) : (
                 <div className="ds-work-timeline-detail ml-1">
-                  <ProcessEntryDetail block={block} detail={detail} processing={processing} />
+                  <ProcessEntryDetail
+                    block={block}
+                    detail={detail}
+                    processing={processing}
+                    allowThreadActions={allowThreadActions}
+                  />
                 </div>
               )
             ) : null}
@@ -498,11 +527,13 @@ function ProcessStackRows({
 function ProcessEntryRow({
   block,
   processing,
-  workspaceRoot
+  workspaceRoot,
+  allowThreadActions = true
 }: {
   block: ChatBlock
   processing: boolean
   workspaceRoot: string
+  allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
@@ -516,7 +547,9 @@ function ProcessEntryRow({
   const errorTone = processBlockErrorTone(block)
   const isError = errorTone !== null
   const forceOpen = isAutoOpenPending || isAssistantProcessText || isStreamingAssistant
-  const defaultOpen = processing && isError
+  // A tool failure should not interrupt the live process by expanding its
+  // often verbose result. Runtime errors still open so they are not hidden.
+  const defaultOpen = processing && isError && block.kind !== 'tool'
   const open =
     canExpand &&
     (forceOpen || (userOpen ?? defaultOpen))
@@ -599,11 +632,21 @@ function ProcessEntryRow({
       {canExpand && open ? (
         detail.kind === 'assistant' ? (
           <div className="mt-1">
-            <ProcessEntryDetail block={block} detail={detail} processing={processing} />
+            <ProcessEntryDetail
+              block={block}
+              detail={detail}
+              processing={processing}
+              allowThreadActions={allowThreadActions}
+            />
           </div>
         ) : (
           <div className="ds-work-timeline-detail">
-            <ProcessEntryDetail block={block} detail={detail} processing={processing} />
+            <ProcessEntryDetail
+              block={block}
+              detail={detail}
+              processing={processing}
+              allowThreadActions={allowThreadActions}
+            />
           </div>
         )
       ) : null}
@@ -932,9 +975,12 @@ function builtInToolLabel(
     case 'background_shell':
       return t('toolBuiltinBackgroundShell', { defaultValue: 'Background shell' })
     case 'delegate_task':
+    case 'generate_subagent':
       // Routed to SubagentCallCard before the generic row; labeled here as a
       // defensive fallback so an ungrouped delegate block never reads as raw JSON.
       return t('toolBuiltinDelegate')
+    case 'design_component':
+      return t('toolBuiltinDesignComponent')
     default:
       return undefined
   }
@@ -1186,11 +1232,13 @@ function getProcessDetail(block: ChatBlock, summaryText?: string): ProcessDetail
 function ProcessEntryDetail({
   block,
   detail,
-  processing
+  processing,
+  allowThreadActions = true
 }: {
   block: ChatBlock
   detail: ProcessDetail
   processing: boolean
+  allowThreadActions?: boolean
 }): ReactElement | null {
   if (detail.kind === 'reasoning') {
     const streamReason = block.id === 'live-reasoning' && processing
@@ -1238,13 +1286,13 @@ function ProcessEntryDetail({
     return <p className="whitespace-pre-wrap text-[13.5px] leading-6 text-ds-muted">{detail.text}</p>
   }
   if (detail.kind === 'approval' && block.kind === 'approval') {
-    return <MessageBubble block={block} nested />
+    return <MessageBubble block={block} nested allowThreadActions={allowThreadActions} />
   }
   if (detail.kind === 'user_input' && block.kind === 'user_input') {
-    return <MessageBubble block={block} nested />
+    return <MessageBubble block={block} nested allowThreadActions={allowThreadActions} />
   }
   if ((detail.kind === 'background_shell' || detail.kind === 'background_subagent') && block.kind === 'user') {
-    return <MessageBubble block={block} nested />
+    return <MessageBubble block={block} nested allowThreadActions={allowThreadActions} />
   }
   return null
 }

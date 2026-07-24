@@ -1,11 +1,12 @@
 import { useTranslation } from 'react-i18next'
-import type { ClipboardImageReadResult } from '@shared/workspace-file'
 import type { AttachmentReference } from '../../agent/types'
 import { getProvider } from '../../agent/registry'
+import type { ImageAttachmentUploadCapabilities } from '../../lib/image-attachment-upload'
 import {
-  prepareImageAttachmentUpload,
-  type ImageAttachmentUploadCapabilities
-} from '../../lib/image-attachment-upload'
+  runtimeImagePreviewUrl,
+  runtimeImageSourceForFile,
+  uploadRuntimeImageAttachment
+} from '../../lib/runtime-image-attachment'
 import type {
   ComposerAttachmentScope,
   ComposerAttachmentUpdater
@@ -25,7 +26,6 @@ export type WorkbenchAttachmentControllerOptions = {
   setComposerAttachments: (updater: ComposerAttachmentUpdater) => void
   getAttachmentScope: () => ComposerAttachmentScope
   getActiveWorkspace: () => string | undefined
-  createFile: (dataBase64: string, name: string, mimeType: string) => File
 }
 
 function fileNameFromPath(path: string): string {
@@ -45,13 +45,6 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary)
 }
 
-function clipboardImageToFile(
-  image: Extract<ClipboardImageReadResult, { ok: true }>,
-  createFile: WorkbenchAttachmentControllerOptions['createFile']
-): File {
-  return createFile(image.dataBase64, image.name, image.mimeType)
-}
-
 export function useWorkbenchAttachmentController({
   attachmentUploadEnabled,
   selectedModelSupportsImageInput,
@@ -62,8 +55,7 @@ export function useWorkbenchAttachmentController({
   setComposerAttachmentsForScope,
   setComposerAttachments,
   getAttachmentScope,
-  getActiveWorkspace,
-  createFile
+  getActiveWorkspace
 }: WorkbenchAttachmentControllerOptions) {
   const { t } = useTranslation()
 
@@ -122,19 +114,16 @@ export function useWorkbenchAttachmentController({
         if (!selectedModelSupportsImageInput) {
           throw new Error(t('composerAttachmentModelUnsupported'))
         }
-        if (!attachmentCapabilities || typeof provider.uploadAttachment !== 'function') {
+        if (!attachmentCapabilities || typeof window.kunGui?.uploadRuntimeImageAttachment !== 'function') {
           throw new Error(t('composerAttachmentUnavailable'))
         }
-        const prepared = await prepareImageAttachmentUpload(file, attachmentCapabilities)
-        const attachment = await provider.uploadAttachment({
+        const result = await uploadRuntimeImageAttachment({
+          source: await runtimeImageSourceForFile(file, localFilePath),
           name: file.name || 'image',
-          mimeType: prepared.mimeType,
-          dataBase64: prepared.dataBase64,
-          ...(localFilePath ? { localFilePath } : {}),
-          textFallback: prepared.textFallback,
           ...(activeThreadId ? { threadId: activeThreadId } : {}),
           ...(workspace ? { workspace } : {})
         })
+        const attachment = result.attachment
         uploaded.push({
           id: attachment.id,
           kind: 'image',
@@ -142,7 +131,7 @@ export function useWorkbenchAttachmentController({
           mimeType: attachment.mimeType,
           width: attachment.width,
           height: attachment.height,
-          previewUrl: `data:${prepared.mimeType};base64,${prepared.dataBase64}`
+          previewUrl: runtimeImagePreviewUrl(result)
         })
       }
       if (uploaded.length > 0) {
@@ -167,19 +156,46 @@ export function useWorkbenchAttachmentController({
 
   async function handlePasteClipboardImage(options: { silentNoImage?: boolean } = {}): Promise<void> {
     if (!attachmentUploadEnabled) return
-    if (typeof window.kunGui?.readClipboardImage !== 'function') {
+    if (
+      !attachmentCapabilities ||
+      typeof window.kunGui?.uploadRuntimeImageAttachment !== 'function'
+    ) {
       setAttachmentUploadError(t('composerAttachmentUnavailable'))
       return
     }
-    const image = await window.kunGui.readClipboardImage()
-    if (!image.ok) {
-      if (options.silentNoImage) return
-      setAttachmentUploadError(image.message)
-      return
+    const attachmentScope = getAttachmentScope()
+    setAttachmentUploadBusy(true)
+    setAttachmentUploadError(null)
+    try {
+      const workspace = getActiveWorkspace()
+      const result = await uploadRuntimeImageAttachment({
+        source: { kind: 'clipboard' },
+        ...(activeThreadId ? { threadId: activeThreadId } : {}),
+        ...(workspace ? { workspace } : {})
+      })
+      const attachment = result.attachment
+      const reference: AttachmentReference = {
+        id: attachment.id,
+        kind: 'image',
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        width: attachment.width,
+        height: attachment.height,
+        previewUrl: runtimeImagePreviewUrl(result)
+      }
+      setComposerAttachmentsForScope(attachmentScope, (current) => {
+        const byId = new Map(current.map((item) => [item.id, item]))
+        byId.set(reference.id, reference)
+        return [...byId.values()]
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!options.silentNoImage || !/clipboard does not currently contain an image/i.test(message)) {
+        setAttachmentUploadError(message)
+      }
+    } finally {
+      setAttachmentUploadBusy(false)
     }
-    await handlePickAttachments([clipboardImageToFile(image, createFile)], {
-      localFilePaths: [image.localFilePath]
-    })
   }
 
   return {

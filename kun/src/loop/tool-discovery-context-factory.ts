@@ -4,6 +4,7 @@ import type { InteractiveToolBridge } from './interactive-tool-bridge.js'
 
 export type ToolDiscoveryContextFactoryDeps = {
   memoryEnabled: boolean
+  allowedProviderIds?: readonly string[]
   blockedProviderIds?: readonly string[]
   blockedToolNames?: readonly string[]
   blockedSkillIds?: readonly string[]
@@ -31,6 +32,7 @@ export function createToolDiscoveryContext(
     ...(input.activePlanContext ? { guiPlan: input.activePlanContext } : {}),
     ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(input.guiDesignMode ? { guiDesignMode: true } : {}),
+    agentSurface: input.agentSurface ?? 'code',
     ...(input.guiDesignArtifact ? { guiDesignArtifact: input.guiDesignArtifact } : {}),
     ...(input.imContext ? { imContext: true } : {}),
     model: input.modelCapabilities,
@@ -41,6 +43,7 @@ export function createToolDiscoveryContext(
     ...(input.extensionToolCatalogEpoch
       ? { extensionToolCatalogEpoch: input.extensionToolCatalogEpoch }
       : {}),
+    ...(deps.allowedProviderIds ? { allowedProviderIds: deps.allowedProviderIds } : {}),
     ...(deps.blockedProviderIds ? { blockedProviderIds: deps.blockedProviderIds } : {}),
     ...(deps.blockedToolNames ? { blockedToolNames: deps.blockedToolNames } : {}),
     ...(deps.blockedSkillIds ? { blockedSkillIds: deps.blockedSkillIds } : {}),

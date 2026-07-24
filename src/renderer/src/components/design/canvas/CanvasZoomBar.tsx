@@ -155,7 +155,7 @@ function CanvasZoomBarInner() {
         </div>
       )}
 
-      <div className={`flex items-center gap-1 px-1.5 py-1 ${pill}`}>
+      <div className={`design-canvas-zoom-bar flex items-center gap-1 px-1.5 py-1 ${pill}`}>
         <button
           type="button"
           className={`${btnBase} ${btnNormal}`}

@@ -168,6 +168,7 @@ describe('runtimeRequestViaHost', () => {
 
   it('retries idempotent requests even when the runtime port stays the same', async () => {
     let requestCount = 0
+    let ensureCalls = 0
     const port = await listen((_req, res) => {
       requestCount += 1
       if (requestCount === 1) {
@@ -182,12 +183,37 @@ describe('runtimeRequestViaHost', () => {
       settingsForPort(port),
       '/v1/usage?group_by=day',
       { method: 'GET' },
-      async () => settingsForPort(port)
+      async () => {
+        ensureCalls += 1
+        return settingsForPort(port)
+      }
     )
 
     expect(requestCount).toBe(2)
+    expect(ensureCalls).toBe(2)
     expect(response.ok).toBe(true)
     expect(JSON.parse(response.body)).toEqual({ ok: true })
+  })
+
+  it('propagates an internal request timeout without invoking runtime recovery', async () => {
+    let requestCount = 0
+    const port = await listen((_req, _res) => {
+      requestCount += 1
+      // Keep the response open until the internal request timeout aborts it.
+    })
+    let ensureCalls = 0
+
+    await expect(runtimeRequestViaHost(
+      settingsForPort(port),
+      '/v1/attachments/att_123/content',
+      { method: 'GET', timeoutMs: 25 },
+      async () => {
+        ensureCalls += 1
+      }
+    )).rejects.toMatchObject({ name: 'TimeoutError' })
+
+    expect(ensureCalls).toBe(1)
+    expect(requestCount).toBe(1)
   })
 
   it('does not ensure or send a request when the caller is already aborted', async () => {

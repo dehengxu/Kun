@@ -1,5 +1,5 @@
 import type { ApprovalPolicy, SandboxMode } from '../contracts/policy.js'
-import type { ApprovalRequest } from '../domain/approval.js'
+import type { ApprovalRequest, ApprovalResolution } from '../domain/approval.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
@@ -60,6 +60,17 @@ export type GuiDesignArtifactContext = {
   relativePath: string
 }
 
+export type ApprovedExternalWriteTarget = {
+  /** Physical path shown in the approval prompt. */
+  path: string
+  /** Stable file identity captured before prompting. */
+  device: bigint
+  inode: bigint
+  /** Stable parent-directory identity captured before prompting. */
+  parentDevice: bigint
+  parentInode: bigint
+}
+
 export type ToolHostContext = {
   threadId: string
   turnId: string
@@ -76,6 +87,8 @@ export type ToolHostContext = {
   guiDesignCanvas?: boolean
   /** True only for product Design turns (not Code sidebar canvas turns). */
   guiDesignMode?: boolean
+  /** Code is the compatibility default when an older turn omits the field. */
+  agentSurface?: 'code' | 'write' | 'design'
   /** Reserved SVG artifact exposed to structured SVG tools for this turn. */
   guiDesignArtifact?: GuiDesignArtifactContext
   /** True when the active turn originated from an IM bridge. */
@@ -84,6 +97,8 @@ export type ToolHostContext = {
   model?: ModelCapabilityMetadata
   /** Active model provider id selected for this turn. Child agents inherit this routing unless a profile overrides it. */
   modelProviderId?: string
+  /** Effective reasoning strength selected for this model round. Custom child agents inherit it. */
+  reasoningEffort?: string
   /** Skill ids activated for this turn, if the Skill runtime is enabled. */
   activeSkillIds?: readonly string[]
   /** Optional memory recall/mutation policy for this turn. */
@@ -112,13 +127,17 @@ export type ToolHostContext = {
   approvalPolicy: ApprovalPolicy
   /** Filesystem/command sandbox selected for this turn. Defaults at execution time for old callers. */
   sandboxMode?: SandboxMode
+  /** Existing physical files approved only for the active tool invocation. */
+  approvedExternalWriteTargets?: readonly ApprovedExternalWriteTarget[]
   /** Kun runtime data root; used to allow sandbox-safe reads of background shell output files. */
   runtimeDataDir?: string
   /** Store used to offload oversized tool results from model context. */
   artifactStore?: ArtifactStore
   abortSignal: AbortSignal
   /** Resolves a pending approval with the user's decision. */
-  awaitApproval: (approval: ApprovalRequest) => Promise<'allow' | 'deny'>
+  awaitApproval: (
+    approval: ApprovalRequest
+  ) => Promise<'allow' | 'deny' | ApprovalResolution>
   /** Resolves structured GUI input requested by a tool call. */
   awaitUserInput?: (
     input: Omit<UserInputRequest, 'threadId' | 'turnId'>

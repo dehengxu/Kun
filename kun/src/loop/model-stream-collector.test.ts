@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { ModelStreamCollector } from './model-stream-collector.js'
 
-function collector(options: { maxToolCallsPerStep?: number } = {}): ModelStreamCollector {
+function collector(options: {
+  maxToolCallsPerStep?: number
+  allocateRuntimeCallId?: (providerCallId: string) => string
+} = {}): ModelStreamCollector {
   return new ModelStreamCollector({
     maxToolCallsPerStep: options.maxToolCallsPerStep ?? 2,
+    allocateRuntimeCallId: options.allocateRuntimeCallId ?? ((providerCallId) => providerCallId),
     toolMetadata: new Map([
       ['edit', { providerId: 'builtin', toolKind: 'file_change' as const }]
     ])
@@ -66,6 +70,37 @@ describe('ModelStreamCollector', () => {
       call: expect.objectContaining({ callId: 'call_2' })
     })])
     expect(stream.snapshot().toolCalls.map((call) => call.callId)).toEqual(['call_1', 'call_2'])
+  })
+
+  it('replaces missing or repeated provider ids with unique runtime ids', () => {
+    let nextId = 0
+    const stream = collector({
+      allocateRuntimeCallId: () => `call_runtime_${++nextId}`
+    })
+
+    const first = stream.reduce({
+      kind: 'tool_call_complete',
+      callId: '',
+      toolName: 'edit',
+      arguments: { path: 'src/a.ts' }
+    })
+    const second = stream.reduce({
+      kind: 'tool_call_complete',
+      callId: '',
+      toolName: 'edit',
+      arguments: { path: 'src/b.ts' }
+    })
+
+    expect(first.intents).toEqual([expect.objectContaining({
+      kind: 'tool_call_ready',
+      call: expect.objectContaining({ callId: 'call_runtime_1' })
+    })])
+    expect(second.intents).toEqual([expect.objectContaining({
+      kind: 'tool_call_ready',
+      call: expect.objectContaining({ callId: 'call_runtime_2' })
+    })])
+    expect(stream.snapshot().toolCalls.map((call) => call.callId))
+      .toEqual(['call_runtime_1', 'call_runtime_2'])
   })
 
   it('does not accept a tool call past the configured cap', () => {

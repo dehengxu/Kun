@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
-import { lstat, readFile, readdir, readlink, realpath, stat } from 'node:fs/promises'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { readFile, readdir, stat } from 'node:fs/promises'
+import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import { effectiveSandboxMode } from './sandbox-policy.js'
@@ -16,6 +16,20 @@ import type {
   TruncateMode
 } from './builtin-tool-types.js'
 import { COMPACT_RESOURCE_FILE_NAMES } from './builtin-tool-types.js'
+import {
+  isPathInsideOrEqual,
+  resolveExistingWorkspaceRoot,
+  resolvePathThroughSymlinks,
+  sameFilesystemPath,
+  workspaceRoot
+} from './workspace-path.js'
+import {
+  resolveWindowsShellCandidates,
+  WINDOWS_POWERSHELL_COMMAND_ARGS,
+  windowsSystemRoot
+} from './windows-shell-resolver.js'
+
+export { workspaceRoot } from './workspace-path.js'
 
 type SpawnSyncLike = typeof spawnSync
 type SpawnLike = typeof spawn
@@ -25,18 +39,29 @@ const POWERSHELL_UTF8_OUTPUT_PREAMBLE = [
   'try { [Console]::InputEncoding = $OutputEncoding } catch {}'
 ].join('; ')
 
+function lookupResults(
+  lookup: SpawnSyncLike,
+  command: string,
+  args: string[]
+): string[] {
+  try {
+    const result = lookup(command, args, { encoding: 'utf8' })
+    if (result.status !== 0) return []
+    return result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
 function firstLookupResult(
   lookup: SpawnSyncLike,
   command: string,
   args: string[]
 ): string {
-  const result = lookup(command, args, { encoding: 'utf8' })
-  return result.status === 0
-    ? result.stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .find(Boolean) ?? ''
-    : ''
+  return lookupResults(lookup, command, args)[0] ?? ''
 }
 
 export async function withToolBoundary(
@@ -52,11 +77,6 @@ export async function withToolBoundary(
       isError: true
     }
   }
-}
-
-export function workspaceRoot(workspace: string): string {
-  if (!workspace.trim()) return process.cwd()
-  return isAbsolute(workspace) ? resolve(workspace) : resolve(process.cwd(), workspace)
 }
 
 export async function resolveWorkspacePath(
@@ -96,89 +116,24 @@ export async function resolveWorkspacePath(
       relativePath: normalizeToolPath(relative(root, lexicalAbsolutePath) || '.')
     }
   }
-  const resolvedRoot = await safeRealpath(root)
-  if (resolvedRoot === null) {
-    // Workspace root itself does not exist; nothing to anchor the escape
-    // check against. This is distinct from an actual escape (handled below).
-    throw new Error(`workspace root does not exist: ${root}`)
-  }
-  const resolvedAbsolute = await resolveSymlinkSafe(lexicalAbsolutePath)
-  const resolvedRelative = relative(resolvedRoot, resolvedAbsolute)
-  if (resolvedRelative === '..' || resolvedRelative.startsWith(`..${sep}`) || isAbsolute(resolvedRelative)) {
+  const { physicalRoot } = await resolveExistingWorkspaceRoot(root)
+  const resolvedAbsolute = await resolvePathThroughSymlinks(lexicalAbsolutePath)
+  const isInsideWorkspace = isPathInsideOrEqual(physicalRoot, resolvedAbsolute)
+  const isApprovedExternalPath = !options.enforceWorkspaceBoundary &&
+    context.approvedExternalWriteTargets?.some((target) =>
+      sameFilesystemPath(target.path, resolvedAbsolute)
+    ) === true
+  if (!isInsideWorkspace && !isApprovedExternalPath) {
     throw new Error(`path escapes the workspace root: ${inputPath}`)
   }
-  // Return LEXICAL paths to callers. The realpath-resolved pair is only used
-  // for the escape check above; downstream code (subprocess cwd, display
-  // paths, language-server init) expects the user-facing workspace path,
-  // which on symlinked roots (e.g. macOS `/tmp` -> `/private/tmp`) would
-  // otherwise diverge from what the user typed and break display layers.
+  // Workspace callers keep the lexical path expected by subprocess/display
+  // layers. External grants use the physical path that was checked so a
+  // symlink alias cannot be redirected after validation.
   return {
     workspaceRoot: root,
-    absolutePath: lexicalAbsolutePath,
+    absolutePath: isApprovedExternalPath ? resolvedAbsolute : lexicalAbsolutePath,
     relativePath: normalizeToolPath(relative(root, lexicalAbsolutePath) || '.')
   }
-}
-
-async function safeRealpath(target: string): Promise<string | null> {
-  try {
-    return await realpath(target)
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') return null
-    if (code === 'EACCES' || code === 'ELOOP' || code === 'ENOTDIR') return null
-    throw error
-  }
-}
-
-// Whether `target` is itself a symbolic link, without following it. Returns
-// false when the entry is absent or cannot be stat-ed (treated as "not a link"
-// — the escape check still anchors against the nearest existing ancestor).
-async function isSymlink(target: string): Promise<boolean> {
-  try {
-    return (await lstat(target)).isSymbolicLink()
-  } catch {
-    return false
-  }
-}
-
-async function resolveSymlinkSafe(lexicalPath: string, depth = 0): Promise<string> {
-  // Guard against symlink loops (dangling link A -> B -> A never resolves).
-  if (depth > 40) {
-    throw new Error(`too many symbolic links resolving: ${lexicalPath}`)
-  }
-  const direct = await safeRealpath(lexicalPath)
-  if (direct !== null) return direct
-  // Target doesn't fully resolve — either a genuinely missing path (write/create
-  // case) or a *dangling* symlink whose target is absent. `realpath` reports
-  // both as ENOENT, so we must walk the components ourselves: anchor on the
-  // nearest existing ancestor, but if a non-resolving component is actually a
-  // symlink, follow it explicitly so the redirection is reflected in the escape
-  // check. Re-anchoring a dangling symlink lexically (the old behavior) let a
-  // planted link like `<ws>/evil -> /etc/passwd` (target absent) pass as an
-  // in-workspace path and escape on the subsequent write.
-  const segments: string[] = []
-  let current = lexicalPath
-  // Guard against pathological component counts.
-  for (let i = 0; i < 128 && current !== dirname(current); i += 1) {
-    const resolved = await safeRealpath(current)
-    if (resolved !== null) {
-      return segments.length > 0 ? resolve(resolved, ...segments) : resolved
-    }
-    if (await isSymlink(current)) {
-      // Dangling (or otherwise non-resolving) symlink: follow its target so the
-      // redirection is reflected, then re-resolve the target plus the suffix
-      // collected below this component.
-      const linkTarget = await readlink(current)
-      const resolvedParent = (await safeRealpath(dirname(current))) ?? dirname(current)
-      const followed = isAbsolute(linkTarget) ? resolve(linkTarget) : resolve(resolvedParent, linkTarget)
-      const rejoined = segments.length > 0 ? resolve(followed, ...segments) : followed
-      return resolveSymlinkSafe(rejoined, depth + 1)
-    }
-    segments.unshift(basename(current))
-    current = dirname(current)
-  }
-  // Nothing on the path exists; treat as escape.
-  throw new Error(`path escapes the workspace root: ${lexicalPath}`)
 }
 
 export function isBinaryBuffer(buffer: Buffer): boolean {
@@ -294,53 +249,88 @@ export function describeKind(mode: TruncateMode): string {
   return mode === 'head' ? 'first' : 'last'
 }
 
-const WINDOWS_POWERSHELL_ARGS = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command']
-
-// `%SystemRoot%` (a.k.a. `%windir%`) — the Windows install directory. Always
-// present in a sane environment; the literal fallback covers the rare case
-// where even that has been stripped from the spawned process's env.
-function windowsSystemRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return env.SystemRoot || env.windir || env.SYSTEMROOT || 'C:\\Windows'
+export type ShellRuntimeInfo = ShellConfig & {
+  name: string
+  syntax: string
 }
 
-// Absolute path to cmd.exe. `%ComSpec%` is the canonical pointer the OS itself
-// uses; fall back to System32\cmd.exe so we never depend on PATH resolution.
-function windowsComSpec(env: NodeJS.ProcessEnv = process.env): string {
-  return env.ComSpec || env.COMSPEC || win32.join(windowsSystemRoot(env), 'System32', 'cmd.exe')
+export type ShellRuntimePlan = {
+  primary: ShellRuntimeInfo
+  candidates: readonly ShellRuntimeInfo[]
+}
+
+export type ShellRuntimePlanOptions = {
+  platform?: NodeJS.Platform
+  lookup?: SpawnSyncLike
+  fileExists?: (path: string) => boolean
+  env?: NodeJS.ProcessEnv
+}
+
+function pathExists(fileExists: (path: string) => boolean, candidate: string): boolean {
+  try {
+    return fileExists(candidate)
+  } catch {
+    return false
+  }
+}
+
+function uniqueShellConfigs(configs: ShellConfig[], platform: NodeJS.Platform): ShellConfig[] {
+  const seen = new Set<string>()
+  return configs.filter((config) => {
+    if (!config.shell.trim()) return false
+    const normalized = config.shell.replace(/[\\/]+$/, '')
+    const key = platform === 'win32' ? normalized.toLowerCase() : normalized
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function runtimePlan(configs: ShellConfig[], platform: NodeJS.Platform): ShellRuntimePlan {
+  const candidates = uniqueShellConfigs(configs, platform).map((config) => shellRuntimeInfo(config))
+  const primary = candidates[0]
+  if (!primary) throw new Error('shell runtime plan requires at least one candidate')
+  return { primary, candidates }
+}
+
+export function shellRuntimePlan(options: ShellRuntimePlanOptions = {}): ShellRuntimePlan {
+  const platform = options.platform ?? process.platform
+
+  if (platform === 'win32') {
+    const resolverOptions = {
+      ...(options.lookup ? { lookup: options.lookup } : {}),
+      ...(options.fileExists ? { fileExists: options.fileExists } : {}),
+      ...(options.env ? { env: options.env } : {})
+    }
+    return runtimePlan(
+      resolveWindowsShellCandidates(resolverOptions)
+        .map((candidate) => ({ shell: candidate.file, args: [...candidate.commandArgs] })),
+      platform
+    )
+  }
+
+  const lookup = options.lookup ?? spawnSync
+  const fileExists = options.fileExists ?? existsSync
+  const configs: ShellConfig[] = []
+  if (pathExists(fileExists, '/bin/bash')) configs.push({ shell: '/bin/bash', args: ['-lc'] })
+  for (const shell of lookupResults(lookup, 'which', ['bash'])) configs.push({ shell, args: ['-lc'] })
+  configs.push({ shell: 'sh', args: ['-lc'] })
+  return runtimePlan(configs, platform)
 }
 
 export function shellConfig(
-  platform: NodeJS.Platform = process.platform,
-  lookup: SpawnSyncLike = spawnSync,
-  fileExists: (path: string) => boolean = existsSync,
-  env: NodeJS.ProcessEnv = process.env
+  platform?: NodeJS.Platform,
+  lookup?: SpawnSyncLike,
+  fileExists?: (path: string) => boolean,
+  env?: NodeJS.ProcessEnv
 ): ShellConfig {
-  if (platform === 'win32') {
-    const pwsh = firstLookupResult(lookup, 'where', ['pwsh.exe'])
-    if (pwsh) return { shell: pwsh, args: WINDOWS_POWERSHELL_ARGS }
-    const powershell = firstLookupResult(lookup, 'where', ['powershell.exe'])
-    if (powershell) return { shell: powershell, args: WINDOWS_POWERSHELL_ARGS }
-    const bash = firstLookupResult(lookup, 'where', ['bash.exe'])
-    if (bash) return { shell: bash, args: ['-lc'] }
-    // Every branch above resolves the shell through PATH (`where` itself lives
-    // in System32). A GUI-launched Windows app frequently inherits a PATH that
-    // has lost System32, so `where.exe`, `powershell.exe` and even a bare
-    // `cmd.exe` all fail to spawn with "ENOENT". Resolve a shell by absolute
-    // path from well-known environment variables so the shell always starts.
-    const winPowerShell = win32.join(
-      windowsSystemRoot(env),
-      'System32',
-      'WindowsPowerShell',
-      'v1.0',
-      'powershell.exe'
-    )
-    if (fileExists(winPowerShell)) return { shell: winPowerShell, args: WINDOWS_POWERSHELL_ARGS }
-    return { shell: windowsComSpec(env), args: ['/d', '/s', '/c'] }
-  }
-  if (fileExists('/bin/bash')) return { shell: '/bin/bash', args: ['-lc'] }
-  const candidate = firstLookupResult(lookup, 'which', ['bash'])
-  if (candidate) return { shell: candidate, args: ['-lc'] }
-  return { shell: 'sh', args: ['-lc'] }
+  const { shell, args } = shellRuntimePlan({
+    ...(platform ? { platform } : {}),
+    ...(lookup ? { lookup } : {}),
+    ...(fileExists ? { fileExists } : {}),
+    ...(env ? { env } : {})
+  }).primary
+  return { shell, args }
 }
 
 const SAFE_SHELL_ENV_KEYS = new Set([
@@ -429,11 +419,6 @@ export function shellSpawnEnv(
   }
 }
 
-export type ShellRuntimeInfo = ShellConfig & {
-  name: string
-  syntax: string
-}
-
 export function shellDisplayName(shell: string): string {
   const name = shell.replace(/\\/g, '/').split('/').pop()?.toLowerCase() ?? shell.toLowerCase()
   if (name === 'cmd.exe') return 'cmd.exe'
@@ -452,12 +437,157 @@ export function shellRuntimeInfo(config: ShellConfig = shellConfig()): ShellRunt
 export function shellCommandArgs(config: ShellConfig, command: string): string[] {
   const name = shellDisplayName(config.shell)
   if (name === 'pwsh' || name === 'powershell') {
-    const baseArgs = config.args.filter((arg) => arg.toLowerCase() !== '-command')
-    const encodedCommand = Buffer.from(`${POWERSHELL_UTF8_OUTPUT_PREAMBLE}\n${command}`, 'utf16le')
-      .toString('base64')
-    return [...baseArgs, '-EncodedCommand', encodedCommand]
+    const script = `${POWERSHELL_UTF8_OUTPUT_PREAMBLE}\n${command}`
+    return [...WINDOWS_POWERSHELL_COMMAND_ARGS, script]
   }
   return [...config.args, command]
+}
+
+export type ShellSpawnAttempt = {
+  shell: string
+  name: string
+  code?: string
+  errno?: string | number
+  syscall?: string
+}
+
+export class ShellSpawnError extends Error {
+  readonly attempts: readonly ShellSpawnAttempt[]
+  readonly code?: string
+  readonly errno?: string | number
+  readonly syscall?: string
+
+  constructor(attempts: readonly ShellSpawnAttempt[]) {
+    const copiedAttempts = attempts.map((attempt) => ({ ...attempt }))
+    const summary = copiedAttempts
+      .map((attempt) => `${attempt.name}: ${attempt.code ?? 'UNKNOWN'}`)
+      .join(', ')
+    super(`Failed to start shell${summary ? ` (${summary})` : ''}`)
+    this.name = 'ShellSpawnError'
+    this.attempts = copiedAttempts
+    const last = copiedAttempts.at(-1)
+    this.code = last?.code
+    this.errno = last?.errno
+    this.syscall = last?.syscall
+  }
+
+  toJSON(): {
+    name: string
+    message: string
+    code?: string
+    errno?: string | number
+    syscall?: string
+    attempts: readonly ShellSpawnAttempt[]
+  } {
+    return {
+      name: this.name,
+      message: this.message,
+      ...(this.code ? { code: this.code } : {}),
+      ...(this.errno !== undefined ? { errno: this.errno } : {}),
+      ...(this.syscall ? { syscall: this.syscall } : {}),
+      attempts: this.attempts
+    }
+  }
+}
+
+export type ShellCommandSpawnOptions = Omit<SpawnOptions, 'cwd' | 'env' | 'shell'> & {
+  cwd: string
+  env?: NodeJS.ProcessEnv
+}
+
+export type ShellCommandRunnerOptions = ShellRuntimePlanOptions & {
+  plan?: ShellRuntimePlan
+  spawnImpl?: SpawnLike
+}
+
+export type SpawnedShellCommand = {
+  child: ChildProcess
+  runtime: ShellRuntimeInfo
+}
+
+export type ShellCommandRunner = {
+  runtime: ShellRuntimeInfo
+  candidates: readonly ShellRuntimeInfo[]
+  spawn: (command: string, options: ShellCommandSpawnOptions) => Promise<SpawnedShellCommand>
+}
+
+function spawnAttempt(runtime: ShellRuntimeInfo, error: unknown): ShellSpawnAttempt {
+  const nodeError = error && typeof error === 'object' ? error as NodeJS.ErrnoException : undefined
+  return {
+    shell: runtime.shell,
+    name: runtime.name,
+    ...(typeof nodeError?.code === 'string' ? { code: nodeError.code } : {}),
+    ...(typeof nodeError?.errno === 'number' || typeof nodeError?.errno === 'string'
+      ? { errno: nodeError.errno }
+      : {}),
+    ...(typeof nodeError?.syscall === 'string' ? { syscall: nodeError.syscall } : {})
+  }
+}
+
+function waitForSpawn(child: ChildProcess): Promise<ChildProcess> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const cleanup = () => {
+      child.off('spawn', onSpawn)
+      child.off('error', onError)
+    }
+    const onSpawn = () => {
+      cleanup()
+      resolvePromise(child)
+    }
+    const onError = (error: Error) => {
+      cleanup()
+      rejectPromise(error)
+    }
+    child.once('spawn', onSpawn)
+    child.once('error', onError)
+  })
+}
+
+export function createShellCommandRunner(options: ShellCommandRunnerOptions = {}): ShellCommandRunner {
+  const platform = options.platform ?? process.platform
+  const env = options.env ?? process.env
+  const resolvedPlan = options.plan ?? shellRuntimePlan(options)
+  // Never replay one command under another syntax family after a launch
+  // failure. PowerShell, POSIX, and cmd parse the same text differently.
+  const candidates = uniqueShellConfigs(
+    [resolvedPlan.primary, ...resolvedPlan.candidates]
+      .filter((runtime) => runtime.syntax === resolvedPlan.primary.syntax),
+    platform
+  ).map((config) => shellRuntimeInfo(config))
+  const primary = candidates[0] ?? resolvedPlan.primary
+  const spawnImpl = options.spawnImpl ?? spawn
+
+  return {
+    runtime: primary,
+    candidates,
+    async spawn(command, spawnOptions) {
+      const attempts: ShellSpawnAttempt[] = []
+      const safeEnv = shellSpawnEnv(spawnOptions.env ?? env, platform)
+      const baseChildOptions: SpawnOptions = {
+        ...spawnOptions,
+        windowsHide: spawnOptions.windowsHide ?? true,
+        shell: false
+      }
+      for (const runtime of candidates) {
+        try {
+          const childOptions: SpawnOptions = {
+            ...baseChildOptions,
+            env: platform === 'win32' && runtime.name === 'bash'
+              ? { ...safeEnv, CHERE_INVOKING: '1' }
+              : safeEnv
+          }
+          const child = spawnImpl(runtime.shell, shellCommandArgs(runtime, command), childOptions)
+          await waitForSpawn(child)
+          return { child, runtime }
+        } catch (error) {
+          // An error before the spawn event means no process was created, so a
+          // same-syntax fallback cannot duplicate side effects.
+          attempts.push(spawnAttempt(runtime, error))
+        }
+      }
+      throw new ShellSpawnError(attempts)
+    }
+  }
 }
 
 // Factual environment block, not an instruction. Modeled on Codex's
@@ -784,9 +914,9 @@ export function globToRegExp(pattern: string): RegExp {
   const withWildcards = escaped
     .replace(/\*\*/g, '::DOUBLE_STAR::')
     .replace(/\*/g, '[^/]*')
-    .replace(/\?/g, '.')
+    .replace(/\?/g, '[^/]')
     .replace(/::DOUBLE_STAR::/g, '.*')
-  return new RegExp(`^${optionalPrefix ? '(?:.*/)?' : ''}${withWildcards}$`, 'i')
+  return new RegExp(`^${optionalPrefix ? '(?:.*/)?' : ''}${withWildcards}$`, 'iu')
 }
 
 export function normalizeToolPath(value: string): string {

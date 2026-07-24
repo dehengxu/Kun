@@ -211,6 +211,8 @@ export const SkillsCapabilityConfig = CapabilityToggleConfig.extend({
   workspaceRoots: z.array(z.string().min(1)).default([]),
   /** Global skill roots (e.g. ~/.kun/skills). Scanned after project roots. */
   globalRoots: z.array(z.string().min(1)).default([]),
+  /** Read workspace-local `.kun/project.json` Skill policy on demand. */
+  projectConfigEnabled: z.boolean().default(true),
   /**
    * Skill ids the user disabled in the GUI. Excluded everywhere a skill can
    * surface (catalog, auto-match, load_skill, diagnostics) so a disabled skill
@@ -220,7 +222,10 @@ export const SkillsCapabilityConfig = CapabilityToggleConfig.extend({
   disabledIds: z.array(z.string().min(1)).default([]),
   legacySkillMd: z.boolean().default(true)
 }).strict()
-export type SkillsCapabilityConfig = z.infer<typeof SkillsCapabilityConfig>
+type ParsedSkillsCapabilityConfig = z.infer<typeof SkillsCapabilityConfig>
+export type SkillsCapabilityConfig = Omit<ParsedSkillsCapabilityConfig, 'projectConfigEnabled'> & {
+  projectConfigEnabled?: boolean
+}
 
 export const InstructionsCapabilityConfig = CapabilityToggleConfig.extend({
   maxFileBytes: z.number().int().positive().default(64 * 1024),
@@ -235,6 +240,10 @@ export type SubagentToolPolicy = z.infer<typeof SubagentToolPolicy>
 export const SubagentMode = z.enum(['subagent', 'primary', 'all'])
 export type SubagentMode = z.infer<typeof SubagentMode>
 
+/** Product surfaces where a profile is available for delegation. */
+export const SubagentSurface = z.enum(['shared', 'code', 'write', 'design'])
+export type SubagentSurface = z.infer<typeof SubagentSurface>
+
 /**
  * Tools a `readOnly` subagent may call. The list is enforced twice: the
  * child loop advertises only these names (schema filter) and the
@@ -242,7 +251,20 @@ export type SubagentMode = z.infer<typeof SubagentMode>
  * to side-effect-free investigation tools — no bash/edit/write, and no
  * nested `delegate_task`.
  */
-export const SUBAGENT_READ_ONLY_TOOL_NAMES = ['read', 'grep', 'find', 'ls', 'repo_map'] as const
+/**
+ * Host-enforced upper bound for read-only subagents. Profile `allowedTools`
+ * may narrow this set but can never add mutation, command, delegation, memory,
+ * or arbitrary connector tools to it.
+ */
+export const SUBAGENT_READ_ONLY_TOOL_NAMES = [
+  'read',
+  'grep',
+  'find',
+  'ls',
+  'repo_map',
+  'web_fetch',
+  'web_search'
+] as const
 
 export const SubagentProfileConfig = z
   .object({
@@ -254,12 +276,23 @@ export const SubagentProfileConfig = z
     color: z.string().min(1).optional(),
     /** Where the agent can be used: delegated subagent, primary session persona, or both. */
     mode: SubagentMode.default('subagent'),
+    /**
+     * Product surfaces where this role participates in routing. `shared`
+     * makes the role available everywhere and is canonicalized without other
+     * values. Missing values retain legacy global availability.
+     */
+    surfaces: z.array(SubagentSurface).max(4).optional(),
     /** Overrides the child model for this role (falls back to the server default). */
     model: z.string().min(1).optional(),
     /** Routes this role's child to a specific provider id (falls back to the runtime default provider). */
     providerId: z.string().min(1).optional(),
     /** Persona/instructions appended to the base system prompt for this role (not a full replace). */
     systemPrompt: z.string().min(1).optional(),
+    /**
+     * When true, the child's immutable system prompt is only `systemPrompt`
+     * (no Kun base prefix). Empty/missing role prompts still fall back to base.
+     */
+    omitBasePrompt: z.boolean().optional(),
     /** Short instruction prepended to the delegated task prompt. */
     promptPreamble: z.string().min(1).optional(),
     /**
@@ -269,7 +302,7 @@ export const SubagentProfileConfig = z
      * explicitly (e.g. the built-in reviewers).
      */
     toolPolicy: SubagentToolPolicy.default('inherit'),
-    /** Exact tool allow-list; overrides toolPolicy when set (e.g. ['read','grep','bash']). */
+    /** Exact tool allow-list; narrows toolPolicy and the parent capability snapshot. */
     allowedTools: z.array(z.string().min(1)).min(1).optional(),
     /** Built-in tool names blocked for this profile (deny-list, layered on `inherit`; e.g. ['bash','write']). */
     blockedTools: z.array(z.string().min(1)).optional(),
@@ -277,6 +310,8 @@ export const SubagentProfileConfig = z
     blockedMcpServers: z.array(z.string().min(1)).optional(),
     /** Skill ids blocked for this profile (deny-list; default inherits every available skill). */
     blockedSkills: z.array(z.string().min(1)).optional(),
+    /** Disable skill discovery, auto-activation, and load_skill for this child. */
+    skillsEnabled: z.boolean().optional(),
     /**
      * Reasoning depth applied to this profile's child model requests. Default
      * 'off' (cheap); a profile opts into deeper thinking explicitly. Flows to
@@ -285,11 +320,23 @@ export const SubagentProfileConfig = z
     reasoningEffort: ModelReasoningEffort.optional()
   })
   .strict()
+  .superRefine((profile, ctx) => {
+    const hasModel = Boolean(profile.model?.trim())
+    const hasProvider = Boolean(profile.providerId?.trim())
+    if (hasModel === hasProvider) return
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: hasModel ? ['providerId'] : ['model'],
+      message: 'subagent model and providerId must be configured together'
+    })
+  })
 export type SubagentProfileConfig = z.infer<typeof SubagentProfileConfig>
 
 export const SubagentsCapabilityConfig = CapabilityToggleConfig.extend({
+  /** Reuse configured profiles instead of requiring the parent to define a one-run role. */
+  useExistingAgents: z.boolean().default(true),
   /** Max children running at once; extra spawns queue instead of erroring. */
-  maxParallel: z.number().int().nonnegative().default(0),
+  maxParallel: z.number().int().nonnegative().default(256),
   /** Hard cap on total children per parent thread. */
   maxChildRuns: z.number().int().nonnegative().default(0),
   /**
@@ -311,7 +358,7 @@ export const SubagentsCapabilityConfig = CapabilityToggleConfig.extend({
 })
   .strict()
   .superRefine((config, ctx) => {
-    if (config.defaultProfile && !(config.defaultProfile in config.profiles)) {
+    if (config.defaultProfile && !Object.prototype.hasOwnProperty.call(config.profiles, config.defaultProfile)) {
       ctx.addIssue({
         code: 'custom',
         path: ['defaultProfile'],
@@ -354,7 +401,12 @@ export const MemoryCapabilityConfig = CapabilityToggleConfig.extend({
 }).strict()
 export type MemoryCapabilityConfig = z.infer<typeof MemoryCapabilityConfig>
 
-export const ImageGenerationProtocol = z.enum(['openai-images', 'minimax-image', 'codex-responses-image'])
+export const ImageGenerationProtocol = z.enum([
+  'openai-images',
+  'minimax-image',
+  'codex-responses-image',
+  'grok-imagine-image'
+])
 export type ImageGenerationProtocol = z.infer<typeof ImageGenerationProtocol>
 export const ImageGenerationQuality = z.enum(['auto', 'low', 'medium', 'high'])
 export type ImageGenerationQuality = z.infer<typeof ImageGenerationQuality>
@@ -402,13 +454,14 @@ export const MusicGenCapabilityConfig = CapabilityToggleConfig.extend({
 }).strict()
 export type MusicGenCapabilityConfig = z.infer<typeof MusicGenCapabilityConfig>
 
-export const VideoGenerationProtocol = z.enum(['minimax-video'])
+export const VideoGenerationProtocol = z.enum(['minimax-video', 'grok-imagine-video'])
 export type VideoGenerationProtocol = z.infer<typeof VideoGenerationProtocol>
 
 export const VideoGenCapabilityConfig = CapabilityToggleConfig.extend({
   protocol: VideoGenerationProtocol.default('minimax-video'),
   baseUrl: z.string().min(1).optional(),
   apiKey: z.string().min(1).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
   model: z.string().min(1).optional(),
   defaultDuration: z.number().int().positive().default(6),
   defaultResolution: z.string().min(1).default('1080P'),
@@ -495,6 +548,7 @@ export const RuntimeCapabilityManifest = z
       lastInjectedBytes: z.number().int().nonnegative()
     }).strict(),
     subagents: RuntimeCapabilityState.extend({
+      useExistingAgents: z.boolean(),
       maxParallel: z.number().int().nonnegative(),
       maxChildRuns: z.number().int().nonnegative(),
       defaultToolPolicy: SubagentToolPolicy,
@@ -681,6 +735,7 @@ export function buildRuntimeCapabilityManifest(input: {
         input.subagents?.available === true,
         input.subagents?.reason ?? 'subagent runtime is unavailable'
       ),
+      useExistingAgents: config.subagents.useExistingAgents,
       maxParallel: config.subagents.maxParallel,
       maxChildRuns: config.subagents.maxChildRuns,
       defaultToolPolicy: config.subagents.defaultToolPolicy,

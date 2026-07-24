@@ -571,7 +571,7 @@ export function NodeConfigPanel({
 
   if (!node) {
     return (
-      <div className="flex h-full items-center justify-center px-6 text-center text-[13px] text-ds-faint">
+      <div className="workflow-node-config-empty flex h-full items-center justify-center px-6 text-center text-[13px] text-ds-faint">
         {t('workflowNoSelection')}
       </div>
     )
@@ -581,7 +581,7 @@ export function NodeConfigPanel({
   const danglingRefs = collectDanglingRefs(node, upstreamNodes)
 
   return (
-    <div ref={panelRef} className="flex h-full min-h-0 flex-col">
+    <div ref={panelRef} className="workflow-node-config-panel flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between gap-2 border-b border-ds-border px-4 py-3">
         <h2 className="text-[13px] font-semibold text-ds-ink">
           {t(`workflowNode_${node.type}`)}
@@ -906,7 +906,7 @@ function TestNodeDialog({
         className="flex max-h-[80vh] w-[520px] flex-col overflow-hidden rounded-2xl border border-ds-border bg-ds-card shadow-xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="flex items-center justify-between border-b border-ds-border px-5 py-3.5">
+        <header className="flex shrink-0 items-center justify-between border-b border-ds-border px-5 py-3.5">
           <div className="flex items-center gap-2">
             <FlaskConical className="h-4 w-4 text-ds-muted" strokeWidth={1.8} />
             <span className="text-[14px] font-semibold text-ds-ink">{t('workflowTestNode')}</span>
@@ -919,7 +919,7 @@ function TestNodeDialog({
             <X className="h-4 w-4" strokeWidth={1.8} />
           </button>
         </header>
-        <div className="flex flex-col gap-3 overflow-y-auto px-5 py-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
           <label className="flex flex-col gap-1.5">
             <span className="text-[12px] font-medium text-ds-muted">{t('workflowTestMock')}</span>
             <span className="text-[11px] text-ds-faint">{t('workflowTestMockHint')}</span>

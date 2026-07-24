@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 import { compileFunction, runInNewContext } from 'node:vm'
+import {
+  resolveWindowsGitBashCandidates,
+  type WindowsShellResolverOptions
+} from '../../kun/src/adapters/tool/windows-shell-resolver.js'
 import type {
   WorkflowCodeCheckResult,
   WorkflowCodeLanguage,
@@ -19,23 +21,18 @@ const CODE_TIMEOUT_MS = 2_000
 const COMMAND_TIMEOUT_MS = 30_000
 const PYTHON_BIN = process.env.WORKFLOW_PYTHON_BIN?.trim() || 'python3'
 
-function resolveBashBin(): string {
-  const configured = process.env.WORKFLOW_BASH_BIN?.trim()
+export function resolveWorkflowBashBin(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  options: Omit<WindowsShellResolverOptions, 'env'> = {}
+): string {
+  const configured = env.WORKFLOW_BASH_BIN?.trim()
   if (configured) return configured
-  if (process.platform !== 'win32') return 'bash'
-
-  const candidates = [
-    join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
-    join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Git', 'usr', 'bin', 'bash.exe'),
-    join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Git', 'bin', 'bash.exe')
-  ]
-  if (process.env.LOCALAPPDATA) {
-    candidates.push(join(process.env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'))
-  }
-  return candidates.find((candidate) => existsSync(candidate)) ?? 'bash'
+  if (platform !== 'win32') return 'bash'
+  return resolveWindowsGitBashCandidates({ ...options, env })[0]?.file ?? 'bash'
 }
 
-const BASH_BIN = resolveBashBin()
+const BASH_BIN = resolveWorkflowBashBin()
 
 export function executeCodeWorkflowNode(input: {
   node: CodeNode
@@ -101,6 +98,7 @@ function runCommandNode(
     const child = spawn(bin, ['-c', code], {
       env: {
         ...process.env,
+        ...(process.platform === 'win32' && language === 'bash' ? { CHERE_INVOKING: '1' } : {}),
         WORKFLOW_TEXT: payload.text ?? '',
         WORKFLOW_JSON: safeJson(payload.json),
         WORKFLOW_FIELDS: safeJson(fields)
@@ -206,7 +204,12 @@ export function checkWorkflowCode(
     }
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(bin, args)
+      child = spawn(bin, args, {
+        env: {
+          ...process.env,
+          ...(process.platform === 'win32' && language === 'bash' ? { CHERE_INVOKING: '1' } : {})
+        }
+      })
     } catch {
       done({ status: 'unavailable', message: `${bin} is not available — cannot check ${language} syntax.` })
       return

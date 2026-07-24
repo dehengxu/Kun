@@ -149,9 +149,9 @@ export function Sidebar({
       title={t('appName')}
       footer={
         <div className="space-y-1">
-          <div className="flex min-h-[42px] items-center justify-center gap-2.5 pb-1">
+          <div className="ds-sidebar-focus-row flex min-h-[42px] items-center justify-center gap-2.5 pb-1">
             {!focusModeEnabled ? (
-              <span className="flex h-[46px] w-[56px] shrink-0 items-center justify-center">
+              <span className="ds-sidebar-mascot-slot flex h-[46px] w-[56px] shrink-0 items-center justify-center">
                 <SidebarMascot />
               </span>
             ) : null}
@@ -405,7 +405,7 @@ function FocusModeToggle({
       aria-label={ariaLabel}
       title={`${title} · ${status}`}
       onClick={onToggle}
-      className={`group inline-flex h-8 w-[112px] shrink-0 items-center justify-between overflow-hidden rounded-[10px] border px-2.5 text-[12px] font-medium outline-none transition focus-visible:ring-2 focus-visible:ring-accent/25 ${
+      className={`ds-focus-mode-toggle group inline-flex h-8 w-[112px] shrink-0 items-center justify-between overflow-hidden rounded-[10px] border px-2.5 text-[12px] font-medium outline-none transition focus-visible:ring-2 focus-visible:ring-accent/25 ${
         enabled
           ? 'border-accent/35 bg-[var(--ds-sidebar-row-active)] text-[#1f1f1f] shadow-[0_1px_3px_rgba(20,47,95,0.07),inset_0_0_0_1px_var(--ds-sidebar-row-ring),inset_0_1px_0_rgba(255,255,255,0.72)] dark:text-white'
           : 'border-[var(--ds-sidebar-divider)] bg-[var(--ds-sidebar-field-bg)] text-[#5c6675] shadow-[inset_0_1px_0_rgba(255,255,255,0.46)] hover:bg-[var(--ds-sidebar-row-hover)] hover:text-[#1f2733] dark:text-white/62 dark:shadow-none dark:hover:text-white'
@@ -416,7 +416,7 @@ function FocusModeToggle({
         <span className="min-w-0 truncate">{label}</span>
       </span>
       <span
-        className={`relative h-4 w-7 shrink-0 rounded-full transition ${
+        className={`ds-focus-mode-toggle-track relative h-4 w-7 shrink-0 rounded-full transition ${
           enabled
             ? 'bg-accent/80 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)]'
             : 'bg-slate-300/75 shadow-[inset_0_0_0_1px_rgba(100,116,139,0.16)] dark:bg-white/[0.14] dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]'
@@ -424,7 +424,7 @@ function FocusModeToggle({
         aria-hidden="true"
       >
         <span
-          className={`absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-white shadow-[0_1px_3px_rgba(20,47,95,0.24)] transition-transform ${
+          className={`ds-focus-mode-toggle-thumb absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-white shadow-[0_1px_3px_rgba(20,47,95,0.24)] transition-transform ${
             enabled ? 'translate-x-3' : 'translate-x-0'
           }`}
         />

@@ -2,6 +2,7 @@ import { useEffect, type FormEvent, type ReactElement } from 'react'
 import {
   Archive,
   ExternalLink,
+  FolderPlus,
   MoveRight,
   PencilLine,
   Pin,
@@ -16,6 +17,7 @@ import type { NormalizedThread } from '../../agent/types'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import { workspaceLabelFromPath } from '../../lib/workspace-label'
 import type { SidebarThreadWorktreeRecord } from './sidebar-project-selectors'
+import type { SidebarVirtualFolder } from './sidebar-folders'
 
 type Translate = (key: string, options?: Record<string, unknown>) => string
 
@@ -28,6 +30,13 @@ export type ThreadContextMenuState = {
 
 export type WorkspaceContextMenuState = {
   workspacePath: string
+  x: number
+  y: number
+}
+
+export type FolderContextMenuState = {
+  workspacePath: string
+  folder: SidebarVirtualFolder
   x: number
   y: number
 }
@@ -54,6 +63,14 @@ export type RenameThreadDialogState = {
   thread: NormalizedThread
   value: string
   submitting: boolean
+}
+
+export type SidebarFolderDialogState = {
+  mode: 'create' | 'rename'
+  workspacePath: string
+  folder?: SidebarVirtualFolder
+  value: string
+  error?: string
 }
 
 export function ThreadRenameDialog({
@@ -100,6 +117,71 @@ export function ThreadRenameDialog({
         />
         <DialogActions
           submitting={state.submitting}
+          confirmDisabled={!canSubmit}
+          confirmLabel={t('confirm')}
+          onClose={onClose}
+          t={t}
+        />
+      </form>
+    </div>
+  )
+}
+
+export function SidebarFolderDialog({
+  state,
+  onClose,
+  onValueChange,
+  onSubmit,
+  t
+}: {
+  state: SidebarFolderDialogState
+  onClose: () => void
+  onValueChange: (value: string) => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+  t: Translate
+}): ReactElement {
+  const nextName = state.value.trim()
+  const canSubmit = Boolean(nextName) && (
+    state.mode === 'create' || nextName !== state.folder?.name
+  )
+  useEscapeToClose(onClose, false)
+  const title = state.mode === 'create'
+    ? t('sidebarFolderCreate')
+    : t('sidebarFolderRename')
+  const prompt = state.mode === 'create'
+    ? t('sidebarFolderCreatePrompt')
+    : t('sidebarFolderRenamePrompt')
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="sidebar-folder-dialog-title"
+      className="ds-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"
+      onMouseDown={onClose}
+    >
+      <form
+        onSubmit={onSubmit}
+        onMouseDown={(event) => event.stopPropagation()}
+        className="w-full max-w-sm rounded-[24px] border border-ds-border bg-ds-card p-5 shadow-[0_24px_72px_rgba(20,47,95,0.22)]"
+      >
+        <h2 id="sidebar-folder-dialog-title" className="text-[18px] font-semibold tracking-[-0.035em] text-ds-ink">
+          {title}
+        </h2>
+        <p className="mt-2 text-[13px] leading-6 text-ds-muted">{prompt}</p>
+        <input
+          autoFocus
+          aria-label={prompt}
+          value={state.value}
+          maxLength={80}
+          onChange={(event) => onValueChange(event.target.value)}
+          onFocus={(event) => event.currentTarget.select()}
+          className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-[14px] text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
+        />
+        {state.error ? (
+          <p className="mt-2 text-[12.5px] leading-5 text-red-600 dark:text-red-300">{state.error}</p>
+        ) : null}
+        <DialogActions
+          submitting={false}
           confirmDisabled={!canSubmit}
           confirmLabel={t('confirm')}
           onClose={onClose}
@@ -280,6 +362,7 @@ export function WorkspaceContextMenu({
   state,
   onClose,
   onNewThread,
+  onNewFolder,
   onOpenInSystem,
   onArchiveThreads,
   onRemove,
@@ -289,6 +372,7 @@ export function WorkspaceContextMenu({
   state: WorkspaceContextMenuState
   onClose: () => void
   onNewThread: () => void
+  onNewFolder: () => void
   onOpenInSystem: () => void
   onArchiveThreads: () => void
   onRemove: () => void
@@ -308,10 +392,54 @@ export function WorkspaceContextMenu({
       onPointerDown={(event) => event.stopPropagation()}
     >
       <MenuItem icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.9} />} label={t('sidebarWorkspaceNewThread')} disabled={false} onClick={() => run(onNewThread)} />
+      <MenuItem icon={<FolderPlus className="h-3.5 w-3.5" strokeWidth={1.9} />} label={t('sidebarFolderCreate')} disabled={false} onClick={() => run(onNewFolder)} />
       <MenuItem icon={<ExternalLink className="h-3.5 w-3.5" strokeWidth={1.9} />} label={t('sidebarWorkspaceOpenInSystem')} disabled={false} onClick={() => run(onOpenInSystem)} />
       <MenuItem icon={<Archive className="h-3.5 w-3.5" strokeWidth={1.9} />} label={t('sidebarWorkspaceArchiveThreads')} disabled={archiveDisabled} onClick={() => run(onArchiveThreads)} />
       <div className="my-1 h-px bg-ds-border-muted" />
       <MenuItem icon={<Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />} label={t('sidebarWorkspaceRemove')} disabled={false} danger onClick={() => run(onRemove)} />
+    </div>
+  )
+}
+
+export function FolderContextMenu({
+  state,
+  onClose,
+  onRename,
+  onDelete,
+  t
+}: {
+  state: FolderContextMenuState
+  onClose: () => void
+  onRename: () => void
+  onDelete: () => void
+  t: Translate
+}): ReactElement {
+  const run = (action: () => void): void => {
+    onClose()
+    action()
+  }
+  return (
+    <div
+      role="menu"
+      aria-label={state.folder.name}
+      className="ds-folder-context-menu ds-no-drag fixed z-50 min-w-[190px] rounded-[16px] border border-ds-border bg-ds-card/95 p-1.5 text-[13px] text-ds-ink shadow-[0_18px_52px_rgba(20,47,95,0.18)] backdrop-blur-xl dark:bg-ds-card"
+      style={{ left: state.x, top: state.y }}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <MenuItem
+        icon={<PencilLine className="h-3.5 w-3.5" strokeWidth={1.9} />}
+        label={t('sidebarFolderRename')}
+        disabled={false}
+        onClick={() => run(onRename)}
+      />
+      <div className="my-1 h-px bg-ds-border-muted" />
+      <MenuItem
+        icon={<Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />}
+        label={t('sidebarFolderDelete')}
+        disabled={false}
+        danger
+        onClick={() => run(onDelete)}
+      />
     </div>
   )
 }

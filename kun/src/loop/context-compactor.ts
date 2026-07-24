@@ -187,14 +187,42 @@ export class ContextCompactor {
       : repairTailStartForToolResults(history, history.length - keepRecent)
     const head = history.slice(0, tailStart)
     const tail = history.slice(tailStart)
+    // Re-summarizing only the previous summary cannot reclaim any conversation
+    // history. Provider usage counters can remain above a threshold after a
+    // successful compaction (notably when cached tokens are cumulative), which
+    // used to create a fresh compaction item on every following model step.
+    if (head.length > 0 && head.every((item) => item.kind === 'compaction')) {
+      return {
+        next: [...frozen, ...history],
+        summaryItem: makeCompactionItem({
+          id: `compaction_${input.turnId}_noop`,
+          turnId: input.turnId,
+          threadId: input.threadId,
+          summary: 'no new history to compact',
+          replacedTokens: 0,
+          pinnedConstraints: input.prefix.pinnedConstraints,
+          auto: input.auto
+        }),
+        replacedTokens: 0
+      }
+    }
     const replacedTokens = this.estimator.estimateItems(head)
     const sourceDigest = computeShortHash(compactedItemsDigestSource(head))
     const digestMarker = createToolDigestMarker(sourceDigest)
+    // The tail is sent verbatim after this summary. Summarizing it as well
+    // duplicates the current user request (and can make the model treat one
+    // instruction as two). Keep the summary source explicitly limited to the
+    // folded head; the retained tail remains the single source of truth for
+    // recent instructions.
     const summaryBase = input.summaryOverride?.trim() || buildCompactionSummary({
-      history,
+      history: head,
       head,
       tail,
       prefix: input.prefix,
+      // A skill pin in the retained tail is already sent verbatim with the
+      // request. Copy only folded pins into the summary so the tail has one
+      // source of truth, just like ordinary user instructions.
+      skillPins: extractSkillPins(head),
       reason: input.reason,
       mode: input.mode,
       budgetTokens: input.budgetTokens
@@ -318,6 +346,7 @@ function buildCompactionSummary(input: {
   head: TurnItem[]
   tail: TurnItem[]
   prefix: ImmutablePrefix
+  skillPins?: readonly string[]
   reason?: string
   mode?: CompactionMode
   budgetTokens?: number
@@ -341,7 +370,7 @@ function buildCompactionSummary(input: {
       lines.push(`- ${pinned}`)
     }
   }
-  const skillPins = extractSkillPins(input.history)
+  const skillPins = input.skillPins ?? extractSkillPins(input.history)
   if (skillPins.length > 0) {
     lines.push('Pinned skills (preserved across compaction):')
     for (const skillPin of skillPins) {
@@ -377,7 +406,7 @@ function buildCompactionSummary(input: {
   return lines.join('\n')
 }
 
-function extractSkillPins(history: TurnItem[]): string[] {
+export function extractSkillPins(history: readonly TurnItem[]): string[] {
   const pins = new Set<string>()
   for (const item of history) {
     if (item.kind !== 'assistant_text' && item.kind !== 'user_message' && item.kind !== 'compaction') continue

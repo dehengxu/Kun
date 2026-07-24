@@ -6,7 +6,6 @@ import { buildSddTraceSnapshot } from '@shared/sdd-trace'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import type { AttachmentReference, ChatBlock, RuntimeConnectionStatus } from '../../agent/types'
 import type { CoreRuntimeInfoJson } from '../../agent/kun-contract'
-import { getProvider } from '../../agent/registry'
 import { useChatStore } from '../../store/chat-store'
 import type { ChatState, SendMessageOverrides } from '../../store/chat-store-types'
 import { providerIdForComposerModel } from '../../store/chat-store-helpers'
@@ -14,7 +13,7 @@ import { threadHasPendingRuntimeWork } from '../../store/chat-store-runtime-help
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 import { PENDING_INFOGRAPHIC_PROTOCOL } from '../../write/infographic-pending'
 import { confirmDialog } from '../../lib/confirm-dialog'
-import { prepareImageAttachmentUpload } from '../../lib/image-attachment-upload'
+import { uploadRuntimeImageAttachment } from '../../lib/runtime-image-attachment'
 import {
   composerReasoningEffortRequestValue,
   type ComposerReasoningEffort
@@ -134,19 +133,6 @@ function sddAssistantContextFromBlocks(blocks: ChatBlock[], maxMessages = 10): s
   return messages.slice(-maxMessages).join('\n\n').slice(0, 12_000)
 }
 
-function base64ImageToFile(image: SddDraftImageReference): File {
-  return base64ToFile(image.dataBase64, fileNameFromPath(image.relativePath), image.mimeType)
-}
-
-function base64ToFile(dataBase64: string, name: string, mimeType: string): File {
-  const binary = atob(dataBase64)
-  const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index)
-  }
-  return new File([bytes], name || 'image', { type: mimeType })
-}
-
 export function useWorkbenchSddTurnController({
   activeGuiPlan,
   attachmentUploadEnabled,
@@ -231,24 +217,23 @@ export function useWorkbenchSddTurnController({
     threadId: string,
     workspace: string
   ): Promise<{ images: SddDraftImageReference[]; attachmentIds: string[] }> => {
-    const provider = getProvider()
     const attachmentCapabilities = runtimeInfo?.capabilities.attachments
-    if (!attachmentCapabilities || typeof provider.uploadAttachment !== 'function') {
+    if (!attachmentCapabilities || typeof window.kunGui?.uploadRuntimeImageAttachment !== 'function') {
       throw new Error(t('composerAttachmentUnavailable'))
     }
     const attachmentIds: string[] = []
     for (const image of images) {
-      const file = base64ImageToFile(image)
-      const prepared = await prepareImageAttachmentUpload(file, attachmentCapabilities)
-      const attachment = await provider.uploadAttachment({
+      const result = await uploadRuntimeImageAttachment({
+        source: {
+          kind: 'base64',
+          dataBase64: image.dataBase64,
+          mimeType: image.mimeType
+        },
         name: fileNameFromPath(image.relativePath),
-        mimeType: prepared.mimeType,
-        dataBase64: prepared.dataBase64,
-        textFallback: prepared.textFallback,
         threadId,
         workspace
       })
-      attachmentIds.push(attachment.id)
+      attachmentIds.push(result.attachment.id)
     }
     return { images: withAttachmentIds(images, attachmentIds), attachmentIds }
   }, [runtimeInfo?.capabilities.attachments, t])
@@ -465,7 +450,7 @@ export function useWorkbenchSddTurnController({
       collected.images.length > 0 &&
       runtimeInfo?.capabilities.model.inputModalities.includes('image') === true &&
       runtimeInfo.capabilities.attachments.available === true &&
-      typeof getProvider().uploadAttachment === 'function'
+      typeof window.kunGui?.uploadRuntimeImageAttachment === 'function'
 
     let imagesForPrompt = collected.images
     let attachmentIds: string[] = []

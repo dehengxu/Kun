@@ -205,6 +205,7 @@ npm install --registry=https://registry.npmmirror.com
 | [docs/extensions/README.md](docs/extensions/README.md) | Kun Extension 开放平台：工作台应用、Agent、工具、自定义模型 Provider、账号、打包与版本兼容 |
 | [kun/README.zh-CN.md](kun/README.zh-CN.md) | Kun 运行时、CLI、环境变量、HTTP API |
 | [docs/kun-architecture.md](docs/kun-architecture.md) | 单运行时架构与 GUI 集成 |
+| [docs/project-mcp-skills.md](docs/project-mcp-skills.md) | 项目级 `.kun/project.json`、MCP 摘要授权与 Skill 发现规则 |
 | [docs/kun-cache-optimization.md](docs/kun-cache-optimization.md) | 缓存优化、token economy 与可观测性 |
 | [docs/DESIGN_MODE.md](docs/DESIGN_MODE.md) | Design 设计模式、画布、原型、设计系统与 Design -> Code 闭环 |
 | [docs/model-provider-presets.md](docs/model-provider-presets.md) | 模型 Provider 预设与扩展能力 |
@@ -241,6 +242,8 @@ npm install --registry=https://registry.npmmirror.com
 ## 许可证
 
 本项目仅供学习和参考，不可用于任何商业用途。商业使用、商业分发、SaaS/托管服务、二次销售或集成到商业产品中，均需要获得作者的单独书面授权。
+
+我们非常支持企业将 Kun 仅用于内部员工提效。此类使用只需发送邮件至 [zhongxingyuemail@gmail.com](mailto:zhongxingyuemail@gmail.com) 申请书面授权，授权不会收取任何费用。该免费内部授权不包括对外提供 SaaS/托管服务、转售、商业分发，或集成到面向客户的商业产品中。
 
 教育机构与公益教育机构可用于非商业教学、研究、课程实验和学习参考。完整条款见 [PolyForm Noncommercial License 1.0.0](./LICENSE)。
 

@@ -4,13 +4,14 @@ import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import {
   CLAW_MANAGED_INSTRUCTIONS_HEADING,
   CLAW_MODEL_IDS,
+  MODEL_REASONING_EFFORTS,
   isComposerChatModelId,
   modelProfileSupportsTextChat,
-  modelSupportsImageInput,
   type ClawImAgentProfileV1,
   type ClawImChannelV1,
   type ClawImPlatformCredentialV1,
-  type ClawImProvider
+  type ClawImProvider,
+  type ModelReasoningEffort
 } from '@shared/app-settings'
 import type { ChatState } from './chat-store-types'
 import {
@@ -25,6 +26,7 @@ import { readBrowserStorageItem, writeBrowserStorageItem } from '../lib/browser-
 
 const COMPOSER_MODEL_STORAGE_KEY = 'kun.composerModel'
 const COMPOSER_PROVIDER_STORAGE_KEY = 'kun.composerProviderId'
+const COMPOSER_REASONING_EFFORT_STORAGE_KEY = 'kun.composerReasoningEffortByModel.v1'
 const THREAD_COMPOSER_SELECTION_STORAGE_KEY = 'kun.threadComposerSelection.v1'
 const THREAD_COMPOSER_MODE_STORAGE_KEY = 'kun.threadComposerMode.v1'
 const COMPOSER_MODE_STORAGE_KEY = 'kun.composerMode'
@@ -32,8 +34,16 @@ const TURN_MODEL_STORAGE_KEY = 'kun.turnModelLabel'
 const CODE_WORKSPACE_ROOTS_STORAGE_KEY = 'kun.codeWorkspaceRoots.v1'
 export const MAX_CODE_WORKSPACE_ROOTS = 30
 export const MAX_THREAD_COMPOSER_SELECTIONS = 500
+export const MAX_COMPOSER_REASONING_EFFORTS = 500
 export const MAX_TURN_MODEL_LABELS = 500
-export const DEFAULT_COMPOSER_CONTEXT_WINDOW_TOKENS = 128_000
+export const DEFAULT_COMPOSER_CONTEXT_WINDOW_TOKENS = 256_000
+const LEGACY_COMPOSER_REASONING_EFFORTS: readonly ModelReasoningEffort[] = [
+  'off',
+  'low',
+  'medium',
+  'high',
+  'max'
+]
 
 export type ComposerPlanMode = 'plan' | 'agent'
 
@@ -76,6 +86,80 @@ export function persistComposerProviderId(providerId: string): void {
     writeBrowserStorageItem(COMPOSER_PROVIDER_STORAGE_KEY, normalized)
   } else {
     writeBrowserStorageItem(COMPOSER_PROVIDER_STORAGE_KEY, '')
+  }
+}
+
+export function readStoredComposerReasoningEffort(
+  modelId: string,
+  providerId = ''
+): ModelReasoningEffort {
+  const key = composerReasoningEffortStorageKey(modelId, providerId)
+  if (!key) return 'max'
+  return loadComposerReasoningEffortMap()[key] ?? 'max'
+}
+
+export function persistComposerReasoningEffort(
+  modelId: string,
+  providerId: string,
+  effort: ModelReasoningEffort
+): void {
+  const key = composerReasoningEffortStorageKey(modelId, providerId)
+  if (!key || !MODEL_REASONING_EFFORTS.includes(effort)) return
+  const map = loadComposerReasoningEffortMap()
+  delete map[key]
+  map[key] = effort
+  writeBrowserStorageItem(
+    COMPOSER_REASONING_EFFORT_STORAGE_KEY,
+    JSON.stringify(Object.fromEntries(Object.entries(map).slice(-MAX_COMPOSER_REASONING_EFFORTS)))
+  )
+}
+
+export function composerReasoningEffortForSelection(
+  modelGroups: readonly ModelProviderModelGroup[],
+  modelId: string,
+  providerId = ''
+): ModelReasoningEffort {
+  const stored = readStoredComposerReasoningEffort(modelId, providerId)
+  const profile = modelProfileForComposerSelection(modelGroups, modelId, providerId)
+  const resolved = profile?.reasoning
+    ? profile.reasoning.supportedEfforts.includes(stored)
+      ? stored
+      : profile.reasoning.defaultEffort
+    : LEGACY_COMPOSER_REASONING_EFFORTS.includes(stored)
+      ? stored
+      : 'max'
+  persistComposerReasoningEffort(modelId, providerId, resolved)
+  return resolved
+}
+
+export function normalizeComposerReasoningEffortMap(
+  raw: unknown
+): Record<string, ModelReasoningEffort> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const entries: Array<[string, ModelReasoningEffort]> = []
+  for (const [rawKey, rawValue] of Object.entries(raw as Record<string, unknown>)) {
+    const key = rawKey.trim()
+    if (!key || typeof rawValue !== 'string') continue
+    const effort = rawValue.trim().toLowerCase() as ModelReasoningEffort
+    if (!MODEL_REASONING_EFFORTS.includes(effort)) continue
+    entries.push([key, effort])
+  }
+  return Object.fromEntries(entries.slice(-MAX_COMPOSER_REASONING_EFFORTS))
+}
+
+function composerReasoningEffortStorageKey(modelId: string, providerId: string): string {
+  const model = normalizeComposerModelId(modelId)
+  if (!model) return ''
+  return JSON.stringify([providerId.trim().toLowerCase(), model])
+}
+
+function loadComposerReasoningEffortMap(): Record<string, ModelReasoningEffort> {
+  try {
+    const raw = readBrowserStorageItem(COMPOSER_REASONING_EFFORT_STORAGE_KEY)
+    if (!raw) return {}
+    return normalizeComposerReasoningEffortMap(JSON.parse(raw))
+  } catch {
+    return {}
   }
 }
 
@@ -200,46 +284,6 @@ export function resolveComposerContextWindowTokens(
     return profile.contextWindowTokens
   }
   return DEFAULT_COMPOSER_CONTEXT_WINDOW_TOKENS
-}
-
-export function canSwitchComposerModel(
-  lockVisionToTextSwitch: boolean,
-  modelGroups: readonly ModelProviderModelGroup[],
-  currentModelId: string,
-  currentProviderId: string,
-  nextModelId: string,
-  nextProviderId: string
-): boolean {
-  if (!lockVisionToTextSwitch) return true
-  const currentProfile = modelProfileForComposerSelection(modelGroups, currentModelId, currentProviderId)
-  if (!modelSupportsImageInput(currentProfile)) return true
-  const nextProfile = modelProfileForComposerSelection(modelGroups, nextModelId, nextProviderId)
-  return modelSupportsImageInput(nextProfile)
-}
-
-// The vision→text downgrade guard must only engage when the conversation
-// actually carries image content that a text-only model could not consume.
-// Locking on the mere presence of a user message (regardless of attachments)
-// made every text model unselectable whenever a vision model was active — see
-// https://github.com/KunAgent/Kun/issues/579. Document attachments are
-// text-extractable and therefore safe to downgrade with; only image (or
-// unknown-kind, e.g. restored-session) attachments keep the lock engaged.
-export function conversationHasVisionAttachments(blocks: readonly ChatBlock[]): boolean {
-  return blocks.some((block) => {
-    if (block.kind !== 'user') return false
-    const meta = block.meta
-    if (!meta) return false
-    const refsById = new Map((meta.attachments ?? []).map((ref) => [ref.id, ref]))
-    const attachmentIds = new Set([
-      ...(meta.attachmentIds ?? []),
-      ...(meta.attachments ?? []).map((ref) => ref.id)
-    ])
-    for (const id of attachmentIds) {
-      // 'image' or unspecified kind keeps the lock; 'document' is safe to drop.
-      if (refsById.get(id)?.kind !== 'document') return true
-    }
-    return false
-  })
 }
 
 function modelProfileForComposerSelection(

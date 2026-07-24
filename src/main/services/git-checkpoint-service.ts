@@ -18,7 +18,8 @@ type GitCheckpointMetadata = {
   threadId: string
   repositoryRoot: string
   workspaceRoot?: string
-  head: string
+  /** `null` when the repository had no commit at checkpoint time. */
+  head: string | null
   checkpointRef?: string | null
   currentBranch: string | null
   createdAt: string
@@ -211,12 +212,28 @@ async function writeHeadBundle(repositoryRoot: string, path: string): Promise<vo
   await runGit(repositoryRoot, ['bundle', 'create', path, 'HEAD'], 30_000)
 }
 
+async function resolveHead(repositoryRoot: string): Promise<string | null> {
+  try {
+    const { stdout } = await runGit(repositoryRoot, ['rev-parse', '--verify', '--quiet', 'HEAD'])
+    const head = stdout.trim()
+    return head || null
+  } catch (error) {
+    // `git init` creates an unborn branch: it is a valid repository, but
+    // `HEAD` does not resolve to a commit until the first commit is made.
+    const exitCode = typeof error === 'object' && error !== null && 'code' in error
+      ? (error as { code?: unknown }).code
+      : undefined
+    if (exitCode === 1) return null
+    throw error
+  }
+}
+
 async function resolveCheckpointTarget(
   repositoryRoot: string,
   root: string,
   metadata: GitCheckpointMetadata
 ): Promise<string> {
-  const head = metadata.head.trim()
+  const head = metadata.head?.trim() ?? ''
   if (await commitExists(repositoryRoot, head)) return head
 
   const bundlePath = checkpointHeadBundlePath(root, metadata.checkpointId)
@@ -236,6 +253,31 @@ async function resolveRepositoryRoot(workspaceRoot: string): Promise<string | nu
   if (!cwd) return null
   const { stdout } = await runGit(cwd, ['rev-parse', '--show-toplevel'])
   return stdout.trim()
+}
+
+async function restoreUnbornCheckpoint(repositoryRoot: string, currentBranch: string | null): Promise<void> {
+  // First make the worktree safe to switch. A rescue checkpoint has already
+  // been written by the caller, so these destructive operations are
+  // recoverable just like the normal committed-HEAD restore path.
+  await runGit(repositoryRoot, ['reset', '--hard'], 30_000)
+  await runGit(repositoryRoot, ['clean', '-fd'], 30_000)
+
+  if (currentBranch) {
+    // An unborn branch has no ref. Remove any branch created after the
+    // checkpoint, then recreate the original branch with no history.
+    await runGit(repositoryRoot, ['update-ref', '-d', `refs/heads/${currentBranch}`], 30_000)
+    await runGit(repositoryRoot, ['checkout', '--orphan', currentBranch], 30_000)
+  } else {
+    // This is an unusual detached-unborn repository. Preserve the empty index
+    // even though there is no branch name to reconstruct.
+    await runGit(repositoryRoot, ['update-ref', '-d', 'HEAD'], 30_000)
+  }
+
+  // `checkout --orphan` keeps the previous worktree until the index is reset.
+  // Empty the index first, then clean the now-untracked files so the stored
+  // staged/unstaged patches and untracked snapshot can be applied below.
+  await runGit(repositoryRoot, ['read-tree', '--empty'], 30_000)
+  await runGit(repositoryRoot, ['clean', '-fd'], 30_000)
 }
 
 /**
@@ -552,8 +594,10 @@ export async function createGitCheckpoint(params: {
     await rm(dir, { recursive: true, force: true })
     await mkdir(join(dir, 'untracked'), { recursive: true })
 
-    const head = (await runGit(repositoryRoot, ['rev-parse', 'HEAD'])).stdout.trim()
-    await writeHeadBundle(repositoryRoot, checkpointHeadBundlePath(root, checkpointId))
+    const head = await resolveHead(repositoryRoot)
+    if (head) {
+      await writeHeadBundle(repositoryRoot, checkpointHeadBundlePath(root, checkpointId))
+    }
     const currentBranchRaw = (await runGit(repositoryRoot, ['branch', '--show-current'])).stdout.trim()
     const currentBranch = currentBranchRaw || null
     const candidateUntracked = splitNul(
@@ -733,8 +777,6 @@ export async function restoreGitCheckpoint(params: {
       }
     }
     await assertNoUnmerged(repositoryRoot)
-    const targetRef = await resolveCheckpointTarget(repositoryRoot, root, metadata)
-
     // Busy guard: a checkpoint restore runs `git reset --hard` + `git clean
     // -fd`, which would destroy files the agent is actively editing. Before
     // those destructive ops, ask the runtime whether any thread is currently
@@ -805,15 +847,20 @@ export async function restoreGitCheckpoint(params: {
     }
     const rescueCheckpointId = rescue.checkpointId
 
-    await runGit(repositoryRoot, ['reset', '--hard'], 30_000)
-    await runGit(repositoryRoot, ['clean', '-fd'], 30_000)
-    if (metadata.currentBranch) {
-      await runGit(repositoryRoot, ['checkout', '-B', metadata.currentBranch, targetRef], 30_000)
+    if (metadata.head) {
+      const targetRef = await resolveCheckpointTarget(repositoryRoot, root, metadata)
+      await runGit(repositoryRoot, ['reset', '--hard'], 30_000)
+      await runGit(repositoryRoot, ['clean', '-fd'], 30_000)
+      if (metadata.currentBranch) {
+        await runGit(repositoryRoot, ['checkout', '-B', metadata.currentBranch, targetRef], 30_000)
+      } else {
+        await runGit(repositoryRoot, ['checkout', '--detach', targetRef], 30_000)
+      }
+      await runGit(repositoryRoot, ['reset', '--hard', targetRef], 30_000)
+      await runGit(repositoryRoot, ['clean', '-fd'], 30_000)
     } else {
-      await runGit(repositoryRoot, ['checkout', '--detach', targetRef], 30_000)
+      await restoreUnbornCheckpoint(repositoryRoot, metadata.currentBranch)
     }
-    await runGit(repositoryRoot, ['reset', '--hard', targetRef], 30_000)
-    await runGit(repositoryRoot, ['clean', '-fd'], 30_000)
 
     const dir = checkpointDir(root, checkpointId)
     await applyPatchIfPresent(repositoryRoot, join(dir, 'staged.patch'), true)

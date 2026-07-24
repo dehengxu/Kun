@@ -8,7 +8,7 @@
 
 - [x] 2.1 Add pure canonical effort ordering, even rail-position mapping, nearest-pointer selection, and keyboard movement helpers with `auto` at the far-right stop.
 - [x] 2.2 Implement the Code-only borderless model and reasoning text triggers, model-only menu, and viewport-clamped reasoning portal.
-- [x] 2.3 Implement click/drag snapping, slider ARIA, outside dismissal, Escape focus return, and busy-state disabling.
+- [x] 2.3 Implement click/drag snapping, slider ARIA, outside dismissal, Escape focus return, and active-turn next-input availability.
 
 ## 3. Visual System
 
@@ -27,3 +27,17 @@
 - [x] 4.4 Verify the enhanced rail in light and dark themes, confirm independent bubble motion and reduced-motion overrides, and rerun focused tests plus typecheck.
 - [x] 4.5 Sample the rendered color layer at multiple animation times to confirm visible movement and a seamless loop, then rerun focused checks and build validation.
 - [x] 4.6 Add effort-gating coverage and visually verify a calm medium state against an energized high state before rerunning focused checks.
+
+## 5. Active-Turn Next-Input Controls
+
+- [x] 5.1 Update the proposal, design, and specification so active-turn model and reasoning changes explicitly apply only to the next submitted turn.
+- [x] 5.2 Decouple model and reasoning availability from the active-turn busy gate while preserving unrelated execution-setting gates.
+- [x] 5.3 Add regression coverage proving the busy Code composer keeps both split controls enabled and snapshots their selections into the next queued input.
+- [x] 5.4 Run the focused composer and queued-message tests plus renderer typecheck.
+
+## 6. Model-Scoped Reasoning Persistence
+
+- [x] 6.1 Update the proposal, design, and specification so reasoning choices persist independently per provider/model pair while runtime request semantics remain unchanged.
+- [x] 6.2 Move the active reasoning effort into the chat store and add safe, versioned renderer-local persistence that preserves `off`, restores on model/thread changes, and normalizes unsupported values.
+- [x] 6.3 Add regression coverage for valid, missing, malformed, independent-model, restart-restore, and explicit-`off` request behavior.
+- [x] 6.4 Run the focused renderer tests, `npm run typecheck`, and `git diff --check`.

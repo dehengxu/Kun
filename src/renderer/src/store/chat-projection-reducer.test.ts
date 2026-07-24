@@ -11,7 +11,8 @@ const context = {
     cleared || !goal ? 'Goal cleared' : `Goal ${goal.status}: ${goal.objective}`,
   runtimeStatusText: () => 'Runtime status',
   runtimeErrorView: (event: { message: string; code?: string }) => ({
-    summary: event.message,
+    summary: `Summary: ${event.message}`,
+    message: event.message,
     ...(event.code ? { code: event.code } : {})
   }),
   upsertRuntimeError: (blocks: ChatState['blocks'], block: ChatState['blocks'][number]) => {
@@ -100,6 +101,156 @@ describe('chat projection reducer', () => {
     const projected = project(state(), [approval, input, approval, input])
     expect(projected.blocks).toHaveLength(2)
   })
+
+  it('projects the sanitized runtime message as a durable conversation error', () => {
+    const projected = project(state(), [{
+      type: 'runtime_error_received',
+      payload: {
+        itemId: 'error_1',
+        message: 'provider returned HTTP 429',
+        code: 'http_429',
+        severity: 'error'
+      }
+    }])
+
+    expect(projected.blocks).toContainEqual(expect.objectContaining({
+      kind: 'system',
+      id: 'error_1',
+      text: 'provider returned HTTP 429',
+      code: 'http_429',
+      severity: 'error',
+      runtimeError: true
+    }))
+    expect(projected.blocks[0]).not.toMatchObject({ text: 'Summary: provider returned HTTP 429' })
+  })
+
+  it('reconciles a delayed stable user event with its optimistic bubble', () => {
+    const createdAt = '2026-07-11T00:00:00.000Z'
+    const initial = {
+      ...state(),
+      busy: false,
+      currentTurnId: null,
+      currentTurnUserId: null,
+      turnStartedAtByUserId: {},
+      blocks: [
+        {
+          kind: 'user' as const,
+          id: 'u-optimistic',
+          createdAt,
+          text: '检查一下脚本并优化执行进度'
+        },
+        {
+          kind: 'compaction' as const,
+          id: 'compaction_1',
+          status: 'success' as const,
+          summary: 'Existing summary'
+        }
+      ]
+    }
+
+    const projected = project(initial, [{
+      type: 'user_message_received',
+      payload: {
+        itemId: 'item_turn_1_user',
+        turnId: 'turn_1',
+        createdAt,
+        text: '分析脚本是否存在问题，并优化执行过程和进度。',
+        meta: { displayText: '检查一下脚本并优化执行进度' }
+      }
+    }])
+
+    expect(projected.blocks).toHaveLength(2)
+    expect(projected.blocks[0]).toMatchObject({
+      kind: 'user',
+      id: 'item_turn_1_user',
+      meta: { displayText: '检查一下脚本并优化执行进度' }
+    })
+    expect(projected.blocks[1]).toMatchObject({ kind: 'compaction', id: 'compaction_1' })
+  })
+
+  it('keeps only the latest automatic compaction marker for a turn', () => {
+    const projected = project(state(), [
+      {
+        type: 'compaction_updated',
+        payload: {
+          itemId: 'compaction_1',
+          turnId: 'turn_1',
+          summary: 'first summary',
+          status: 'success',
+          auto: true
+        }
+      },
+      {
+        type: 'compaction_updated',
+        payload: {
+          itemId: 'compaction_2',
+          turnId: 'turn_1',
+          summary: 'new summary',
+          status: 'success',
+          auto: true
+        }
+      }
+    ])
+
+    expect(projected.blocks).toEqual([
+      expect.objectContaining({
+        kind: 'compaction',
+        id: 'compaction_2',
+        turnId: 'turn_1',
+        summary: 'new summary'
+      })
+    ])
+  })
+
+  it('retires a pending approval after its runtime resolution is projected', () => {
+    const projected = project(state(), [
+      {
+        type: 'approval_received',
+        payload: { approvalId: 'approval_1', summary: 'Run tests' }
+      },
+      {
+        type: 'approval_status_changed',
+        payload: {
+          approvalId: 'approval_1',
+          status: 'expired',
+          errorMessage: 'turn aborted while awaiting approval'
+        }
+      }
+    ])
+
+    expect(projected.blocks).toContainEqual(expect.objectContaining({
+      kind: 'approval',
+      approvalId: 'approval_1',
+      status: 'expired',
+      errorMessage: 'turn aborted while awaiting approval'
+    }))
+  })
+
+  it.each(['allowed', 'denied'] as const)(
+    'clears stale approval errors when the runtime resolves it as %s',
+    (status) => {
+      const initial = {
+        ...state(),
+        blocks: [{
+          kind: 'approval' as const,
+          id: 'approval-approval_1',
+          approvalId: 'approval_1',
+          summary: 'Run tests',
+          status: 'error' as const,
+          errorMessage: 'response was lost'
+        }]
+      }
+
+      const projected = project(initial, [{
+        type: 'approval_status_changed',
+        payload: { approvalId: 'approval_1', status }
+      }])
+      const approval = projected.blocks[0]
+
+      expect(approval).toMatchObject({ kind: 'approval', status })
+      expect(approval).not.toHaveProperty('errorMessage')
+    }
+  )
 
   it('reconciles a persisted completion through the same projection reducer', () => {
     const initial = {

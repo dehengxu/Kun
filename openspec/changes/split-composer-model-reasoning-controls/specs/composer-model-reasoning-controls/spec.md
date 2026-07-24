@@ -12,8 +12,8 @@ The Code chat composer SHALL present model selection and reasoning effort as two
 - **THEN** it retains the existing combined model-and-reasoning control
 
 #### Scenario: Active turn
-- **WHEN** a turn is in progress and composer setting changes are gated
-- **THEN** both visible controls remain legible and do not accept a new selection
+- **WHEN** a turn is in progress
+- **THEN** both visible controls remain operable and a new selection configures the next submitted turn without changing the request already in flight
 
 ### Requirement: Focused model menu
 In Code chat, the model control SHALL open a menu dedicated to provider and model selection without embedding reasoning selection.
@@ -109,13 +109,25 @@ The Code controls SHALL remain understandable without visible trigger frames or 
 - **WHEN** the available Code composer width is constrained
 - **THEN** the model label truncates independently while the reasoning label, voice, optimize, send, and stop controls remain unobstructed
 
-### Requirement: Preserve existing runtime semantics
-Changing the composer UI SHALL preserve existing session reasoning state and turn request behavior.
+### Requirement: Preserve runtime semantics and model-scoped preference
+Changing the composer UI SHALL preserve turn request behavior and SHALL persist reasoning choices independently for each provider/model pair.
 
 #### Scenario: Submit after reasoning change
 - **WHEN** the user selects a supported effort and sends the next turn
 - **THEN** the existing turn submission path receives that named `reasoningEffort` value without any new runtime or IPC field
 
-#### Scenario: Session state
-- **WHEN** the user changes reasoning effort in Code chat
-- **THEN** the existing Workbench session state supplies that effort to the next turn without adding persistence or a runtime contract field
+#### Scenario: Restore a model preference
+- **WHEN** the user selects a reasoning effort for a provider/model pair and later restarts the app or returns to that model
+- **THEN** the chat store restores that pair's most recently selected effort, including `off`, without adding a runtime contract field
+
+#### Scenario: Keep model preferences independent
+- **WHEN** the user assigns different reasoning efforts to two provider/model pairs
+- **THEN** switching between them restores each pair's own effort without overwriting the other
+
+#### Scenario: Invalid or unsupported persisted effort
+- **WHEN** a stored effort is malformed, unknown, or unsupported by the selected model profile
+- **THEN** the composer falls back safely to `max` and then to the model's declared default when required, persisting the resulting valid effort
+
+#### Scenario: Change settings during an active turn
+- **WHEN** the user changes the model or reasoning effort while a turn is in progress
+- **THEN** the in-flight turn keeps the model and reasoning values captured at submission and the next submitted turn receives the newly selected values

@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowDown, Check, ChevronDown, ChevronRight, Copy, Download, File, FileEdit, GitFork, ImageIcon, Loader2, MessageSquareQuote, PencilLine, RotateCcw, Terminal, Video, Wrench } from 'lucide-react'
+import { ArrowDown, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, File, FileEdit, GitFork, ImageIcon, Loader2, MessageSquareQuote, PencilLine, RotateCcw, Terminal, Video, Wrench } from 'lucide-react'
 import type { AttachmentReference, ChatBlock, GeneratedFileReference, RuntimeDisclosureMetadata, ToolBlock, UserFileReference, UserInputAnswer } from '../../agent/types'
 import { extractUnifiedDiffText } from '../../lib/diff-stats'
 import { useChatStore } from '../../store/chat-store'
@@ -25,6 +25,11 @@ import {
   shouldShowQuestionHeader
 } from './user-input-panel-logic'
 import { InjectedMemoryMetaChip } from './injected-memory-meta-chip'
+import { isPresentationArtifactPath } from './presentation-file-artifacts'
+import { readGeneratedWorkspaceImagePreview } from './generated-media-preview'
+import { useTimelineFilePreviewWorkspaceRoot } from './timeline-file-preview-workspace'
+import { attachmentPreviewLoader } from './attachment-preview-loader'
+import { useDeferredRender } from '../../hooks/use-deferred-render'
 
 const COPY_FEEDBACK_RESET_MS = 1600
 const ASSISTANT_EXPORT_FORMATS: WriteExportFormat[] = ['pdf', 'docx', 'png', 'html']
@@ -215,9 +220,11 @@ function BackgroundSubagentNoticeBubble({
  * a fresh turn on the same thread (see chat-store `rewindAndResend`).
  */
 function UserMessageBubble({
-  block
+  block,
+  allowThreadActions = true
 }: {
   block: Extract<ChatBlock, { kind: 'user' }>
+  allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const busy = useChatStore((s) => s.busy)
@@ -242,7 +249,7 @@ function UserMessageBubble({
       ? block.meta.displayText.trim()
       : null
   const displayText = metaDisplayText ?? parsedWritePrompt?.userInput ?? parsedClawPrompt?.text ?? block.text
-  const canEdit = route === 'chat' || !metaDisplayText
+  const canEdit = allowThreadActions && (route === 'chat' || !metaDisplayText)
   const showClawInboundCard = route === 'claw' && parsedClawPrompt?.inbound === true
 
   useEffect(() => {
@@ -546,6 +553,11 @@ function normalizeGeneratedFileReference(entry: unknown): GeneratedFileReference
   if (!entry || typeof entry !== 'object') return null
   const raw = entry as Record<string, unknown>
   const id = readMediaString(raw, 'id', 'attachmentId')
+  const artifactId = readMediaString(raw, 'artifactId')
+  const mediaHandleId = readMediaString(raw, 'mediaHandleId')
+  const ownerExtensionId = readMediaString(raw, 'ownerExtensionId')
+  const ownerExtensionVersion = readMediaString(raw, 'ownerExtensionVersion')
+  const workspaceId = readMediaString(raw, 'workspaceId')
   const name = readMediaString(raw, 'name', 'fileName', 'filename')
   const mimeType = readMediaString(raw, 'mimeType', 'type', 'mediaType')
   const previewUrl = readMediaString(raw, 'previewUrl', 'dataUrl', 'url')
@@ -555,8 +567,17 @@ function normalizeGeneratedFileReference(entry: unknown): GeneratedFileReference
   const byteSize = typeof raw.byteSize === 'number' && Number.isFinite(raw.byteSize) ? raw.byteSize : undefined
   const width = typeof raw.width === 'number' && Number.isFinite(raw.width) ? raw.width : undefined
   const height = typeof raw.height === 'number' && Number.isFinite(raw.height) ? raw.height : undefined
+  const availability = raw.availability === 'available' || raw.availability === 'unavailable'
+    ? raw.availability
+    : undefined
   const normalized: GeneratedFileReference = {
     ...(id ? { id } : {}),
+    ...(artifactId ? { artifactId } : {}),
+    ...(mediaHandleId ? { mediaHandleId } : {}),
+    ...(availability ? { availability } : {}),
+    ...(ownerExtensionId ? { ownerExtensionId } : {}),
+    ...(ownerExtensionVersion ? { ownerExtensionVersion } : {}),
+    ...(workspaceId ? { workspaceId } : {}),
     ...(name ? { name } : {}),
     ...(mimeType ? { mimeType } : {}),
     ...(byteSize ? { byteSize } : {}),
@@ -671,13 +692,39 @@ type MediaPreviewRequest =
   | { key: string; id: string; mode: 'attachment' }
   | { key: string; path: string; mode: 'workspace-image' }
 
+type GeneratedMediaScrollAvailability = {
+  canScrollBackward: boolean
+  canScrollForward: boolean
+}
+
+export function generatedMediaScrollAvailability({
+  scrollLeft,
+  clientWidth,
+  scrollWidth
+}: {
+  scrollLeft: number
+  clientWidth: number
+  scrollWidth: number
+}): GeneratedMediaScrollAvailability {
+  const edgeTolerance = 2
+  return {
+    canScrollBackward: scrollLeft > edgeTolerance,
+    canScrollForward: scrollLeft + clientWidth < scrollWidth - edgeTolerance
+  }
+}
+
 function isMediaPreviewRequest(entry: MediaPreviewRequest | null): entry is MediaPreviewRequest {
   return entry !== null
 }
 
-function useMediaPreviewUrls(media: TimelineMediaReference[]): Record<string, string> {
+function useMediaPreviewUrls(
+  media: TimelineMediaReference[],
+  enabled: boolean
+): Record<string, string> {
   const activeThreadId = useChatStore((s) => s.activeThreadId)
-  const workspaceRoot = useChatStore((s) => s.workspaceRoot)
+  const globalWorkspaceRoot = useChatStore((s) => s.workspaceRoot)
+  const timelineWorkspaceRoot = useTimelineFilePreviewWorkspaceRoot()
+  const workspaceRoot = timelineWorkspaceRoot || globalWorkspaceRoot
   const [resolvedPreviewUrls, setResolvedPreviewUrls] = useState<Record<string, string>>({})
   const [failedPreviewIds, setFailedPreviewIds] = useState<Record<string, true>>({})
   const previewRequests = useMemo(
@@ -686,7 +733,7 @@ function useMediaPreviewUrls(media: TimelineMediaReference[]): Record<string, st
         .map((item) => {
           const key = mediaKey(item)
           if (item.previewUrl || resolvedPreviewUrls[key] || failedPreviewIds[key]) return null
-          if (item.id && (mediaIsImage(item) || mediaIsVideo(item) || !item.mimeType)) {
+          if (item.id && !item.artifactId && (mediaIsImage(item) || mediaIsVideo(item) || !item.mimeType)) {
             return { key, id: item.id, mode: 'attachment' } satisfies MediaPreviewRequest
           }
           const path = mediaIsImage(item) ? mediaPath(item) : undefined
@@ -705,28 +752,47 @@ function useMediaPreviewUrls(media: TimelineMediaReference[]): Record<string, st
     .join('\n')
 
   useEffect(() => {
-    if (!missingPreviewKey) return
+    if (!enabled || !missingPreviewKey) return
     const provider = getProvider()
     let cancelled = false
     void Promise.all(
       previewRequests.map(async (request) => {
         try {
           if (request.mode === 'attachment' && request.id && typeof provider.getAttachmentContent === 'function') {
-            const content = await provider.getAttachmentContent(request.id, {
+            const attachmentId = request.id
+            const getAttachmentContent = provider.getAttachmentContent.bind(provider)
+            const scope = {
               ...(activeThreadId ? { threadId: activeThreadId } : {}),
               ...(workspaceRoot ? { workspace: workspaceRoot } : {})
-            })
+            }
+            const previewUrl = await attachmentPreviewLoader.load(
+              JSON.stringify(['attachment', attachmentId, activeThreadId ?? '', workspaceRoot]),
+              async () => {
+                const content = await getAttachmentContent(attachmentId, scope)
+                return `data:${content.attachment.mimeType};base64,${content.dataBase64}`
+              }
+            )
             return {
               key: request.key,
-              previewUrl: `data:${content.attachment.mimeType};base64,${content.dataBase64}`
+              previewUrl
             }
           }
           if (request.mode === 'workspace-image' && request.path && typeof window.kunGui?.readWorkspaceImage === 'function') {
-            const result = await window.kunGui.readWorkspaceImage({
-              path: request.path,
-              ...(workspaceRoot ? { workspaceRoot } : {})
-            })
-            if (result.ok) return { key: request.key, previewUrl: result.dataUrl }
+            const imagePath = request.path
+            const readImage = window.kunGui.readWorkspaceImage
+            const previewUrl = await attachmentPreviewLoader.load(
+              JSON.stringify(['workspace-image', imagePath, workspaceRoot]),
+              async () => {
+                const resolved = await readGeneratedWorkspaceImagePreview({
+                  path: imagePath,
+                  ...(workspaceRoot ? { workspaceRoot } : {}),
+                  readImage
+                })
+                if (!resolved) throw new Error(`workspace image preview is unavailable: ${imagePath}`)
+                return resolved
+              }
+            )
+            if (previewUrl) return { key: request.key, previewUrl }
           }
           return { key: request.key, failed: true as const }
         } catch {
@@ -755,7 +821,7 @@ function useMediaPreviewUrls(media: TimelineMediaReference[]): Record<string, st
     return () => {
       cancelled = true
     }
-  }, [activeThreadId, missingPreviewKey, previewRequests, workspaceRoot])
+  }, [activeThreadId, enabled, missingPreviewKey, previewRequests, workspaceRoot])
 
   return resolvedPreviewUrls
 }
@@ -770,25 +836,29 @@ function MediaPreviewTile({
   variant: 'user' | 'tool' | 'conversation'
 }): ReactElement {
   const { t } = useTranslation('common')
-  const workspaceRoot = useChatStore((s) => s.workspaceRoot)
+  const globalWorkspaceRoot = useChatStore((s) => s.workspaceRoot)
+  const timelineWorkspaceRoot = useTimelineFilePreviewWorkspaceRoot()
+  const workspaceRoot = timelineWorkspaceRoot || globalWorkspaceRoot
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false)
+  const unavailable = 'availability' in media && media.availability === 'unavailable'
   const title = mediaName(media)
   const filePath = mediaPath(media)
   const mimeType = media.mimeType || (mediaIsImage(media) ? 'image' : mediaIsVideo(media) ? 'video' : '')
   const byteSize = formatByteSize(media.byteSize)
-  const hasRichPreview = !!previewUrl && (mediaIsImage(media) || mediaIsVideo(media))
   const tileClass =
     variant === 'conversation'
-      ? hasRichPreview
-        ? 'h-72 w-full overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm sm:h-80'
-        : 'min-h-44 w-full overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
+      ? 'group aspect-square w-52 shrink-0 snap-start overflow-hidden rounded-xl border border-ds-border-muted bg-ds-card shadow-sm'
       : variant === 'tool'
         ? 'block h-32 w-40 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
         : 'block h-28 w-36 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
   const revealClass = variant === 'user' ? '' : ' ds-media-printer-reveal'
-  const mediaClass = 'h-full w-full object-contain'
-  const canSave = Boolean(filePath || dataUrlPayload(previewUrl))
+  const mediaClass = `h-full w-full ${variant === 'conversation' ? 'object-cover' : 'object-contain'}`
+  const canSave = !unavailable && Boolean(filePath || dataUrlPayload(previewUrl))
+  const canOpenArtifact = !unavailable && Boolean(
+    media.artifactId && media.ownerExtensionId && media.ownerExtensionVersion &&
+    media.workspaceId && workspaceRoot
+  )
   const saveLabel =
     saveState === 'saving'
       ? t('generatedFileSaving')
@@ -830,10 +900,26 @@ function MediaPreviewTile({
       }).catch(() => undefined)
     }
   }
+  const handleArtifactAction = async (action: 'open' | 'reveal'): Promise<void> => {
+    if (!canOpenArtifact || typeof window.kunGui?.openExtensionArtifact !== 'function') return
+    const result = await window.kunGui.openExtensionArtifact({
+      artifactId: media.artifactId!,
+      ownerExtensionId: media.ownerExtensionId!,
+      ownerExtensionVersion: media.ownerExtensionVersion!,
+      workspaceId: media.workspaceId!,
+      workspaceRoot: workspaceRoot!,
+      action
+    })
+    setSaveState(result.ok ? 'saved' : 'error')
+  }
   const saveButtonClass =
     'inline-flex h-7 items-center justify-center rounded-md border border-ds-border-muted bg-ds-card/90 px-2 text-[11.5px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50'
   const iconButtonClass =
-    'absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-md border border-ds-border-muted bg-ds-card/92 text-ds-muted shadow-sm backdrop-blur transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50'
+    `absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-md border border-ds-border-muted bg-ds-card/92 text-ds-muted shadow-sm backdrop-blur transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50 ${
+      variant === 'conversation'
+        ? 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100'
+        : ''
+    }`
   const saveIcon = saveState === 'saving'
     ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
     : saveState === 'saved'
@@ -914,7 +1000,9 @@ function MediaPreviewTile({
             {title}
           </div>
           <div className="mt-0.5 truncate text-[11px] text-ds-faint">
-            {[mimeType, byteSize].filter(Boolean).join(' · ') || t('generatedFilePreviewUnavailable')}
+            {unavailable
+              ? t('generatedFilePreviewUnavailable')
+              : [mimeType, byteSize].filter(Boolean).join(' · ') || t('generatedFilePreviewUnavailable')}
           </div>
         </div>
       </div>
@@ -929,7 +1017,25 @@ function MediaPreviewTile({
           <span className="mr-1.5">{saveIcon}</span>
           {t('generatedFileDownload')}
         </button>
-      {filePath ? (
+      {canOpenArtifact ? (
+        <>
+          <button
+            type="button"
+            onClick={() => void handleArtifactAction('open')}
+            className={saveButtonClass}
+          >
+            {t('filePreviewOpenEditor')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleArtifactAction('reveal')}
+            className={saveButtonClass}
+          >
+            {t('fileTreeRevealInFileManager')}
+          </button>
+        </>
+      ) : null}
+      {filePath && !unavailable ? (
         <button
           type="button"
           onClick={() => void openWorkspacePathInEditor({ path: filePath }, workspaceRoot)}
@@ -950,28 +1056,122 @@ function MediaAttachmentGallery({
   media: TimelineMediaReference[]
   variant: 'user' | 'tool' | 'conversation'
 }): ReactElement | null {
-  const resolvedPreviewUrls = useMediaPreviewUrls(media)
+  const { t } = useTranslation('common')
+  const { ref: previewAdmissionRef, shouldRender: shouldLoadPreviews } = useDeferredRender<HTMLDivElement>({
+    enabled: media.length > 0,
+    rootMargin: '480px',
+    debounceMs: 50,
+    idleTimeoutMs: 250
+  })
+  const resolvedPreviewUrls = useMediaPreviewUrls(media, shouldLoadPreviews)
+  const conversationScrollerRef = useRef<HTMLDivElement>(null)
+  const [scrollAvailability, setScrollAvailability] = useState<GeneratedMediaScrollAvailability>({
+    canScrollBackward: false,
+    canScrollForward: false
+  })
+
+  useEffect(() => {
+    if (variant !== 'conversation') return
+    const scroller = conversationScrollerRef.current
+    if (!scroller) return
+
+    const updateAvailability = (): void => {
+      const next = generatedMediaScrollAvailability(scroller)
+      setScrollAvailability((current) =>
+        current.canScrollBackward === next.canScrollBackward &&
+        current.canScrollForward === next.canScrollForward
+          ? current
+          : next
+      )
+    }
+    updateAvailability()
+    scroller.addEventListener('scroll', updateAvailability, { passive: true })
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateAvailability)
+      return () => {
+        scroller.removeEventListener('scroll', updateAvailability)
+        window.removeEventListener('resize', updateAvailability)
+      }
+    }
+
+    const resizeObserver = new ResizeObserver(updateAvailability)
+    resizeObserver.observe(scroller)
+    return () => {
+      scroller.removeEventListener('scroll', updateAvailability)
+      resizeObserver.disconnect()
+    }
+  }, [media.length, variant])
+
   if (media.length === 0) return null
   const wrapperClass =
-    variant === 'conversation'
-      ? `grid w-full max-w-2xl grid-cols-1 gap-2 ${media.length > 1 ? 'sm:grid-cols-2' : ''}`
-      : variant === 'tool'
+    variant === 'tool'
         ? 'flex min-w-0 flex-wrap gap-2 border-t border-ds-border-muted/60 px-4 py-3'
         : 'flex max-w-[80%] flex-wrap justify-end gap-2'
 
+  const tiles = media.map((item) => {
+    const key = mediaKey(item)
+    return (
+      <MediaPreviewTile
+        key={key}
+        media={item}
+        previewUrl={item.previewUrl ?? resolvedPreviewUrls[key]}
+        variant={variant}
+      />
+    )
+  })
+
+  if (variant === 'conversation') {
+    const moveCarousel = (direction: -1 | 1): void => {
+      const scroller = conversationScrollerRef.current
+      if (!scroller) return
+      scroller.scrollBy({
+        left: direction * Math.max(220, scroller.clientWidth * 0.72),
+        behavior: 'smooth'
+      })
+    }
+    const showCarouselControls = scrollAvailability.canScrollBackward || scrollAvailability.canScrollForward
+
+    return (
+      <div ref={previewAdmissionRef} className="group/gallery relative min-w-0 w-full" data-extension-attachment-context data-generated-media-carousel>
+        <div
+          ref={conversationScrollerRef}
+          className="flex w-full snap-x snap-mandatory gap-2 overflow-x-auto px-0.5 pb-1 scroll-smooth [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          data-generated-media-strip
+        >
+          {tiles}
+        </div>
+        {showCarouselControls ? (
+          <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => moveCarousel(-1)}
+              disabled={!scrollAvailability.canScrollBackward}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/55 text-white shadow-md backdrop-blur-sm transition hover:bg-black/70 disabled:cursor-default disabled:opacity-35"
+              title={t('generatedFilesPreviousImages')}
+              aria-label={t('generatedFilesPreviousImages')}
+            >
+              <ChevronLeft className="h-5 w-5" strokeWidth={2} />
+            </button>
+            <button
+              type="button"
+              onClick={() => moveCarousel(1)}
+              disabled={!scrollAvailability.canScrollForward}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/55 text-white shadow-md backdrop-blur-sm transition hover:bg-black/70 disabled:cursor-default disabled:opacity-35"
+              title={t('generatedFilesNextImages')}
+              aria-label={t('generatedFilesNextImages')}
+            >
+              <ChevronRight className="h-5 w-5" strokeWidth={2} />
+            </button>
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+
   return (
-    <div className={wrapperClass} data-extension-attachment-context>
-      {media.map((item) => {
-        const key = mediaKey(item)
-        return (
-          <MediaPreviewTile
-            key={key}
-            media={item}
-            previewUrl={item.previewUrl ?? resolvedPreviewUrls[key]}
-            variant={variant}
-          />
-        )
-      })}
+    <div ref={previewAdmissionRef} className={wrapperClass} data-extension-attachment-context>
+      {tiles}
     </div>
   )
 }
@@ -985,14 +1185,19 @@ export function GeneratedFilesPanel({ blocks }: { blocks: ToolBlock[] }): ReactE
       attachments.push(...metaAttachmentReferences(block.meta as RuntimeDisclosureMetadata | undefined))
       generatedFiles.push(...metaGeneratedFileReferences(block.meta))
     }
-    return mergeMediaReferences(attachments, generatedFiles)
+    return mergeMediaReferences(attachments, generatedFiles).filter(
+      (file) => !isPresentationArtifactPath(mediaPath(file))
+    )
   }, [blocks])
 
   if (media.length === 0) return null
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      <div className="text-[12px] font-semibold text-ds-faint">{t('generatedFilesTitle')}</div>
+      <div className="flex items-center gap-1.5 text-[12px] font-semibold text-ds-faint">
+        <ImageIcon className="h-3.5 w-3.5" strokeWidth={1.8} aria-hidden="true" />
+        <span>{t('generatedFilesTitle')}</span>
+      </div>
       <MediaAttachmentGallery media={media} variant="conversation" />
     </div>
   )
@@ -1053,6 +1258,23 @@ function metaSources(meta: Record<string, unknown> | undefined): Array<{ title?:
     .filter((entry): entry is { title?: string; url?: string } => entry !== null)
 }
 
+function metaComposerContextLabels(meta: Record<string, unknown> | undefined): string[] {
+  const value = meta?.composerContexts
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return []
+    const record = entry as Record<string, unknown>
+    const title = typeof record.title === 'string' ? record.title.trim() : ''
+    const provenance = record.provenance && typeof record.provenance === 'object'
+      ? record.provenance as Record<string, unknown>
+      : undefined
+    const extensionId = typeof provenance?.extensionId === 'string'
+      ? provenance.extensionId.trim()
+      : ''
+    return title ? [`${title}${extensionId ? ` (${extensionId})` : ''}`] : []
+  })
+}
+
 function RuntimeMetaChips({
   meta,
   align = 'left',
@@ -1069,6 +1291,7 @@ function RuntimeMetaChips({
   const activeSkillIds = hideTurnDisclosure ? [] : metaStringArray(meta, 'activeSkillIds')
   const injectedMemoryIds = hideTurnDisclosure ? [] : metaStringArray(meta, 'injectedMemoryIds')
   const injectedInstructionSources = hideTurnDisclosure ? [] : metaInstructionSources(meta)
+  const composerContextLabels = hideTurnDisclosure ? [] : metaComposerContextLabels(meta)
   const sources = metaSources(meta)
   const child = meta?.child && typeof meta.child === 'object' ? meta.child as Record<string, unknown> : null
   const childLabel =
@@ -1084,6 +1307,7 @@ function RuntimeMetaChips({
     activeSkillIds.length === 0 &&
     injectedMemoryIds.length === 0 &&
     injectedInstructionSources.length === 0 &&
+    composerContextLabels.length === 0 &&
     sources.length === 0 &&
     !childLabel
   ) {
@@ -1108,6 +1332,11 @@ function RuntimeMetaChips({
       {injectedInstructionSources.length > 0 ? (
         <span className={chipClass} title={injectedInstructionSources.map((source) => `${source.scope}: ${source.path}`).join('\n')}>
           {t('toolInjectedInstructions')} {injectedInstructionSources.length}
+        </span>
+      ) : null}
+      {composerContextLabels.length > 0 ? (
+        <span className={chipClass} title={composerContextLabels.join('\n')}>
+          {t('toolExtensionContexts')} {composerContextLabels.length}
         </span>
       ) : null}
       {childLabel ? (
@@ -1298,10 +1527,12 @@ function AssistantExportButton({
 
 function UserInputBubble({
   block,
-  nested = false
+  nested = false,
+  allowThreadActions = true
 }: {
   block: Extract<ChatBlock, { kind: 'user_input' }>
   nested?: boolean
+  allowThreadActions?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const resolveUserInput = useChatStore((s) => s.resolveUserInput)
@@ -1313,7 +1544,7 @@ function UserInputBubble({
   // is not live, so it renders as a read-only ended record rather than a live
   // prompt — and crucially never offers cancel, which would hit a dead gate and
   // raise "user input not found" (issue #606).
-  const pending = block.status === 'pending' && block.live === true
+  const pending = allowThreadActions && block.status === 'pending' && block.live === true
   const done = block.status !== 'pending'
 
   useEffect(() => {
@@ -1335,7 +1566,7 @@ function UserInputBubble({
         ? t('userInputCancelled')
         : block.status === 'error'
           ? t('userInputFailed')
-          : pending
+          : pending || (!allowThreadActions && block.status === 'pending')
             ? t('userInputPending')
             : t('userInputCancelled')
   const tone =
@@ -1554,7 +1785,8 @@ function MessageBubbleImpl({
   block,
   nested = false,
   forkAction,
-  rollbackAction
+  rollbackAction,
+  allowThreadActions = true
 }: {
   block: ChatBlock
   nested?: boolean
@@ -1566,6 +1798,7 @@ function MessageBubbleImpl({
     busy: boolean
     onRollback: () => void
   }
+  allowThreadActions?: boolean
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const resolveApproval = useChatStore((s) => s.resolveApproval)
@@ -1576,7 +1809,7 @@ function MessageBubbleImpl({
     return <BackgroundSubagentNoticeBubble block={block} nested={nested} />
   }
   if (block.kind === 'user') {
-    return <UserMessageBubble block={block} />
+    return <UserMessageBubble block={block} allowThreadActions={allowThreadActions} />
   }
   if (block.kind === 'assistant') {
     const streaming = block.id === 'live-assistant'
@@ -1639,16 +1872,24 @@ function MessageBubbleImpl({
     return <ToolEntry block={block} nested={nested} />
   }
   if (block.kind === 'user_input') {
-    return <UserInputBubble block={block} nested={nested} />
+    return (
+      <UserInputBubble
+        block={block}
+        nested={nested}
+        allowThreadActions={allowThreadActions}
+      />
+    )
   }
   if (block.kind === 'approval') {
     const submitting = block.status === 'submitting'
-    const done = block.status !== 'pending' && !submitting
+    const done = !allowThreadActions || (block.status !== 'pending' && !submitting)
     const statusLabel =
       block.status === 'allowed'
         ? t('approvalAllowed')
         : block.status === 'denied'
           ? t('approvalDenied')
+          : block.status === 'expired'
+            ? t('approvalExpired')
           : block.status === 'error'
             ? t('approvalFailed')
             : submitting
@@ -1659,6 +1900,8 @@ function MessageBubbleImpl({
         className={`rounded-[22px] border px-4 py-4 text-[13px] leading-6 shadow-[0_12px_30px_rgba(86,103,136,0.04)] ${
           block.status === 'error'
             ? 'border-red-300/80 bg-red-500/10 dark:border-red-800/60 dark:bg-red-950/35'
+            : block.status === 'expired'
+              ? 'border-amber-300/80 bg-amber-500/10 dark:border-amber-800/60 dark:bg-amber-950/30'
             : 'border-accent/35 bg-[linear-gradient(180deg,rgba(79,124,255,0.08),rgba(79,124,255,0.12))] text-ds-ink'
         }`}
       >

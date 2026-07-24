@@ -1,10 +1,15 @@
-import type { ReviewTarget } from '../agent/types'
+import type { ChatBlock, ReviewTarget } from '../agent/types'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
+import {
+  showWorkspaceMissingDialog,
+  workspaceDirectoryExists,
+  workspaceMissingError
+} from '../lib/workspace-availability'
 import i18n from '../i18n'
 import { applyTheme, applyUiFontScale } from '../lib/apply-theme'
 import { formatWorkspacePickerError } from '../lib/format-workspace-picker-error'
-import { formatRuntimeError, getRuntimeErrorCode } from '../lib/format-runtime-error'
+import { describeRuntimeError, formatRuntimeError, getRuntimeErrorCode } from '../lib/format-runtime-error'
 import {
   deriveThreadTitleFromPrompt,
   getDefaultThreadTitle,
@@ -24,17 +29,34 @@ import {
   saveThreadWorktreeRegistry
 } from '../lib/thread-worktree-registry'
 import { workspaceLabelFromPath } from '../lib/workspace-label'
-import { isInternalTemporaryWorkspace, normalizeWorkspaceRoot } from '../lib/workspace-path'
+import {
+  isInternalTemporaryWorkspace,
+  normalizeWorkspaceRoot,
+  workspaceRootScopeKey
+} from '../lib/workspace-path'
 import {
   buildClawRuntimePrompt,
   buildCodeRuntimePrompt,
   getActiveAgentApiKey
 } from '@shared/app-settings'
-import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
+import type {
+  ChatState,
+  ChatStoreGet,
+  ChatStoreSet,
+  WriteAssistantMessageContext
+} from './chat-store-types'
+import { canGuideQueuedMessage } from './queued-message-guidance'
+import {
+  isPendingQueuedMessage,
+  queuedMessagesForThread,
+  reconcileQueuedMessages,
+  saveQueuedMessagesForThread
+} from './queued-message-persistence'
 import {
   accountIdForComposerSelection,
   activeClawChannel,
   compactCodeWorkspaceRoots,
+  composerReasoningEffortForSelection,
   forgetCodeWorkspaceRoot,
   hydrateBlockModelLabels,
   isClawThread,
@@ -67,9 +89,11 @@ import {
   pruneWriteThreadRegistry,
   readWriteThreadRegistry,
   saveWriteThreadRegistry,
+  writeFileKey,
   writeThreadBelongsToWorkspace,
   writeWorkspaceForThreadId
 } from '../write/write-thread-registry'
+import { useWriteWorkspaceStore } from '../write/write-workspace-store'
 import {
   clearBusyWatchdog,
   resetBusyRecoveryAttempts,
@@ -104,6 +128,7 @@ import {
   subscribeThreadEventsWithRecovery
 } from './chat-store-thread-action-helpers'
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
+import type { ComposerContextAttachment } from '@kun/extension-api'
 
 type SseAbortRef = { current: AbortController | null }
 
@@ -114,11 +139,79 @@ type StoreActionContext = {
 }
 
 let drainingQueuedMessages = false
+const guidingQueuedMessageIds = new Set<string>()
 const checkpointGitAvailability = new GitCheckpointAvailabilityCache()
+
+function localConversationErrorBlock(error: unknown, id: string): Extract<ChatBlock, { kind: 'system' }> {
+  const view = describeRuntimeError(error)
+  return {
+    kind: 'system',
+    id,
+    createdAt: new Date().toISOString(),
+    text: view.message,
+    ...(view.code ? { code: view.code } : {}),
+    ...(view.detail ? { detail: view.detail } : {}),
+    severity: 'error',
+    runtimeError: true
+  }
+}
+
+function activeChatWorkspaceRoot(state: ChatState): string {
+  const activeThread = state.activeThreadId
+    ? state.threads.find((thread) => thread.id === state.activeThreadId)
+    : undefined
+  return activeThread?.workspace?.trim() || state.workspaceRoot?.trim() || ''
+}
+
+function pendingComposerContexts(state: ChatState): ComposerContextAttachment[] {
+  if (state.route !== 'chat') return []
+  const workspaceRoot = activeChatWorkspaceRoot(state)
+  return state.extensionComposerContexts
+    .filter((event) => workspaceRootScopeKey(event.workspaceRoot) === workspaceRootScopeKey(workspaceRoot))
+    .map((event) => event.attachment)
+}
+
+function withoutConsumedComposerContexts(
+  state: ChatState,
+  consumed: readonly ComposerContextAttachment[]
+): ChatState['extensionComposerContexts'] {
+  if (consumed.length === 0) return state.extensionComposerContexts
+  const consumedRevisions = new Set(consumed.map((attachment) => [
+    attachment.attachmentId,
+    attachment.revision,
+    attachment.generation
+  ].join(':')))
+  return state.extensionComposerContexts.filter((event) => !consumedRevisions.has([
+    event.attachment.attachmentId,
+    event.attachment.revision,
+    event.attachment.generation
+  ].join(':')))
+}
+
+function activeWriteMessageContextMatches(context: WriteAssistantMessageContext): boolean {
+  const state = useWriteWorkspaceStore.getState()
+  return (
+    writeFileKey(state.workspaceRoot) === writeFileKey(context.workspaceRoot) &&
+    writeFileKey(state.activeFilePath) === writeFileKey(context.activeFilePath) &&
+    state.documentEpoch === context.documentEpoch &&
+    state.contentRevision === context.contentRevision &&
+    state.saveStatus === 'saved' &&
+    state.fileContent === state.persistedContent &&
+    state.pendingAgentReview === null &&
+    !state.reviewActive
+  )
+}
 
 export function createThreadActions(
   { set, get, sseAbortRef }: StoreActionContext
-): Pick<ChatState, 'createThread' | 'createConversation' | 'recoverActiveTurn' | 'selectThread' | 'subscribeThreadEventsLive' | 'drainQueuedMessages' | 'removeQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
+): Pick<ChatState, 'createThread' | 'createConversation' | 'recoverActiveTurn' | 'selectThread' | 'subscribeThreadEventsLive' | 'drainQueuedMessages' | 'removeQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
+  const persistActiveQueuedMessages = (): void => {
+    const state = get()
+    if (state.activeThreadId) {
+      saveQueuedMessagesForThread(state.activeThreadId, state.queuedMessages)
+    }
+  }
+
   return {
   createThread: async (options = {}) => {
     if (get().runtimeConnection !== 'ready') {
@@ -182,6 +275,11 @@ export function createThreadActions(
         normalizeWorkspaceRoot(settings.workspaceRoot)
       if (!workspaceRoot) {
         await get().chooseWorkspace({ createThreadAfter: true })
+        return
+      }
+      if (!(await workspaceDirectoryExists(workspaceRoot))) {
+        set({ error: workspaceMissingError() })
+        await showWorkspaceMissingDialog(workspaceRoot)
         return
       }
       const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot])
@@ -322,8 +420,13 @@ export function createThreadActions(
         ? state.currentTurnUserId ?? latestUserMessageId ?? findLatestUserBlockId(blocks)
         : null
       const currentTurnId = busy ? state.currentTurnId ?? latestTurnId ?? null : null
+      const durableQueuedMessages = queuedMessagesForThread(activeThreadId)
+      const queuedMessages = reconcileQueuedMessages(
+        state.queuedMessages.length > 0 ? state.queuedMessages : durableQueuedMessages,
+        { busy, turnId: currentTurnId, blocks }
+      )
 
-      set((s) => ({
+      set({
         activeThreadId,
         activeThreadGoal: goal ?? null,
         activeThreadTodos: todos ?? null,
@@ -339,8 +442,9 @@ export function createThreadActions(
         currentTurnId,
         currentTurnUserId,
         turnDurationByUserId,
-        queuedMessages: s.queuedMessages
-      }))
+        queuedMessages
+      })
+      saveQueuedMessagesForThread(activeThreadId, queuedMessages)
 
       const ac = new AbortController()
       sseAbortRef.current = ac
@@ -387,6 +491,7 @@ export function createThreadActions(
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
     const p = getProvider()
+    const durableQueuedMessages = queuedMessagesForThread(id)
     try {
       resetBusyRecoveryAttempts()
       clearBusyWatchdog()
@@ -427,6 +532,11 @@ export function createThreadActions(
       const threadSnap = get().threads.find((thread) => thread.id === id) ?? null
       const composerSelection = composerSelectionForThread(get(), threadSnap)
       const composerMode = composerModeForThread(threadSnap, readThreadComposerMode(id))
+      const queuedMessages = reconcileQueuedMessages(durableQueuedMessages, {
+        busy,
+        turnId: latestTurnId,
+        blocks
+      })
       set({
         watchTurnCompletion: nextWatch,
         unreadThreadIds: nextUnread,
@@ -449,21 +559,31 @@ export function createThreadActions(
         turnReasoningFirstAtByUserId: {},
         turnReasoningLastAtByUserId: {},
         inspectorSelectedId: null,
-        queuedMessages: [],
+        queuedMessages,
         composerMode,
         ...(composerSelection
           ? {
               composerModel: composerSelection.model,
-              composerProviderId: composerSelection.providerId
+              composerProviderId: composerSelection.providerId,
+              composerReasoningEffort: composerReasoningEffortForSelection(
+                get().composerModelGroups,
+                composerSelection.model,
+                composerSelection.providerId
+              )
             }
           : {})
       })
+      saveQueuedMessagesForThread(id, queuedMessages)
       syncTurnCompletionPoll(set, get)
       const ac = new AbortController()
       sseAbortRef.current = ac
       const sink = buildThreadEventSink(set, get, { threadId: id, signal: ac.signal, sinceSeq: latestSeq })
       subscribeThreadEventsWithRecovery(p, id, latestSeq, sink, ac.signal, get)
-      if (busy) armBusyWatchdog(set, get)
+      if (busy) {
+        armBusyWatchdog(set, get)
+      } else if (queuedMessages.some(isPendingQueuedMessage)) {
+        void get().drainQueuedMessages()
+      }
     } catch (e) {
       set({
         error: formatRuntimeError(e),
@@ -519,7 +639,9 @@ export function createThreadActions(
       turnReasoningFirstAtByUserId: {},
       turnReasoningLastAtByUserId: {},
       inspectorSelectedId: null,
-      queuedMessages: []
+      queuedMessages: keepExistingBlocks
+        ? prevState.queuedMessages
+        : queuedMessagesForThread(targetThreadId)
     })
     const ac = new AbortController()
     sseAbortRef.current = ac
@@ -549,6 +671,11 @@ export function createThreadActions(
       const currentTurnUserId = busy
         ? latestUserMessageId ?? findLatestUserBlockId(blocks)
         : null
+      const queuedMessages = reconcileQueuedMessages(get().queuedMessages, {
+        busy,
+        turnId: latestTurnId,
+        blocks
+      })
       set((s) => ({
         activeThreadGoal: goal ?? null,
         activeThreadTodos: todos ?? null,
@@ -559,13 +686,15 @@ export function createThreadActions(
         busy,
         currentTurnId: busy ? latestTurnId ?? null : null,
         currentTurnUserId,
-        turnDurationByUserId
+        turnDurationByUserId,
+        queuedMessages
         // Note: `liveAssistant` and `liveReasoning` are intentionally
         // NOT touched here. They may contain deltas that arrived during
         // the fetch and must be preserved for `flushLiveBlocks` to pick
         // them up at turn boundaries.
       }))
-      if (!busy && get().queuedMessages.length > 0) {
+      saveQueuedMessagesForThread(targetThreadId, queuedMessages)
+      if (!busy && queuedMessages.some(isPendingQueuedMessage)) {
         void get().drainQueuedMessages()
       }
     } catch (e) {
@@ -586,12 +715,21 @@ export function createThreadActions(
     drainingQueuedMessages = true
     try {
       while (true) {
-        const state = get()
-        const queuedMessages = state.queuedMessages.filter((message) => !message.guiPlan)
-        if (queuedMessages.length !== state.queuedMessages.length) {
+        let state = get()
+        const queuedMessages = reconcileQueuedMessages(state.queuedMessages, {
+          busy: state.busy,
+          turnId: state.currentTurnId,
+          blocks: state.blocks
+        }).filter((message) => !message.guiPlan)
+        const queueChanged =
+          queuedMessages.length !== state.queuedMessages.length ||
+          queuedMessages.some((message, index) => message !== state.queuedMessages[index])
+        if (queueChanged) {
           set({ queuedMessages })
+          persistActiveQueuedMessages()
+          state = get()
         }
-        const next = queuedMessages[0]
+        const next = queuedMessages.find(isPendingQueuedMessage)
         if (!next || state.busy) return
         const started = await get().sendMessage(next.text, next.mode, { queued: next })
         if (!started) return
@@ -601,26 +739,138 @@ export function createThreadActions(
     }
   },
 
-  removeQueuedMessage: (id) =>
+  removeQueuedMessage: (id) => {
     set((s) => ({
       queuedMessages: s.queuedMessages.filter((message) => message.id !== id)
-    })),
+    }))
+    persistActiveQueuedMessages()
+  },
+
+  reorderQueuedMessage: (id, targetId, position) => {
+    set((state) => {
+      if (id === targetId) return {}
+      const sourceIndex = state.queuedMessages.findIndex((message) => message.id === id)
+      const targetIndex = state.queuedMessages.findIndex((message) => message.id === targetId)
+      if (sourceIndex < 0 || targetIndex < 0) return {}
+
+      const queuedMessages = [...state.queuedMessages]
+      const [message] = queuedMessages.splice(sourceIndex, 1)
+      if (!message) return {}
+      const remainingTargetIndex = queuedMessages.findIndex((candidate) => candidate.id === targetId)
+      const insertionIndex = remainingTargetIndex + (position === 'after' ? 1 : 0)
+      queuedMessages.splice(insertionIndex, 0, message)
+      if (queuedMessages.every((candidate, index) => candidate === state.queuedMessages[index])) {
+        return {}
+      }
+      return { queuedMessages }
+    })
+    persistActiveQueuedMessages()
+  },
+
+  guideQueuedMessage: async (id) => {
+    if (guidingQueuedMessageIds.has(id)) return false
+    const state = get()
+    const message = state.queuedMessages.find((candidate) => candidate.id === id)
+    if (!message) return false
+    if (!canGuideQueuedMessage(message)) {
+      set({ error: i18n.t('common:guideQueuedMessageTextOnly') })
+      return false
+    }
+    if (!state.busy || !state.activeThreadId || !state.currentTurnId) {
+      set({ error: i18n.t('common:guideQueuedMessageNoActiveTurn') })
+      if (!state.busy) void get().drainQueuedMessages()
+      return false
+    }
+    const provider = getProvider()
+    if (typeof provider.steerUserMessage !== 'function') {
+      set({ error: i18n.t('common:guideQueuedMessageUnsupported') })
+      return false
+    }
+
+    guidingQueuedMessageIds.add(id)
+    try {
+      await provider.steerUserMessage(
+        state.activeThreadId,
+        state.currentTurnId,
+        message.text,
+        message.displayText ? { displayText: message.displayText } : undefined
+      )
+      set((current) => ({
+        queuedMessages: current.queuedMessages.filter((candidate) => candidate.id !== id),
+        error: null
+      }))
+      persistActiveQueuedMessages()
+      return true
+    } catch (error) {
+      const messageText = formatRuntimeError(error)
+      set({
+        error: i18n.t('common:guideQueuedMessageFailed', { message: messageText })
+      })
+      if (!get().busy) void get().drainQueuedMessages()
+      return false
+    } finally {
+      guidingQueuedMessageIds.delete(id)
+    }
+  },
 
   sendMessage: async (text, mode, overrides) => {
     const trimmedText = text.trim()
     if (!trimmedText) return false
+    const queued = overrides?.queued
+    let writeContext = queued?.writeContext ?? overrides?.writeContext
+    const requireActiveWriteContext = Boolean(writeContext && !queued)
+    const activeWriteContextIsValid = (): boolean => Boolean(
+      !writeContext ||
+      !requireActiveWriteContext ||
+      (get().route === 'write' && activeWriteMessageContextMatches(writeContext))
+    )
+    if (!activeWriteContextIsValid()) return false
     if (get().runtimeConnection !== 'ready') {
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return false
     }
+    if (get().route !== 'claw') {
+      const state = get()
+      const activeThread = state.activeThreadId
+        ? state.threads.find((thread) => thread.id === state.activeThreadId) ?? null
+        : null
+      let workspaceRoot = writeContext
+        ? normalizeWorkspaceRoot(writeContext.workspaceRoot)
+        : state.route === 'write'
+          ? await readActiveWriteWorkspace(state.workspaceRoot)
+          : normalizeWorkspaceRoot(activeThread?.workspace)
+      if (!activeWriteContextIsValid()) return false
+      if (!workspaceRoot) {
+        workspaceRoot = normalizeWorkspaceRoot((await rendererRuntimeClient.getSettings()).workspaceRoot)
+        if (!activeWriteContextIsValid()) return false
+      }
+      if (workspaceRoot && !(await workspaceDirectoryExists(workspaceRoot))) {
+        set({ error: workspaceMissingError() })
+        await showWorkspaceMissingDialog(workspaceRoot)
+        return false
+      }
+      if (!activeWriteContextIsValid()) return false
+    }
     const p = getProvider()
-    if (get().route === 'write') {
-      const writeThreadId = await get().ensureWriteThreadForWorkspace()
+    if (writeContext || get().route === 'write') {
+      const writeThreadId = await get().ensureWriteThreadForWorkspace(
+        writeContext?.workspaceRoot,
+        writeContext ? writeContext.activeFilePath ?? '' : undefined
+      )
       if (!writeThreadId) return false
+      if (writeContext?.threadId && writeThreadId !== writeContext.threadId) return false
+      // ensureWriteThreadForWorkspace may await selectThread. If the user
+      // selects another conversation before it resolves, never fall through to
+      // the provider with that newer activeThreadId.
+      if (get().activeThreadId !== writeThreadId) return false
+      if (writeContext && !writeContext.threadId) {
+        writeContext = { ...writeContext, threadId: writeThreadId }
+      }
+      if (!activeWriteContextIsValid()) return false
     }
     const hasPendingActiveTurn = threadHasPendingRuntimeWork(get().blocks)
     if (get().busy || hasPendingActiveTurn) {
-      if (overrides?.guiPlan) {
+      if (overrides?.guiPlan || writeContext) {
         set({ error: i18n.t('common:composerQueuePlaceholder') })
         return false
       }
@@ -651,12 +901,16 @@ export function createThreadActions(
         reference.relativePath.trim().length > 0 &&
         reference.name.trim().length > 0
       )
+      const composerContexts = get().route === 'chat'
+        ? overrides?.composerContexts ?? pendingComposerContexts(get())
+        : []
       set((s) => ({
         queuedMessages: [
           ...s.queuedMessages,
           {
             id: `q-${now}-${s.queuedMessages.length}`,
             text: trimmedText,
+            deliveryState: 'pending' as const,
             ...(displayText ? { displayText } : {}),
             ...(mode ? { mode } : {}),
             ...(composerModel ? { model: composerModel } : {}),
@@ -667,14 +921,19 @@ export function createThreadActions(
             ...(overrides?.guiPlan ? { guiPlan: overrides.guiPlan } : {}),
             ...(overrides?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
             ...(overrides?.guiDesignMode ? { guiDesignMode: true } : {}),
+            ...(overrides?.agentSurface ? { agentSurface: overrides.agentSurface } : {}),
             ...(overrides?.guiDesignArtifact ? { guiDesignArtifact: overrides.guiDesignArtifact } : {}),
+            ...(writeContext ? { writeContext } : {}),
             ...(attachmentIds?.length ? { attachmentIds } : {}),
             ...(attachments?.length ? { attachments } : {}),
-            ...(fileReferences?.length ? { fileReferences } : {})
+            ...(fileReferences?.length ? { fileReferences } : {}),
+            ...(composerContexts.length ? { composerContexts } : {})
           }
         ],
+        extensionComposerContexts: withoutConsumedComposerContexts(s, composerContexts),
         error: null
       }))
+      persistActiveQueuedMessages()
       // UI/runtime can briefly drift (busy=false while runtime still has an active turn).
       // Kick recovery so queued input drains as soon as the in-flight turn settles.
       if (!get().busy && hasPendingActiveTurn) {
@@ -683,7 +942,6 @@ export function createThreadActions(
       return true
     }
     const now = Date.now()
-    const queued = overrides?.queued
     const userBlockId = queued?.id ?? `u-${now}`
     const attachmentIds =
       queued?.attachmentIds ??
@@ -701,6 +959,9 @@ export function createThreadActions(
         reference.name.trim().length > 0
       ) ??
       []
+    const composerContexts = queued?.composerContexts ?? (get().route === 'chat'
+      ? overrides?.composerContexts ?? pendingComposerContexts(get())
+      : [])
     let activeThreadId = get().activeThreadId
     const displayText = queued?.displayText ?? overrides?.displayText?.trim() ?? trimmedText
     const userDisplayText = displayText !== trimmedText ? displayText : undefined
@@ -751,7 +1012,7 @@ export function createThreadActions(
           createdAt: new Date(now).toISOString(),
           text: displayText,
           ...(userModelChip ? { modelLabel: userModelChip } : {}),
-          ...(userDisplayText || guiDesignCanvas || guiDesignMode || attachmentIds.length || attachments.length || fileReferences.length
+          ...(userDisplayText || guiDesignCanvas || guiDesignMode || attachmentIds.length || attachments.length || fileReferences.length || composerContexts.length
             ? {
                 meta: {
                   ...(userDisplayText ? { displayText: userDisplayText } : {}),
@@ -759,7 +1020,8 @@ export function createThreadActions(
                   ...(guiDesignMode ? { guiDesignMode: true } : {}),
                   ...(attachmentIds.length ? { attachmentIds } : {}),
                   ...(attachments.length ? { attachments } : {}),
-                  ...(fileReferences.length ? { fileReferences } : {})
+                  ...(fileReferences.length ? { fileReferences } : {}),
+                  ...(composerContexts.length ? { composerContexts } : {})
                 }
               }
             : {})
@@ -770,8 +1032,13 @@ export function createThreadActions(
       error: null,
       currentTurnUserId: userBlockId,
       turnStartedAtByUserId: { ...s.turnStartedAtByUserId, [userBlockId]: now },
-      queuedMessages: queued ? s.queuedMessages.filter((message) => message.id !== queued.id) : s.queuedMessages
+      queuedMessages: queued
+        ? s.queuedMessages.map((message) => message.id === queued.id
+            ? { ...message, deliveryState: 'starting' as const }
+            : message)
+        : s.queuedMessages
     }))
+    if (queued) persistActiveQueuedMessages()
     if (!activeThreadId) {
       try {
         const settings = await rendererRuntimeClient.getSettings()
@@ -789,6 +1056,7 @@ export function createThreadActions(
             queuedMessages: previousQueuedMessages,
             error: i18n.t('common:workspaceRequiredToCreateThread')
           })
+          persistActiveQueuedMessages()
           return false
         }
         const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot])
@@ -862,12 +1130,14 @@ export function createThreadActions(
             ? { route: 'settings' as const, settingsSection: 'agents' as const }
             : {})
         })
+        persistActiveQueuedMessages()
         return false
       }
     }
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
     clearBusyWatchdog()
+    let runtimeTurnAccepted = false
     try {
       const seqAtSend = get().lastSeq
       const channel = get().route === 'claw' ? activeClawChannel(get()) : null
@@ -924,6 +1194,8 @@ export function createThreadActions(
       const runtimeDisplayText = channel ? displayText : (userDisplayText ?? trimmedText)
       const { turnId, userMessageItemId } = await p.sendUserMessage(activeThreadId, runtimeText, {
         mode,
+        agentSurface: queued?.agentSurface ?? overrides?.agentSurface ??
+          (writeContext || get().route === 'write' ? 'write' : guiDesignMode || get().route === 'design' ? 'design' : 'code'),
         ...(composerModel ? { model: composerModel } : {}),
         ...(!channel && composerProviderId ? { providerId: composerProviderId } : {}),
         ...(!channel && composerAccountId ? { accountId: composerAccountId } : {}),
@@ -937,8 +1209,28 @@ export function createThreadActions(
           : {}),
         ...(attachmentIds.length ? { attachmentIds } : {}),
         ...(workspaceCheckpointId ? { workspaceCheckpointId } : {}),
-        ...(fileReferences.length ? { fileReferences } : {})
+        ...(fileReferences.length ? { fileReferences } : {}),
+        ...(composerContexts.length ? { composerContexts } : {})
       })
+      runtimeTurnAccepted = true
+      if (queued) {
+        set((state) => ({
+          queuedMessages: state.queuedMessages.map((message) => message.id === queued.id
+            ? {
+                ...message,
+                deliveryState: 'in_flight' as const,
+                deliveryTurnId: turnId,
+                deliveryUserMessageItemId: userMessageItemId ?? userBlockId
+              }
+            : message)
+        }))
+        persistActiveQueuedMessages()
+      }
+      if (!queued && composerContexts.length > 0) {
+        set((state) => ({
+          extensionComposerContexts: withoutConsumedComposerContexts(state, composerContexts)
+        }))
+      }
       // Mirror the composer model selection against the runtime's stable
       // user_message item id so the badge survives page refresh / thread
       // re-selection. The runtime itself doesn't persist per-turn metadata.
@@ -1059,19 +1351,25 @@ export function createThreadActions(
           queuedMessages: previousQueuedMessages,
           error: i18n.t('common:runtimeActiveTurn')
         })
+        persistActiveQueuedMessages()
         await get().recoverActiveTurn()
         await get().refreshThreads()
         return false
       }
-      set({
-        error: formatRuntimeError(e),
+      const view = describeRuntimeError(e)
+      set((state) => ({
+        blocks: runtimeTurnAccepted
+          ? state.blocks
+          : [...state.blocks, localConversationErrorBlock(e, `local_error_${userBlockId}`)],
+        error: view.summary,
         busy: false,
         currentTurnId: null,
         queuedMessages: previousQueuedMessages,
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {})
-      })
+      }))
+      persistActiveQueuedMessages()
       await get().refreshThreads()
       return false
     }

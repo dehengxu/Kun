@@ -148,7 +148,7 @@ export function WriteAssistantPanel({
     <aside
       className={`write-assistant-panel ds-no-drag flex min-h-0 flex-col border-l border-ds-border-muted bg-white backdrop-blur-xl dark:bg-ds-canvas ${className}`}
     >
-      <div className="shrink-0 border-b border-ds-border-muted bg-white/92 dark:bg-ds-card">
+      <div className="write-assistant-header shrink-0 border-b border-ds-border-muted bg-white/92 dark:bg-ds-card">
         <div className="flex h-12 min-w-0 items-center gap-2 px-4">
           <button
             type="button"
@@ -192,7 +192,7 @@ export function WriteAssistantPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-ds-main/45 dark:bg-transparent">
+      <div className="write-assistant-body min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-ds-main/45 dark:bg-transparent">
         {hasTimeline ? (
           <LazyMessageTimeline
             blocks={blocks}
@@ -274,7 +274,7 @@ export function WriteAssistantPanel({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-ds-border-muted bg-white/92 px-4 pb-4 pt-3 dark:bg-ds-card">
+      <div className="write-assistant-footer shrink-0 border-t border-ds-border-muted bg-white/92 px-4 pb-4 pt-3 dark:bg-ds-card">
         {quotedSelections.length > 0 ? (
           <div className="mb-3 flex flex-col gap-1.5">
             {quotedSelections.map((quote) => (

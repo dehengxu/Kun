@@ -290,6 +290,28 @@ describe('chat-store-side-actions', () => {
     expect(side.input).toBe('')
   })
 
+  it('applies draft model and reasoning controls before sending the first side turn', async () => {
+    const { actions, state, provider } = buildHarness()
+    const id = await actions.spawnSideConversation('use the draft controls', {
+      model: 'custom-side-model',
+      reasoningEffort: 'low'
+    })
+
+    expect(id).toBe('side_thr_main')
+    expect(state.sideConversations[id!]).toMatchObject({
+      model: 'custom-side-model',
+      reasoningEffort: 'low'
+    })
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      id,
+      'use the draft controls',
+      expect.objectContaining({
+        model: 'custom-side-model',
+        reasoningEffort: 'low'
+      })
+    )
+  })
+
   it('sends the selected side reasoning effort with side turns', async () => {
     const { actions, state, provider } = buildHarness()
     const id = (await actions.spawnSideConversation())!
@@ -347,6 +369,54 @@ describe('chat-store-side-actions', () => {
     expect(state.sideConversations[id]).toBeUndefined()
     expect(signal?.aborted).toBe(true)
     expect(state.busy).toBe(true)
+  })
+
+  it('deduplicates replayed compaction lifecycle events by item id', async () => {
+    const { actions, state, provider } = buildHarness()
+    const id = (await actions.spawnSideConversation())!
+    const sink = provider.subscribeMock.mock.calls.at(-1)?.[2] as ThreadEventSink
+
+    sink.onCompaction({
+      itemId: 'compaction_side_1',
+      summary: 'Compacting context',
+      status: 'running',
+      createdAt: '2026-06-02T00:00:00.000Z'
+    })
+    sink.onCompaction({
+      itemId: 'compaction_side_1',
+      summary: 'Compacted context',
+      status: 'success',
+      createdAt: '2026-06-02T00:00:01.000Z',
+      messagesBefore: 120
+    })
+
+    const blocks = state.sideConversations[id].blocks.filter((block) => block.kind === 'compaction')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({
+      id: 'compaction_side_1',
+      status: 'success',
+      summary: 'Compacted context',
+      messagesBefore: 120,
+      createdAt: '2026-06-02T00:00:00.000Z'
+    })
+  })
+
+  it('updates approval resolution inside the matching side conversation', async () => {
+    const { actions, state, provider } = buildHarness()
+    const id = (await actions.spawnSideConversation())!
+    const lastCall = provider.subscribeMock.mock.calls.at(-1) as
+      | [string, number, ThreadEventSink, AbortSignal]
+      | undefined
+    const sink = lastCall?.[2]
+    sink?.onApproval({ approvalId: 'appr_side', summary: 'Run remote command' })
+    sink?.onApprovalStatus?.({ approvalId: 'appr_side', status: 'expired' })
+
+    expect(state.sideConversations[id].blocks).toContainEqual(expect.objectContaining({
+      kind: 'approval',
+      approvalId: 'appr_side',
+      status: 'expired'
+    }))
+    expect(state.blocks).toEqual([])
   })
 
   it('promoteSideConversation clears the relation by PATCH /v1/threads/{id} and refreshes the thread list', async () => {

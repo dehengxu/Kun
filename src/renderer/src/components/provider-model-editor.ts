@@ -100,7 +100,7 @@ export function newProviderModelForm(
     kind,
     originalModelId: '',
     modelId: '',
-    contextWindowTokens: kind === 'chat' ? 128_000 : null,
+    contextWindowTokens: kind === 'chat' ? 256_000 : null,
     maxOutputTokens: null,
     visionInput: false,
     supportsToolCalling: true,

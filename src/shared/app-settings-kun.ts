@@ -35,6 +35,7 @@ import {
   type ImageGenerationQuality,
   type ImageGenerationResolution,
   type KunMcpSearchSettingsV1,
+  type KunProjectConfigSettingsV1,
   type KunMusicGenerationSettingsV1,
   type KunPromptOptimizationSettingsV1,
   type KunRuntimeTuningSettingsV1,
@@ -160,6 +161,7 @@ export function defaultKunRuntimeSettings(
     toolOutputLimits: defaultKunToolOutputLimitsSettings(),
     insecure: false,
     mcpSearch: defaultKunMcpSearchSettings(),
+    projectConfig: defaultKunProjectConfigSettings(),
     storage: defaultKunStorageSettings(),
     contextCompaction: defaultKunContextCompactionSettings(),
     runtimeTuning: defaultKunRuntimeTuningSettings(),
@@ -301,6 +303,10 @@ export function defaultKunMcpSearchSettings(): KunMcpSearchSettingsV1 {
   }
 }
 
+export function defaultKunProjectConfigSettings(): KunProjectConfigSettingsV1 {
+  return { grants: [] }
+}
+
 export function defaultKunTokenEconomySettings(): KunTokenEconomySettingsV1 {
   return {
     enabled: false,
@@ -331,8 +337,8 @@ export function defaultKunStorageSettings(): KunStorageSettingsV1 {
 
 export function defaultKunContextCompactionSettings(): KunContextCompactionSettingsV1 {
   return {
-    defaultSoftThreshold: 96_000,
-    defaultHardThreshold: 108_800,
+    defaultSoftThreshold: 192_000,
+    defaultHardThreshold: 217_600,
     // Default to model-generated summaries (codex-style): the model writes a
     // structured recap of the folded turns instead of a mechanical item list.
     // Falls back to the heuristic summary automatically on timeout/failure.
@@ -345,6 +351,8 @@ export function defaultKunContextCompactionSettings(): KunContextCompactionSetti
 
 export function defaultKunRuntimeTuningSettings(): KunRuntimeTuningSettingsV1 {
   return {
+    maxConcurrentTurns: 256,
+    maxWallTimeMs: 86_400_000,
     streamIdleTimeoutMs: 450_000,
     toolStorm: {
       enabled: true,
@@ -385,6 +393,9 @@ export function mergeKunRuntimeSettings(
     ...currentMcpSearch,
     ...(patch?.mcpSearch ?? {})
   })
+  const nextProjectConfig = normalizeKunProjectConfigSettings(
+    patch?.projectConfig ?? current.projectConfig
+  )
   const currentTokenEconomy = normalizeKunTokenEconomySettings(
     current.tokenEconomy,
     current.tokenEconomyMode
@@ -474,6 +485,12 @@ export function mergeKunRuntimeSettings(
     ...currentRuntimeTuning,
     ...(patch?.runtimeTuning
       ? {
+          ...(patch.runtimeTuning.maxWallTimeMs !== undefined
+            ? { maxWallTimeMs: patch.runtimeTuning.maxWallTimeMs }
+            : {}),
+          ...(patch.runtimeTuning.maxConcurrentTurns !== undefined
+            ? { maxConcurrentTurns: patch.runtimeTuning.maxConcurrentTurns }
+            : {}),
           ...(patch.runtimeTuning.streamIdleTimeoutMs !== undefined
             ? { streamIdleTimeoutMs: patch.runtimeTuning.streamIdleTimeoutMs }
             : {}),
@@ -501,8 +518,13 @@ export function mergeKunRuntimeSettings(
   const nextSubagents = mergeKunSubagentsSettings(current.subagents, patch?.subagents)
   // Do not let the nested partial patch leak through the broad object spread;
   // `nextSubagents` below is the fully materialized authoritative value.
-  const { subagents: _subagentsPatch, ...flatPatch } = patch ?? {}
+  const {
+    subagents: _subagentsPatch,
+    projectConfig: _projectConfigPatch,
+    ...flatPatch
+  } = patch ?? {}
   void _subagentsPatch
+  void _projectConfigPatch
   // NOTE: approvalPolicy/sandboxMode are merged through verbatim from the patch.
   // The unified 6-mode UI selector already resolves a mode to its concrete
   // {approvalPolicy, sandboxMode} pair via kunToolPermissionModeSettings before
@@ -519,6 +541,7 @@ export function mergeKunRuntimeSettings(
     tokenEconomy: nextTokenEconomy,
     toolOutputLimits: nextToolOutputLimits,
     mcpSearch: nextMcpSearch,
+    projectConfig: nextProjectConfig,
     storage: nextStorage,
     contextCompaction: nextContextCompaction,
     runtimeTuning: nextRuntimeTuning,
@@ -549,9 +572,10 @@ function mergeKunSubagentsSettings(
 ): KunRuntimeSettingsV1['subagents'] {
   if (patch === undefined) return current
   return {
-    ...(current ?? { enabled: true, profiles: [] }),
+    ...(current ?? { enabled: true, useExistingAgents: true, profiles: [] }),
     ...patch,
     enabled: patch.enabled ?? current?.enabled ?? true,
+    useExistingAgents: patch.useExistingAgents ?? current?.useExistingAgents ?? true,
     // A roster diff is an intentional whole-array replacement (including []
     // for deleting every custom profile). Omitting it keeps the current roster.
     profiles: patch.profiles !== undefined
@@ -572,7 +596,10 @@ const OPTIONAL_MODEL_SLOT_KEYS = [
   'summaryAccountId',
   'codeReviewModel',
   'codeReviewProviderId',
-  'codeReviewAccountId'
+  'codeReviewAccountId',
+  'planModel',
+  'planProviderId',
+  'planAccountId'
 ] as const
 
 type OptionalModelSlotKey = (typeof OPTIONAL_MODEL_SLOT_KEYS)[number]
@@ -658,6 +685,7 @@ function normalizeKunImageGenerationQuality(value: unknown): ImageGenerationQual
 function normalizeKunImageGenerationProtocol(value: unknown): ImageGenerationProtocol {
   if (value === 'minimax-image') return 'minimax-image'
   if (value === 'codex-responses-image') return 'codex-responses-image'
+  if (value === 'grok-imagine-image') return 'grok-imagine-image'
   return DEFAULT_IMAGE_GENERATION_PROTOCOL
 }
 
@@ -767,6 +795,7 @@ function normalizeKunVideoGenerationSettings(
 }
 
 function normalizeKunVideoGenerationProtocol(value: unknown): VideoGenerationProtocol {
+  if (value === 'grok-imagine-video') return 'grok-imagine-video'
   return value === 'minimax-video' ? 'minimax-video' : DEFAULT_VIDEO_GENERATION_PROTOCOL
 }
 
@@ -854,6 +883,22 @@ function normalizeKunMcpSearchSettings(
   }
 }
 
+export function normalizeKunProjectConfigSettings(
+  input: Partial<KunProjectConfigSettingsV1> | undefined
+): KunProjectConfigSettingsV1 {
+  const grants = Array.isArray(input?.grants) ? input.grants : []
+  const unique = new Map<string, { workspaceRoot: string; configDigest: string }>()
+  for (const grant of grants.slice(0, 64)) {
+    const workspaceRoot = typeof grant?.workspaceRoot === 'string' ? grant.workspaceRoot.trim() : ''
+    const configDigest = typeof grant?.configDigest === 'string'
+      ? grant.configDigest.trim().toLowerCase()
+      : ''
+    if (!workspaceRoot || !/^[a-f0-9]{64}$/.test(configDigest)) continue
+    unique.set(workspaceRoot, { workspaceRoot, configDigest })
+  }
+  return { grants: [...unique.values()] }
+}
+
 function positiveInt(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -919,6 +964,16 @@ function normalizeKunRuntimeTuningSettings(
 ): KunRuntimeTuningSettingsV1 {
   const defaults = defaultKunRuntimeTuningSettings()
   return {
+    maxConcurrentTurns: boundedPositiveInt(
+      input?.maxConcurrentTurns,
+      defaults.maxConcurrentTurns,
+      256
+    ),
+    maxWallTimeMs: boundedPositiveInt(
+      input?.maxWallTimeMs,
+      defaults.maxWallTimeMs,
+      86_400_000
+    ),
     streamIdleTimeoutMs: boundedNonNegativeInt(
       input?.streamIdleTimeoutMs,
       defaults.streamIdleTimeoutMs,
@@ -1242,6 +1297,7 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     sandboxMode: isReasoningLegacy ? kunDefaults.sandboxMode : legacyLocalHttp.sandboxMode
   }
   const provider = normalizeModelProviderSettings({
+    ...parsed.provider,
     apiKey: hasProviderSettings
       ? parsed.provider?.apiKey
       : nonEmptyStringOrFallback(explicitKun.apiKey, legacySeed.apiKey),
@@ -1249,7 +1305,9 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
       ? parsed.provider?.baseUrl
       : nonEmptyStringOrFallback(explicitKun.baseUrl, legacySeed.baseUrl),
     proxy: parsed.provider?.proxy,
-    providers: parsed.provider?.providers
+    providers: parsed.provider?.providers,
+    routePools: parsed.provider?.routePools,
+    localGateway: parsed.provider?.localGateway
   })
   const kun = {
     ...kunDefaults,
@@ -1270,6 +1328,7 @@ export function migrateLegacyAppSettings(parsed: LegacyAppSettingsShape): Partia
     ),
     toolOutputLimits: normalizeKunToolOutputLimitsSettings(explicitKun.toolOutputLimits),
     mcpSearch: normalizeKunMcpSearchSettings(explicitKun.mcpSearch),
+    projectConfig: normalizeKunProjectConfigSettings(explicitKun.projectConfig),
     storage: normalizeKunStorageSettings(explicitKun.storage),
     contextCompaction: normalizeKunContextCompactionSettings(explicitKun.contextCompaction),
     runtimeTuning: normalizeKunRuntimeTuningSettings(explicitKun.runtimeTuning),

@@ -38,7 +38,7 @@ const LEGACY_TOOL_ROUND_REFERENCE = {
     snapshot: {
       text: 'answer',
       reasoning: 'think',
-      toolCalls: [{ callId: 'call_1', toolName: 'read', providerId: 'builtin', arguments: {} }],
+      toolCalls: [{ callId: 'call_tool_3', toolName: 'read', providerId: 'builtin', arguments: {} }],
       stopReason: 'tool_calls'
     }
   },
@@ -135,7 +135,7 @@ function harness(values: readonly ModelStreamChunk[]) {
     controller,
     engine,
     setStream: (next: () => AsyncIterable<ModelStreamChunk>) => { streamFactory = next },
-    run: () => engine.run({
+    run: (options: { maxToolCallsPerStep?: number } = {}) => engine.run({
       threadId: 'thread_1',
       turnId: 'turn_1',
       signal: controller.signal,
@@ -148,7 +148,7 @@ function harness(values: readonly ModelStreamChunk[]) {
         tools: [],
         abortSignal: controller.signal
       },
-      maxToolCallsPerStep: 1,
+      maxToolCallsPerStep: options.maxToolCallsPerStep ?? 1,
       streamToolMetadata: new Map([['read', { providerId: 'builtin' }]]),
       cacheSignature: {
         model: 'model_1', providerId: 'builtin', endpointFormat: 'openai', prefixFingerprint: 'prefix',
@@ -181,6 +181,58 @@ describe('ModelRoundEngine', () => {
       outcome,
       trace: test.trace
     }).toEqual(LEGACY_TOOL_ROUND_REFERENCE)
+  })
+
+  it('allocates distinct runtime ids when separate model steps reuse a provider call id', async () => {
+    const test = harness([
+      { kind: 'tool_call_complete', callId: 'call_1', toolName: 'read', arguments: { path: 'file.ts' } },
+      { kind: 'completed', stopReason: 'tool_calls' }
+    ])
+
+    const first = await test.run()
+    const second = await test.run()
+
+    expect(first).toMatchObject({
+      kind: 'tool_calls',
+      snapshot: { toolCalls: [{ callId: 'call_tool_1' }] }
+    })
+    expect(second).toMatchObject({
+      kind: 'tool_calls',
+      snapshot: { toolCalls: [{ callId: 'call_tool_2' }] }
+    })
+    const toolCallItems = test.appliedItems.filter((item) => item.kind === 'tool_call')
+    expect(toolCallItems.map((item) => item.id)).toEqual([
+      'item_tool_turn_1_call_tool_1',
+      'item_tool_turn_1_call_tool_2'
+    ])
+    expect(new Set(toolCallItems.map((item) => item.id)).size).toBe(2)
+  })
+
+  it('allocates distinct runtime ids when one model step repeats a provider call id', async () => {
+    const test = harness([
+      { kind: 'tool_call_complete', callId: 'call_shared', toolName: 'read', arguments: { path: 'a.ts' } },
+      { kind: 'tool_call_complete', callId: 'call_shared', toolName: 'read', arguments: { path: 'b.ts' } },
+      { kind: 'completed', stopReason: 'tool_calls' }
+    ])
+
+    const outcome = await test.run({ maxToolCallsPerStep: 2 })
+
+    expect(outcome).toMatchObject({
+      kind: 'tool_calls',
+      snapshot: {
+        toolCalls: [
+          { callId: 'call_shared', arguments: { path: 'a.ts' } },
+          { callId: 'call_tool_1', arguments: { path: 'b.ts' } }
+        ]
+      }
+    })
+    const itemIds = test.appliedItems
+      .filter((item) => item.kind === 'tool_call')
+      .map((item) => item.id)
+    expect(itemIds).toEqual([
+      'item_tool_turn_1_call_shared',
+      'item_tool_turn_1_call_tool_1'
+    ])
   })
 
   it('coalesces provider-sized deltas without changing event order or final text', async () => {

@@ -56,7 +56,7 @@ import { withFileMutationQueue } from '../src/adapters/tool/file-mutation-queue.
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from '../src/adapters/tool/truncate.js'
 import { BackgroundShellOutputWriter } from '../src/services/background-shell-output.js'
 import type { TurnItem } from '../src/contracts/items.js'
-import type { FsStats } from '../src/adapters/tool/builtin-tool-types.js'
+import { DEFAULT_BASH_TIMEOUT_SECONDS, type FsStats } from '../src/adapters/tool/builtin-tool-types.js'
 import type { ToolHostContext } from '../src/ports/tool-host.js'
 
 function buildContext(workspace: string, overrides: Partial<ToolHostContext> = {}): ToolHostContext {
@@ -634,13 +634,29 @@ describe('Kun built-in tools', () => {
     expect(output.truncation).toBe(null)
   })
 
+  it('keeps the Bash timeout runtime-owned at 24 hours', async () => {
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: 'done' }))
+    const bash = createBashLocalTool({ operations: { exec } })
+    const properties = bash.inputSchema.properties as Record<string, unknown>
+    expect(properties).not.toHaveProperty('timeout')
+    expect(DEFAULT_BASH_TIMEOUT_SECONDS).toBe(86_400)
+
+    await executeTool(new LocalToolHost({ tools: [bash] }), workspace, 'bash', {
+      command: 'echo done'
+    })
+    expect(exec).toHaveBeenCalledWith(
+      'echo done',
+      workspace,
+      expect.objectContaining({ timeoutSeconds: 86_400 })
+    )
+  })
+
   it.skipIf(process.platform === 'win32')(
     'finishes POSIX shell commands after a background child keeps stdio open',
     async () => {
     const startedAt = Date.now()
     const output = await executeTool(host, workspace, 'bash', {
-      command: 'sleep 5 & echo done',
-      timeout: 2
+      command: 'sleep 5 & echo done'
     })
 
     expect(output.exit_code).toBe(0)
@@ -652,8 +668,7 @@ describe('Kun built-in tools', () => {
   it('blocks foreground bash commands until the process exits', async () => {
     const startedAt = Date.now()
     const output = await executeTool(host, workspace, 'bash', {
-      command: 'echo ready; sleep 2; echo done',
-      timeout: 10
+      command: 'echo ready; sleep 2; echo done'
     })
 
     expect(output.exit_code).toBe(0)
@@ -691,8 +706,7 @@ describe('Kun built-in tools', () => {
         toolName: 'bash',
         arguments: {
           command: 'echo bg-ready; sleep 5; echo bg-done',
-          background: true,
-          timeout: 10
+          background: true
         }
       },
       buildContext(workspace, { abortSignal: abortController.signal })
@@ -782,7 +796,7 @@ describe('Kun built-in tools', () => {
       {
         callId: 'call_bash_bg_capacity_first',
         toolName: 'bash',
-        arguments: { command: 'sleep 10', background: true, timeout: 10 }
+        arguments: { command: 'sleep 10', background: true }
       },
       buildContext(workspace)
     )
@@ -794,7 +808,7 @@ describe('Kun built-in tools', () => {
       {
         callId: 'call_bash_bg_capacity_second',
         toolName: 'bash',
-        arguments: { command: 'sleep 10', background: true, timeout: 10 }
+        arguments: { command: 'sleep 10', background: true }
       },
       buildContext(workspace)
     )
@@ -819,7 +833,7 @@ describe('Kun built-in tools', () => {
       {
         callId: 'call_bash_bg_timeout_limit',
         toolName: 'bash',
-        arguments: { command: 'sleep 10', background: true, timeout: 2 }
+        arguments: { command: 'sleep 10', background: true }
       },
       buildContext(workspace)
     )
@@ -837,7 +851,7 @@ describe('Kun built-in tools', () => {
       {
         callId: 'call_bash_bg_thread_owner',
         toolName: 'bash',
-        arguments: { command: 'sleep 10', background: true, timeout: 10 }
+        arguments: { command: 'sleep 10', background: true }
       },
       buildContext(workspace, { threadId: 'thr_owner' })
     )
@@ -878,8 +892,7 @@ describe('Kun built-in tools', () => {
         toolName: 'bash',
         arguments: {
           command: 'echo ready; sleep 2; echo done',
-          background: true,
-          timeout: 10
+          background: true
         }
       },
       buildContext(workspace)
@@ -929,7 +942,7 @@ describe('Kun built-in tools', () => {
       {
         callId: 'call_bash_bg_lifecycle_order',
         toolName: 'bash',
-        arguments: { command: 'true', background: true, timeout: 10 }
+        arguments: { command: 'true', background: true }
       },
       buildContext(workspace)
     )
@@ -965,8 +978,7 @@ describe('Kun built-in tools', () => {
           toolName: 'bash',
           arguments: {
             command: "node -e \"setTimeout(() => process.stdout.write('closed-without-poll'), 10)\"",
-            background: true,
-            timeout: 10
+            background: true
           }
         },
         buildContext(workspace)
@@ -1013,8 +1025,7 @@ describe('Kun built-in tools', () => {
         toolName: 'bash',
         arguments: {
           command: "node -e \"let n = 0; const timer = setInterval(() => { process.stdout.write('x'); if (++n === 80) clearInterval(timer) }, 5)\"",
-          background: true,
-          timeout: 10
+          background: true
         }
       },
       buildContext(workspace),
@@ -1103,8 +1114,7 @@ describe('Kun built-in tools', () => {
         toolName: 'bash',
         arguments: {
           command: "node -e \"process.stdout.write('line-one\\n'); process.stdout.write('x'.repeat(10050))\"",
-          background: true,
-          timeout: 10
+          background: true
         }
       },
       buildContext(workspace)
@@ -1294,6 +1304,40 @@ describe('Kun built-in tools', () => {
     })
     expect(output.start_line).toBe(2)
     expect(String(output.content)).toContain('Use offset=4 to continue')
+  })
+
+  it('allows an edit after a read window reaches EOF but omits leading lines', async () => {
+    await writeFile(join(workspace, 'paged-edit.txt'), 'one\ntwo\nthree\nfour', 'utf8')
+    const guardedHost = new LocalToolHost({
+      tools: buildCodingBuiltinLocalTools(),
+      readTracker: true
+    })
+    const context = buildContext(workspace)
+
+    const read = await guardedHost.execute(
+      {
+        callId: 'call_read_paged_edit',
+        toolName: 'read',
+        arguments: { path: 'paged-edit.txt', offset: 3 }
+      },
+      context
+    )
+    expect(read.item).toMatchObject({
+      kind: 'tool_result',
+      isError: false,
+      output: { start_line: 3, end_line: 4, total_lines: 4, truncated: false }
+    })
+
+    const edit = await guardedHost.execute(
+      {
+        callId: 'call_edit_paged_edit',
+        toolName: 'edit',
+        arguments: { path: 'paged-edit.txt', oldText: 'one', newText: 'ONE' }
+      },
+      context
+    )
+    expect(edit.item).toMatchObject({ kind: 'tool_result', isError: false })
+    await expect(readFile(join(workspace, 'paged-edit.txt'), 'utf8')).resolves.toContain('ONE')
   })
 
   it('reads supported images with pi-style structured image metadata', async () => {

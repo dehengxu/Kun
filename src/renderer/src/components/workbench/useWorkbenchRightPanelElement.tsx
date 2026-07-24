@@ -69,9 +69,6 @@ type WorkbenchRightPanelElementOptions = Pick<
   changes: {
     blocks: RightPanelHostProps['changes']['blocks']
   }
-  todo: {
-    onOpenPlan: RightPanelHostProps['todo']['onOpenPlan']
-  }
   browser: Pick<BrowserPanelProps, 'blocks' | 'preferredUrl'>
   canvas: Pick<CanvasPanelProps, 'workspaceRoot' | 'activeThreadId'>
   file: Pick<
@@ -81,8 +78,14 @@ type WorkbenchRightPanelElementOptions = Pick<
     | 'workspaceRoot'
     | 'onSelectTarget'
     | 'onCloseTarget'
+    | 'pinnedTargetKeys'
+    | 'preserveAcrossThreads'
+    | 'onTogglePinnedTarget'
+    | 'onCloseOtherTargets'
+    | 'onTogglePreserveAcrossThreads'
   >
   extensionView?: RightPanelHostProps['extensionView']
+  code?: RightPanelHostProps['code']
   workspaceRoot?: string
 }
 
@@ -117,11 +120,11 @@ export function useWorkbenchRightPanelElement({
   write,
   sdd,
   changes,
-  todo,
   browser,
   canvas,
   file,
   extensionView,
+  code,
   workspaceRoot
 }: WorkbenchRightPanelElementOptions): ReactElement | null {
   const designPanelMode = resolveDesignPanelMode({
@@ -178,7 +181,6 @@ export function useWorkbenchRightPanelElement({
         onCollapse
       }}
       changes={{ blocks: changes.blocks, onCollapse }}
-      todo={{ onCollapse, onOpenPlan: todo.onOpenPlan }}
       browser={{
         blocks: browser.blocks,
         preferredUrl: browser.preferredUrl,
@@ -194,7 +196,11 @@ export function useWorkbenchRightPanelElement({
         ...file,
         onClose: onCollapse
       }}
+      mcpSkills={{
+        onOpenSettings: () => openSettings('agents')
+      }}
       extensionView={extensionView}
+      code={code}
       workspaceRoot={workspaceRoot}
       onCollapse={onCollapse}
     />

@@ -1,9 +1,10 @@
 import { stat } from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import type { LocalTool } from './local-tool-host.js'
 
 export type FsStats = NonNullable<Awaited<ReturnType<typeof stat>>>
 
-export const DEFAULT_BASH_TIMEOUT_SECONDS = 120
+export const DEFAULT_BASH_TIMEOUT_SECONDS = 24 * 60 * 60
 export const DEFAULT_SEARCH_LIMIT = 100
 export const DEFAULT_LIST_LIMIT = 500
 export const DEFAULT_FIND_LIMIT = 1000
@@ -235,11 +236,15 @@ export interface BashLocalToolOperations {
 export interface WriteLocalToolOperations {
   mkdir?: (path: string) => Promise<void>
   writeFile?: (path: string, content: string) => Promise<void>
+  /** Test/composition seam; the returned handle is always identity-verified before use. */
+  openExternal?: (path: string, flags: number) => Promise<FileHandle>
 }
 
 export interface EditLocalToolOperations {
   readFile?: (path: string) => Promise<string>
   writeFile?: (path: string, content: string) => Promise<void>
+  /** Test/composition seam; the returned handle is always identity-verified before use. */
+  openExternal?: (path: string, flags: number) => Promise<FileHandle>
 }
 
 export interface GrepLocalToolOperations {

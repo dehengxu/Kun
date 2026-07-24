@@ -20,7 +20,8 @@ const {
   _internals: {
     installLinuxElectronLauncher,
     linuxElectronLauncherContent,
-    linuxRealExecutableName
+    linuxRealExecutableName,
+    packedKunPruneArgs
   }
 } = require('./after-pack.cjs')
 
@@ -65,6 +66,17 @@ function executableLauncherFixture(t) {
   return { appOutDir, executable, realExecutable }
 }
 
+test('prunes packaged Kun dependencies for the package target architecture', () => {
+  assert.deepEqual(packedKunPruneArgs({ electronPlatformName: 'darwin', arch: 'x64' }), [
+    'prune',
+    '--omit=dev',
+    '--ignore-scripts',
+    '--force',
+    '--os=darwin',
+    '--cpu=x64'
+  ])
+})
+
 test('installs an executable Linux product launcher over a preserved ELF payload', {
   skip: process.platform === 'win32' && 'requires POSIX executable modes'
 }, (t) => {
@@ -102,6 +114,13 @@ test('GUI prepends the sandbox flag without parsing or swallowing user arguments
     '--',
     LINUX_SANDBOX_LAUNCHER_FLAG
   ])
+})
+
+test('Linux launcher resolves a bare AppImage product name through APPDIR', () => {
+  const content = linuxElectronLauncherContent('kun-gui')
+  assert.match(content, /AppImage may invoke AppRun through PATH/)
+  assert.match(content, /\[ -n "\$\{APPDIR:-\}" \] && \[ -x "\$\{APPDIR\}\/kun-gui" \]/)
+  assert.match(content, /launcher_path="\$\{APPDIR\}\/kun-gui"/)
 })
 
 test('does not add a Chromium flag to ELECTRON_RUN_AS_NODE commands', {

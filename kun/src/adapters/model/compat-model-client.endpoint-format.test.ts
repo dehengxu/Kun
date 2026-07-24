@@ -3,6 +3,7 @@ import { CompatModelClient } from './compat-model-client.js'
 import type { ModelCapabilityMetadata } from '../../contracts/capabilities.js'
 import type { ModelEndpointFormat } from '../../contracts/model-endpoint-format.js'
 import type { ModelRequest, ModelStreamChunk } from '../../ports/model-client.js'
+import { createCompatRequestCodecs, normalizeToolSpecs } from './compat-request-builder.js'
 
 // A single provider (OpenCode Go) routes some models over chat completions
 // and others over Anthropic Messages. The wire format is resolved per request
@@ -57,6 +58,37 @@ async function drain(iterable: AsyncIterable<ModelStreamChunk>): Promise<ModelSt
 }
 
 describe('CompatModelClient per-model endpointFormat', () => {
+  it('excludes local tool provenance from every supported wire format', () => {
+    const codecs = createCompatRequestCodecs()
+    const tools = normalizeToolSpecs([{
+      name: 'read_file',
+      description: 'Read a file',
+      inputSchema: { type: 'object', properties: {} },
+      providerKind: 'gui',
+      providerId: 'design-canvas'
+    }])
+
+    for (const endpointFormat of ['chat_completions', 'responses', 'messages'] as const) {
+      const body = codecs.build({
+        request: request('test-model'),
+        model: 'test-model',
+        messages: [],
+        tools,
+        stream: true,
+        endpointFormat,
+        baseUrl: 'https://provider.example/v1',
+        isCodex: false,
+        isCodexLite: false,
+        codexNativeImageGeneration: false
+      })
+      const serialized = JSON.stringify(body)
+      expect(serialized).toContain('read_file')
+      expect(serialized).not.toContain('providerKind')
+      expect(serialized).not.toContain('providerId')
+      expect(serialized).not.toContain('design-canvas')
+    }
+  })
+
   it('routes an override model to the Anthropic Messages endpoint while others use chat completions', async () => {
     const calls: CapturedCall[] = []
     const client = new CompatModelClient({

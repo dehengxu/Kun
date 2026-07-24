@@ -12,12 +12,13 @@ export type WorkbenchRightPanelHostProps = Pick<
   | 'rightPanelMode'
   | 'writeAssistantOpen'
   | 'changes'
-  | 'todo'
   | 'browser'
   | 'planPanel'
   | 'canvas'
   | 'file'
+  | 'mcpSkills'
   | 'extensionView'
+  | 'code'
   | 'workspaceRoot'
   | 'onCollapse'
 > & {
@@ -43,12 +44,13 @@ export function WorkbenchRightPanelHost({
   write,
   sdd,
   changes,
-  todo,
   browser,
   planPanel,
   canvas,
   file,
+  mcpSkills,
   extensionView,
+  code,
   workspaceRoot,
   onCollapse
 }: WorkbenchRightPanelHostProps): ReactElement | null {
@@ -64,12 +66,13 @@ export function WorkbenchRightPanelHost({
       write={{ ...design.shared, ...write }}
       sdd={{ ...design.shared, ...sdd }}
       changes={changes}
-      todo={todo}
       browser={browser}
       planPanel={planPanel}
       canvas={canvas}
       file={file}
+      mcpSkills={mcpSkills}
       extensionView={extensionView}
+      code={code}
       workspaceRoot={workspaceRoot}
       onCollapse={onCollapse}
     />

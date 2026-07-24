@@ -1,4 +1,5 @@
 const { execFileSync } = require('node:child_process')
+const { createHash } = require('node:crypto')
 const {
   chmodSync,
   closeSync,
@@ -6,6 +7,7 @@ const {
   existsSync,
   lstatSync,
   openSync,
+  readFileSync,
   readSync,
   readdirSync,
   renameSync,
@@ -25,6 +27,7 @@ const KUN_RUNTIME_REQUIRED_PATHS = [
   'kun/node_modules/semver/package.json',
   'kun/node_modules/yauzl/package.json',
   'kun/node_modules/yazl/package.json',
+  'kun/node_modules/@cursor/sdk/package.json',
   'kun/node_modules/@modelcontextprotocol/sdk/package.json',
   'kun/node_modules/@kun/extension-api/package.json',
   'kun/node_modules/@kun/extension-api/dist/index.js',
@@ -36,6 +39,7 @@ const KUN_RUNTIME_REQUIRED_PATHS = [
   'packages/extension-api/dist/index.js',
   'packages/extension-api/schema/kun-extension.schema.json',
   'packages/extension-api/fixtures/api-major-negotiation.json',
+  'packages/extension-api/fixtures/api-minor-negotiation.json',
   'packages/create-kun-extension/src/cli.mjs',
   'packages/create-kun-extension/src/scaffold.mjs',
   'packages/create-kun-extension/templates/node/kun-extension.json',
@@ -48,6 +52,13 @@ const KUN_RUNTIME_REQUIRED_PATHS = [
 ]
 const LINUX_SANDBOX_LAUNCHER_FLAG = '--disable-setuid-sandbox'
 const LINUX_REAL_EXECUTABLE_SUFFIX = '.electron-bin'
+const BUNDLED_EXTENSIONS_DIR = 'bundled-extensions'
+const BUNDLED_EXTENSION_CATALOG_FILE = 'catalog.json'
+const REQUIRED_BUNDLED_EXTENSION_IDS = [
+  'kun-examples.kun-video-editor',
+  'kun-examples.presentation-studio',
+  'kun-examples.social-media-sidebar'
+]
 
 function normalizePlatform(platform) {
   return platform === 'win' ? 'win32' : platform
@@ -84,6 +95,20 @@ function npmCommand(args, platform = process.platform) {
   return { command: 'npm', args }
 }
 
+function packedKunPruneArgs(context) {
+  // The pack host may differ from the target architecture. npm 11 otherwise
+  // prunes Cursor's target-specific optional SDK package based on the host,
+  // leaving a package that cannot start its bundled runtime.
+  return [
+    'prune',
+    '--omit=dev',
+    '--ignore-scripts',
+    '--force',
+    `--os=${normalizePlatform(context.electronPlatformName)}`,
+    `--cpu=${normalizeArch(context.arch)}`
+  ]
+}
+
 function prunePackedKunDependencies(context) {
   const root = unpackedAppRoot(context)
   const kunDir = join(root, 'kun')
@@ -92,7 +117,7 @@ function prunePackedKunDependencies(context) {
   assertExists(join(kunDir, 'package.json'), 'Kun package manifest')
   assertExists(join(kunDir, 'node_modules'), 'Kun node_modules')
 
-  const prune = npmCommand(['prune', '--omit=dev', '--ignore-scripts'])
+  const prune = npmCommand(packedKunPruneArgs(context))
   execFileSync(prune.command, prune.args, {
     cwd: kunDir,
     env: {
@@ -135,10 +160,65 @@ function validateBundledKunRuntime(context) {
   for (const relativePath of KUN_RUNTIME_REQUIRED_PATHS) {
     assertExists(join(root, relativePath), relativePath)
   }
+  const cursorPlatformPackage =
+    `kun/node_modules/@cursor/sdk-${normalizePlatform(context.electronPlatformName)}-${normalizeArch(context.arch)}`
+  assertExists(
+    join(root, cursorPlatformPackage, 'package.json'),
+    `${cursorPlatformPackage}/package.json`
+  )
   assertExists(
     join(root, 'node_modules', 'better-sqlite3', 'package.json'),
     'root better-sqlite3 dependency'
   )
+}
+
+function validateBundledExtensionResources(context) {
+  const root = join(packedResourcesDir(context), BUNDLED_EXTENSIONS_DIR)
+  const catalogPath = join(root, BUNDLED_EXTENSION_CATALOG_FILE)
+  assertRegularNonSymlink(catalogPath, 'bundled extension catalog')
+  let catalog
+  try {
+    catalog = JSON.parse(readFileSync(catalogPath, 'utf8'))
+  } catch (error) {
+    throw new Error(`[after-pack] Invalid bundled extension catalog: ${error.message}`)
+  }
+  if (catalog?.schemaVersion !== 1 || !Array.isArray(catalog.extensions)) {
+    throw new Error('[after-pack] Invalid bundled extension catalog shape')
+  }
+  const ids = new Set()
+  for (const entry of catalog.extensions) {
+    if (
+      typeof entry?.id !== 'string' ||
+      typeof entry?.version !== 'string' ||
+      typeof entry?.archive !== 'string' ||
+      !/^[0-9A-Za-z][0-9A-Za-z._-]*\.kunx$/u.test(entry.archive) ||
+      typeof entry?.sha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/u.test(entry.sha256)
+    ) {
+      throw new Error('[after-pack] Invalid bundled extension catalog entry')
+    }
+    if (ids.has(entry.id)) {
+      throw new Error(`[after-pack] Duplicate bundled extension id: ${entry.id}`)
+    }
+    ids.add(entry.id)
+    const archivePath = join(root, entry.archive)
+    assertRegularNonSymlink(archivePath, `bundled extension archive ${entry.id}`)
+    const digest = createHash('sha256').update(readFileSync(archivePath)).digest('hex')
+    if (digest !== entry.sha256) {
+      throw new Error(`[after-pack] Bundled extension digest mismatch: ${entry.id}`)
+    }
+  }
+  for (const id of REQUIRED_BUNDLED_EXTENSION_IDS) {
+    if (!ids.has(id)) throw new Error(`[after-pack] Missing required bundled extension: ${id}`)
+  }
+}
+
+function assertRegularNonSymlink(path, label) {
+  assertExists(path, label)
+  const details = lstatSync(path)
+  if (details.isSymbolicLink() || !details.isFile() || details.size <= 0) {
+    throw new Error(`[after-pack] ${label} must be a non-empty non-symlink file: ${path}`)
+  }
 }
 
 function maybeAdhocSignMacApp(context) {
@@ -201,7 +281,16 @@ set -eu
 
 case "$0" in
   /*) launcher_path=$0 ;;
-  *) launcher_path=$PWD/$0 ;;
+  *)
+    # AppImage may invoke AppRun through PATH, which leaves the product
+    # launcher's argv[0] as a bare filename. Its APPDIR is the only stable
+    # location for the renamed Electron payload in that case.
+    if [ -n "\${APPDIR:-}" ] && [ -x "\${APPDIR}/${executableName}" ]; then
+      launcher_path="\${APPDIR}/${executableName}"
+    else
+      launcher_path=$PWD/$0
+    fi
+    ;;
 esac
 launcher_dir=\${launcher_path%/*}
 launcher_dir=$(CDPATH= cd -P "$launcher_dir" && pwd -P)
@@ -280,6 +369,7 @@ async function afterPack(context) {
   prunePackedKunDependencies(context)
   materializePackedWorkspaceDependencies(context)
   validateBundledKunRuntime(context)
+  validateBundledExtensionResources(context)
   prunePackedWhisperResources(context)
   ensureNodePtyHelpersExecutable(context)
   installLinuxElectronLauncher(context)
@@ -287,15 +377,18 @@ async function afterPack(context) {
 }
 
 exports.KUN_RUNTIME_REQUIRED_PATHS = KUN_RUNTIME_REQUIRED_PATHS
+exports.REQUIRED_BUNDLED_EXTENSION_IDS = REQUIRED_BUNDLED_EXTENSION_IDS
 exports.LINUX_SANDBOX_LAUNCHER_FLAG = LINUX_SANDBOX_LAUNCHER_FLAG
 exports._internals = {
   appBundlePath,
   packedResourcesDir,
   unpackedAppRoot,
   npmCommand,
+  packedKunPruneArgs,
   prunePackedKunDependencies,
   materializePackedWorkspaceDependencies,
   validateBundledKunRuntime,
+  validateBundledExtensionResources,
   normalizeArch,
   prunePackedWhisperResources,
   ensureNodePtyHelpersExecutable,

@@ -39,6 +39,7 @@ export function WorkspaceModeTabs({
     >
       <button
         type="button"
+        data-workspace-mode="chat"
         data-cursor-spotlight-target
         role="tab"
         aria-selected={activeView === 'chat'}
@@ -51,6 +52,7 @@ export function WorkspaceModeTabs({
       </button>
       <button
         type="button"
+        data-workspace-mode="write"
         data-cursor-spotlight-target
         role="tab"
         aria-selected={activeView === 'write'}
@@ -63,6 +65,7 @@ export function WorkspaceModeTabs({
       </button>
       <button
         type="button"
+        data-workspace-mode="design"
         data-cursor-spotlight-target
         role="tab"
         aria-selected={activeView === 'design'}
