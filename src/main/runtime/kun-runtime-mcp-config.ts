@@ -44,6 +44,7 @@ export async function skillCapabilityConfigForRuntime(
     .map(normalizeSkillRootPath)
     .filter((path) => path.length > 0 &&
       !managed.has(comparableSkillRootPath(path)) &&
+      !isHistoricalBundledAgentSkillsRoot(path) &&
       !isCodexPluginCacheRoot(path))
   const guiRoots = await guiSkillRootsForRuntime(settings)
   const roots = uniqueStrings([
@@ -63,6 +64,12 @@ export async function skillCapabilityConfigForRuntime(
     disabledIds: settings?.disabledSkillIds ?? stringArrayValue(existing.disabledIds),
     legacySkillMd: existing.legacySkillMd === false ? false : true
   }
+}
+
+function isHistoricalBundledAgentSkillsRoot(path: string): boolean {
+  return comparableSkillRootPath(path)
+    .replace(/\\/g, '/')
+    .endsWith('/bundled-agent-skills/skills')
 }
 
 export async function readGuiManagedMcpServers(

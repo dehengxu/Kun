@@ -31,6 +31,10 @@ import {
   readThreadWorktreeRegistry,
   saveThreadWorktreeRegistry
 } from '../lib/thread-worktree-registry'
+import {
+  forgetQueuedMessagesForThread,
+  saveQueuedMessagesForThread
+} from './queued-message-persistence'
 
 /**
  * Release the worktree pool slot owned by a thread when the task completes
@@ -685,6 +689,7 @@ export function createMaintenanceActions(
     }
     try {
       await p.deleteThread(targetId)
+      forgetQueuedMessagesForThread(targetId)
       saveWriteThreadRegistry(forgetWriteThread(targetId))
       saveDesignThreadRegistry(forgetDesignThread(targetId))
       saveThreadForkRegistry(forgetThreadFork(targetId))
@@ -802,7 +807,6 @@ export function createMaintenanceActions(
         turnDurationByUserId,
         turnReasoningFirstAtByUserId,
         turnReasoningLastAtByUserId,
-        queuedMessages: [],
         error: null
       })
       if (canvasResend) {
@@ -931,7 +935,7 @@ export function createMaintenanceActions(
       if (outcome === 'cancelled') {
         set((s) => ({
           blocks: s.blocks.map((b) =>
-            b.id === blockId && b.kind === 'approval'
+            b.id === blockId && b.kind === 'approval' && b.status === 'submitting'
               ? { ...b, status: 'pending' as const, errorMessage: undefined }
               : b
           )
@@ -940,12 +944,16 @@ export function createMaintenanceActions(
       }
       set((s) => ({
         blocks: s.blocks.map((b) =>
-          b.id === blockId && b.kind === 'approval'
+          b.id === blockId && b.kind === 'approval' && b.status === 'submitting'
             ? { ...b, status: decision === 'allow' ? ('allowed' as const) : ('denied' as const) }
             : b
         )
       }))
     } catch (e) {
+      const stillSubmitting = get().blocks.some((b) =>
+        b.id === blockId && b.kind === 'approval' && b.status === 'submitting'
+      )
+      if (!stillSubmitting) return
       const msg = formatRuntimeError(e)
       void window.kunGui.logError('approval', 'Failed to submit approval decision', {
         message: msg,
@@ -957,7 +965,7 @@ export function createMaintenanceActions(
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {}),
         blocks: s.blocks.map((b) =>
-          b.id === blockId && b.kind === 'approval'
+          b.id === blockId && b.kind === 'approval' && b.status === 'submitting'
             ? { ...b, status: 'error' as const, errorMessage: msg }
             : b
         )
@@ -993,7 +1001,8 @@ export function createMaintenanceActions(
                 ...s.queuedMessages,
                 {
                   id: `q-${Date.now()}-${s.queuedMessages.length}`,
-                  text: followupText
+                  text: followupText,
+                  deliveryState: 'pending' as const
                 }
               ],
               blocks: s.blocks.map((b) =>
@@ -1002,6 +1011,7 @@ export function createMaintenanceActions(
                   : b
               )
             }))
+            saveQueuedMessagesForThread(activeThreadId, get().queuedMessages)
             await p.interruptTurn(activeThreadId, currentTurnId)
             settleInterruptedTurn(set, get)
             void get().refreshThreads()

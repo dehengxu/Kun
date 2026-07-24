@@ -81,15 +81,15 @@ export type ModelProfileConfigSource = {
   contextCompaction?: ContextCompactionConfig
 }
 
-export const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
+export const DEFAULT_CONTEXT_WINDOW_TOKENS = 256_000
 
 export const DEFAULT_CONTEXT_THRESHOLDS: ModelContextThresholds = {
   // Fallback for models without a registered profile. These assume a
-  // reasonably large window (>=128k). A custom endpoint with a small
+  // reasonably large window (>=256k). A custom endpoint with a small
   // window (e.g. 32k) should register a profile with explicit thresholds,
   // otherwise it may exceed its window before the first compaction.
-  softThreshold: 96_000,
-  hardThreshold: 108_800
+  softThreshold: 192_000,
+  hardThreshold: 217_600
 }
 
 const DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS = 1_000_000

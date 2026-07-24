@@ -5,7 +5,10 @@ import { describe, expect, it } from 'vitest'
 import { ExtensionCredentialStore } from './extension-credential-store.js'
 import type { ExtensionPrincipal } from './extension-agent-service.js'
 import { ExtensionProviderAccountStore } from './extension-provider-account-store.js'
-import { LegacyProviderCredentialMigrationService } from './legacy-provider-credential-migration.js'
+import {
+  LegacyProviderCredentialMigrationService,
+  materializeLegacyProviderCredential
+} from './legacy-provider-credential-migration.js'
 
 describe('LegacyProviderCredentialMigrationService', () => {
   it('migrates secret-first, reuses markers, and preserves distinct overrides', async () => {
@@ -129,6 +132,106 @@ describe('LegacyProviderCredentialMigrationService', () => {
 
     await accounts.upsertCoreProvider({ id: 'deepseek', displayName: 'DeepSeek' })
     expect((await migration.resolveApiKey('provider:deepseek'))?.apiKey).toBe('kept-secret')
+  })
+
+  it('forgets settings-committed bindings so hydrate cannot resurrect a cleared key', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-legacy-credential-forget-'))
+    const accounts = new ExtensionProviderAccountStore({ dataDir })
+    const credentials = new ExtensionCredentialStore({ dataDir, profileId: 'default' })
+    const migration = new LegacyProviderCredentialMigrationService({ dataDir, accounts, credentials })
+    const [initial] = await migration.migrate([providerSource('provider:deepseek', 'forget-me')])
+    await migration.markSettingsCommitted([initial!.sourceId])
+    expect((await migration.resolveApiKey('provider:deepseek'))?.apiKey).toBe('forget-me')
+
+    await migration.forgetSources(['provider:deepseek'])
+    expect(await migration.resolveApiKey('provider:deepseek')).toBeNull()
+    expect(await migration.listBindings()).toEqual([])
+    expect(await accounts.getAccount(initial!.accountId)).toBeNull()
+  })
+
+  it('keeps a shared account when forgetting only one of two sources', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-legacy-credential-forget-shared-'))
+    const accounts = new ExtensionProviderAccountStore({ dataDir })
+    const credentials = new ExtensionCredentialStore({ dataDir, profileId: 'default' })
+    const migration = new LegacyProviderCredentialMigrationService({ dataDir, accounts, credentials })
+    const results = await migration.migrate([
+      providerSource('provider:one', 'shared-secret'),
+      providerSource('runtime:same', 'shared-secret')
+    ])
+    await migration.markSettingsCommitted(results.map((entry) => entry.sourceId))
+    expect(results[0]?.accountId).toBe(results[1]?.accountId)
+
+    await migration.forgetSources(['provider:one'])
+    expect(await migration.resolveApiKey('provider:one')).toBeNull()
+    expect((await migration.resolveApiKey('runtime:same'))?.apiKey).toBe('shared-secret')
+    expect(await accounts.getAccount(results[0]!.accountId)).not.toBeNull()
+  })
+
+  it('updates a resolved credential in place without changing its migration marker', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-legacy-credential-refresh-'))
+    const accounts = new ExtensionProviderAccountStore({ dataDir })
+    const credentials = new ExtensionCredentialStore({ dataDir, profileId: 'default' })
+    const migration = new LegacyProviderCredentialMigrationService({ dataDir, accounts, credentials })
+    const [initial] = await migration.migrate([providerSource('provider:grok', 'old-oauth-json')])
+    await migration.markSettingsCommitted([initial!.sourceId])
+    const markerBefore = await readFile(
+      join(dataDir, 'extensions', 'legacy-credential-migrations.json'),
+      'utf8'
+    )
+
+    await expect(
+      migration.updateResolvedApiKey('provider:grok', 'refreshed-oauth-json')
+    ).resolves.toBe(true)
+
+    expect((await migration.resolveApiKey('provider:grok'))?.apiKey).toBe('refreshed-oauth-json')
+    expect(await readFile(
+      join(dataDir, 'extensions', 'legacy-credential-migrations.json'),
+      'utf8'
+    )).toBe(markerBefore)
+
+    // The GUI main process may still hold the pre-refresh settings snapshot.
+    // A later unrelated settings save must not restore that stale token.
+    await migration.migrate(
+      [providerSource('provider:grok', 'old-oauth-json')],
+      { replaceCommitted: true }
+    )
+    expect((await migration.resolveApiKey('provider:grok'))?.apiKey).toBe('refreshed-oauth-json')
+  })
+})
+
+describe('materializeLegacyProviderCredential', () => {
+  it('unwraps Codex OAuth credentials into access token + ChatGPT headers', () => {
+    const material = materializeLegacyProviderCredential(JSON.stringify({
+      kind: 'codex-oauth',
+      accessToken: 'codex-access',
+      refreshToken: 'refresh',
+      accountId: 'acct_1',
+      expiresAt: Date.now() + 60_000
+    }))
+    expect(material.apiKey).toBe('codex-access')
+    expect(material.headers).toMatchObject({
+      'ChatGPT-Account-Id': 'acct_1',
+      originator: 'codex_cli_rs'
+    })
+  })
+
+  it('unwraps Grok OAuth credentials into access token + cli-chat-proxy headers', () => {
+    const material = materializeLegacyProviderCredential(JSON.stringify({
+      kind: 'grok-oauth',
+      accessToken: 'grok-access',
+      refreshToken: 'refresh',
+      expiresAt: Date.now() + 60_000,
+      email: 'user@x.ai'
+    }))
+    expect(material).toEqual({
+      apiKey: 'grok-access',
+      headers: {
+        'X-XAI-Token-Auth': 'xai-grok-cli',
+        'x-authenticateresponse': 'authenticate-response',
+        'x-grok-client-version': '0.2.106',
+        'x-grok-client-mode': 'interactive'
+      }
+    })
   })
 })
 

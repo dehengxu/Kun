@@ -25,6 +25,7 @@ import type { SddDraftHistoryItem } from '../../sdd/sdd-draft-history'
 import type { SddDraft } from '../../sdd/sdd-draft-store'
 import { SidebarIconButton, SidebarTreeRow } from '../sidebar/SidebarPrimitives'
 import type { SidebarThreadWorktreeRecord } from './sidebar-project-selectors'
+import type { SidebarDropPosition } from './sidebar-order'
 
 const DRAFT_HISTORY_PAGE_SIZE = 3
 
@@ -159,8 +160,13 @@ type ThreadRowProps = {
   ) => void
   onPreviewClose: () => void
   draggable?: boolean
+  dragging?: boolean
+  dropPosition?: SidebarDropPosition | null
   onDragStart?: (event: ReactDragEvent<HTMLDivElement>) => void
   onDragEnd?: (event: ReactDragEvent<HTMLDivElement>) => void
+  onDragOver?: (event: ReactDragEvent<HTMLDivElement>) => void
+  onDragLeave?: (event: ReactDragEvent<HTMLDivElement>) => void
+  onDrop?: (event: ReactDragEvent<HTMLDivElement>) => void
   onPin: () => void
   onRename: () => void
   onArchive: () => void
@@ -181,8 +187,13 @@ export function ThreadRow({
   onPreviewOpen,
   onPreviewClose,
   draggable = false,
+  dragging = false,
+  dropPosition = null,
   onDragStart,
   onDragEnd,
+  onDragOver,
+  onDragLeave,
+  onDrop,
   onPin,
   onArchive,
   onDelete,
@@ -253,12 +264,23 @@ export function ThreadRow({
           </SidebarIconButton>
         </>
       )}
-      className="min-h-[34px]"
+      className={`min-h-[34px] ${
+        dragging ? 'opacity-55' : ''
+      } ${
+        dropPosition === 'before'
+          ? "before:absolute before:inset-x-2 before:top-0 before:z-10 before:h-0.5 before:rounded-full before:bg-accent before:content-['']"
+          : dropPosition === 'after'
+            ? "after:absolute after:bottom-0 after:inset-x-2 after:z-10 after:h-0.5 after:rounded-full after:bg-accent after:content-['']"
+            : ''
+      }`}
       buttonClassName="items-center gap-2 px-2.5 py-1.5"
       disabled={deleting}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       ariaLabel={ariaLabel}
       title={[thread.title, thread.summary?.trim(), worktreeLabel].filter(Boolean).join('\n')}
       onClick={onSelect}

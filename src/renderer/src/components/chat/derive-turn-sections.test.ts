@@ -150,6 +150,42 @@ describe('deriveTurnSections', () => {
     expect(result.processBlocks.map((block) => block.kind)).toEqual(['tool'])
   })
 
+  it('surfaces runtime errors outside collapsed process work after partial assistant output', () => {
+    const result = sections([
+      { kind: 'reasoning', id: 'reasoning_1', text: 'Checking the provider.' },
+      { kind: 'assistant', id: 'partial_1', text: 'I found part of the answer.' },
+      {
+        kind: 'system',
+        id: 'error_1',
+        text: 'model request was rate limited (HTTP 429)',
+        code: 'http_429',
+        severity: 'error',
+        runtimeError: true
+      }
+    ])
+
+    expect(result.assistantContentBlocks.map((block) => block.id)).toEqual(['partial_1'])
+    expect(result.processBlocks.map((block) => block.id)).toEqual(['reasoning_1'])
+    expect(result.runtimeErrorBlocks).toEqual([
+      expect.objectContaining({
+        id: 'error_1',
+        text: 'model request was rate limited (HTTP 429)',
+        runtimeError: true
+      })
+    ])
+  })
+
+  it('keeps ordinary system statuses in process work', () => {
+    const result = sections([{
+      kind: 'system',
+      id: 'retry_status',
+      text: 'Retrying model request 1/3'
+    }])
+
+    expect(result.runtimeErrorBlocks).toEqual([])
+    expect(result.processBlocks.map((block) => block.id)).toEqual(['retry_status'])
+  })
+
   it('surfaces generated media blocks outside the collapsed process work', () => {
     const result = sections([
       {
@@ -206,6 +242,31 @@ describe('deriveTurnSections', () => {
 
     expect(result.generatedFileBlocks.map((block) => block.id)).toEqual(['tool_img'])
     expect(result.processBlocks.map((block) => block.id)).toEqual(['tool_img', 'tool_next'])
+  })
+
+  it('surfaces component prototypes outside work while retaining the tool in process history', () => {
+    const block: ChatBlock = {
+      kind: 'tool',
+      id: 'tool_component',
+      summary: 'design_component',
+      status: 'success',
+      toolKind: 'file_change',
+      meta: {
+        toolName: 'design_component',
+        componentPrototype: {
+          version: 1,
+          status: 'completed',
+          artifactId: 'component_abc',
+          title: 'Date range picker',
+          relativePath: '.kun-design/component-prototypes/date-picker/prototype.html',
+          viewport: { width: 720, height: 460 },
+          profile: 'component-designer'
+        }
+      }
+    }
+    const result = sections([block])
+    expect(result.componentPrototypeBlocks).toEqual([block])
+    expect(result.processBlocks).toEqual([block])
   })
 
   it('extracts file changes from JSON-wrapped tool output diffs', () => {

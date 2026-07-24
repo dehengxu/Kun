@@ -351,13 +351,28 @@ export class ThreadService {
   }
 
   async setTodos(threadId: string, request: SetThreadTodosRequest): Promise<ThreadTodoList> {
+    return this.setTodosInternal(threadId, request, false)
+  }
+
+  async setTodosFromTool(threadId: string, request: SetThreadTodosRequest): Promise<ThreadTodoList> {
+    return this.setTodosInternal(threadId, request, true)
+  }
+
+  private async setTodosInternal(
+    threadId: string,
+    request: SetThreadTodosRequest,
+    preserveExistingSources: boolean
+  ): Promise<ThreadTodoList> {
     const todos = await this.withThreadMutation(threadId, async () => {
       const current = await this.threadStore.get(threadId)
       if (!current) throw new Error(`thread not found: ${threadId}`)
       const now = this.nowIso()
+      const existingItems = current.todos?.items ?? []
       const items = normalizeTodoItems({
-        rawItems: request.todos,
-        existingItems: current.todos?.items ?? [],
+        rawItems: preserveExistingSources
+          ? preserveToolTodoSources(request.todos, existingItems)
+          : request.todos,
+        existingItems,
         now,
         ids: this.ids
       })
@@ -703,6 +718,37 @@ function normalizeTodoItems(input: {
       ...(source ? { source } : {}),
       createdAt: existing?.createdAt ?? input.now,
       updatedAt: changed ? input.now : existing.updatedAt
+    }
+  })
+}
+
+function preserveToolTodoSources(
+  rawItems: SetThreadTodosRequest['todos'],
+  existingItems: readonly ThreadTodoItem[]
+): SetThreadTodosRequest['todos'] {
+  const existingById = new Map(existingItems.map((item) => [item.id, item]))
+  const usedIds = new Set<string>()
+  return rawItems.map((raw) => {
+    const content = normalizeTodoContent(raw.content)
+    const requestedId = raw.id?.trim()
+    let existing = requestedId ? existingById.get(requestedId) : undefined
+    if (!existing && !requestedId) {
+      const matches = existingItems.filter((item) =>
+        !usedIds.has(item.id) && normalizeTodoContent(item.content) === content
+      )
+      if (matches.length === 1) existing = matches[0]
+    }
+    if (existing) usedIds.add(existing.id)
+    if (
+      !existing?.source ||
+      normalizeTodoContent(existing.content) !== content
+    ) {
+      return raw
+    }
+    return {
+      ...raw,
+      id: requestedId || existing.id,
+      source: existing.source
     }
   })
 }

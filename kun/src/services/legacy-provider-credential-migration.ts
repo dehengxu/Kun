@@ -1,10 +1,11 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID, scryptSync } from 'node:crypto'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { AtomicJsonFile } from '../extensions/atomic-json.js'
 import type { ExtensionPrincipal } from './extension-agent-service.js'
 import type { ExtensionCredentialStore } from './extension-credential-store.js'
 import type { ExtensionProviderAccountStore } from './extension-provider-account-store.js'
+import { GROK_CLIENT_VERSION } from './grok-oauth-credential-refresher.js'
 
 const MigrationRollbackSchema = z.object({
   accountId: z.string().min(1),
@@ -81,18 +82,33 @@ export function materializeLegacyProviderCredential(rawApiKey: string): LegacyPr
   try {
     const parsed = JSON.parse(apiKey) as Record<string, unknown>
     const accessToken = typeof parsed.accessToken === 'string' ? parsed.accessToken.trim() : ''
-    const accountId = typeof parsed.accountId === 'string' ? parsed.accountId.trim() : ''
-    if (parsed.kind !== 'codex-oauth' || !accessToken || !accountId) return { apiKey }
-    return {
-      apiKey: accessToken,
-      headers: {
-        'ChatGPT-Account-Id': accountId,
-        originator: 'codex_cli_rs',
-        'OpenAI-Beta': 'responses=experimental',
-        'User-Agent': 'codex_cli_rs/0.0.0 (deepseekgui)',
-        session_id: randomUUID()
+    if (parsed.kind === 'codex-oauth') {
+      const accountId = typeof parsed.accountId === 'string' ? parsed.accountId.trim() : ''
+      if (!accessToken || !accountId) return { apiKey }
+      return {
+        apiKey: accessToken,
+        headers: {
+          'ChatGPT-Account-Id': accountId,
+          originator: 'codex_cli_rs',
+          'OpenAI-Beta': 'responses=experimental',
+          'User-Agent': 'codex_cli_rs/0.0.0 (deepseekgui)',
+          session_id: randomUUID()
+        }
       }
     }
+    if (parsed.kind === 'grok-oauth') {
+      if (!accessToken) return { apiKey }
+      return {
+        apiKey: accessToken,
+        headers: {
+          'X-XAI-Token-Auth': 'xai-grok-cli',
+          'x-authenticateresponse': 'authenticate-response',
+          'x-grok-client-version': GROK_CLIENT_VERSION,
+          'x-grok-client-mode': 'interactive'
+        }
+      }
+    }
+    return { apiKey }
   } catch {
     return { apiKey }
   }
@@ -185,6 +201,30 @@ export class LegacyProviderCredentialMigrationService {
     }
   }
 
+  /**
+   * Replaces the protected value behind an existing source binding without
+   * changing its account or ordinary-settings migration marker. OAuth refresh
+   * uses this path so a stale in-memory settings snapshot still matches the
+   * marker and cannot overwrite the newly rotated token on the next save.
+   */
+  async updateResolvedApiKey(sourceId: string, apiKey: string): Promise<boolean> {
+    const trimmed = apiKey.trim()
+    if (!trimmed) throw new Error('updated provider credential is empty')
+    const entry = (await this.markers.read(emptyDocument)).entries[sourceId]
+    if (!entry) return false
+    const account = await this.options.accounts.getAccount(entry.accountId)
+    if (!account || account.providerId !== entry.providerId || account.status !== 'connected') {
+      return false
+    }
+    const credential = await this.options.credentials.get(account.credentialRef)
+    if (!credential) return false
+    await this.options.credentials.set(account.credentialRef, {
+      ...credential,
+      apiKey: trimmed
+    })
+    return true
+  }
+
   async markSettingsCommitted(sourceIds: readonly string[]): Promise<void> {
     const uniqueIds = [...new Set(sourceIds.map((value) => value.trim()).filter(Boolean))]
     if (uniqueIds.length === 0) return
@@ -216,6 +256,18 @@ export class LegacyProviderCredentialMigrationService {
   async rollbackPending(sourceIds: readonly string[]): Promise<void> {
     for (const sourceId of [...new Set(sourceIds.map((value) => value.trim()).filter(Boolean))]) {
       await this.rollbackOne(sourceId)
+    }
+  }
+
+  /**
+   * Permanently drop migration markers for sources whose plaintext was
+   * intentionally cleared (for example OAuth disconnect). Unlike
+   * {@link rollbackPending}, this works for both `secure-committed` and
+   * `settings-committed` phases so a later hydrate cannot resurrect the key.
+   */
+  async forgetSources(sourceIds: readonly string[]): Promise<void> {
+    for (const sourceId of [...new Set(sourceIds.map((value) => value.trim()).filter(Boolean))]) {
+      await this.forgetOne(sourceId)
     }
   }
 
@@ -355,6 +407,39 @@ export class LegacyProviderCredentialMigrationService {
     }
   }
 
+  private async forgetOne(sourceId: string): Promise<void> {
+    const document = await this.markers.read(emptyDocument)
+    const entry = document.entries[sourceId]
+    if (!entry) return
+    const account = await this.options.accounts.getAccount(entry.accountId)
+    const accountId = entry.accountId
+    const credentialRefs = new Set<string>()
+    if (account?.credentialRef) credentialRefs.add(account.credentialRef)
+    if (entry.rollback?.credentialRef) credentialRefs.add(entry.rollback.credentialRef)
+
+    await this.options.accounts.clearBinding(bindingScope(sourceId), entry.providerId).catch(() => undefined)
+    await this.markers.update(emptyDocument, (current) => {
+      if (!current.entries[sourceId]) return current
+      const entries = { ...current.entries }
+      delete entries[sourceId]
+      return { ...current, revision: current.revision + 1, entries }
+    })
+
+    const remaining = await this.markers.read(emptyDocument)
+    const stillReferenced = Object.values(remaining.entries).some((candidate) =>
+      candidate.accountId === accountId || candidate.rollback?.accountId === accountId
+    )
+    if (stillReferenced) return
+
+    const principal = corePrincipal(entry.providerId)
+    if (account) {
+      await this.options.accounts.deleteAccount(principal, accountId).catch(() => undefined)
+    }
+    for (const credentialRef of credentialRefs) {
+      await this.options.credentials.delete(credentialRef).catch(() => undefined)
+    }
+  }
+
   private async rollbackOne(sourceId: string): Promise<void> {
     const document = await this.markers.read(emptyDocument)
     const entry = document.entries[sourceId]
@@ -453,9 +538,11 @@ export class LegacyProviderCredentialMigrationService {
         accountId,
         modelId
       },
-      dataAccessDigest: createHash('sha256')
-        .update(`legacy-provider-binding\0${source.sourceId}\0${source.providerId}\0${modelId}`)
-        .digest('hex'),
+      dataAccessDigest: scryptSync(
+        `legacy-provider-binding\0${source.sourceId}\0${source.providerId}\0${modelId}`,
+        'kun-legacy-provider-binding-v1',
+        32
+      ).toString('hex'),
       dataCategories: [
         'conversation-history',
         'system-and-mode-instructions',
@@ -520,7 +607,7 @@ function corePrincipal(providerId: string): ExtensionPrincipal {
 }
 
 function digestSecret(secret: string, salt: string): string {
-  return createHash('sha256').update(salt).update('\0').update(secret).digest('hex')
+  return scryptSync(secret, salt, 32).toString('hex')
 }
 
 function bindingScope(sourceId: string): string {

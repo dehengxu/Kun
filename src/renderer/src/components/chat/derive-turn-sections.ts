@@ -11,10 +11,13 @@ import {
 } from './message-timeline-turns'
 
 export type TurnAssistantBlock = Extract<ChatBlock, { kind: 'assistant' }>
+export type TurnRuntimeErrorBlock = Extract<ChatBlock, { kind: 'system' }> & { runtimeError: true }
 
 export type TurnSections = {
   processBlocks: ChatBlock[]
   assistantContentBlocks: TurnAssistantBlock[]
+  runtimeErrorBlocks: TurnRuntimeErrorBlock[]
+  componentPrototypeBlocks: ToolBlock[]
   generatedFileBlocks: ToolBlock[]
   turnFileChanges: ToolBlock[]
 }
@@ -108,6 +111,7 @@ export function deriveTurnSections({
 }: DeriveTurnSectionsInput): TurnSections {
   const processBlocks: ChatBlock[] = []
   const assistantContentBlocks: TurnAssistantBlock[] = []
+  const runtimeErrorBlocks: TurnRuntimeErrorBlock[] = []
   // Only the SINGLE last assistant text segment is the visible answer bubble
   // (rendered outside the collapsed timeline). Every earlier "我先看看…" preface
   // / intermediate narration stays inside 已处理 — even consecutive trailing
@@ -118,6 +122,10 @@ export function deriveTurnSections({
     : findLastAssistantContentIndex(turn.blocks)
 
   for (const [index, block] of turn.blocks.entries()) {
+    if (block.kind === 'system' && block.runtimeError === true) {
+      runtimeErrorBlocks.push(block as TurnRuntimeErrorBlock)
+      continue
+    }
     if (block.kind === 'assistant') {
       const split = splitThink(block.text)
       if (split.think) {
@@ -174,5 +182,18 @@ export function deriveTurnSections({
     (block): block is ToolBlock => block.kind === 'tool' && hasGeneratedFiles(block)
   )
 
-  return { processBlocks, assistantContentBlocks, generatedFileBlocks, turnFileChanges }
+  const componentPrototypeBlocks: ToolBlock[] = turn.blocks.filter((block): block is ToolBlock => (
+    block.kind === 'tool' &&
+    block.meta?.toolName === 'design_component' &&
+    Boolean(block.meta.componentPrototype)
+  ))
+
+  return {
+    processBlocks,
+    assistantContentBlocks,
+    runtimeErrorBlocks,
+    componentPrototypeBlocks,
+    generatedFileBlocks,
+    turnFileChanges
+  }
 }

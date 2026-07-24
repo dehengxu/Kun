@@ -3,6 +3,10 @@ import { TurnItem, UserFileReferenceSchema, UserMessageSource } from './items.js
 import { isGuiPlanRelativePath } from '../shared/gui-plan.js'
 import { ApprovalPolicySchema, SandboxModeSchema } from './policy.js'
 import { MAX_TURN_ATTACHMENT_IDS } from './attachments.js'
+import {
+  ComposerContextAttachmentSchema,
+  MAX_COMPOSER_CONTEXT_ATTACHMENTS
+} from './composer-context.js'
 
 /**
  * Mode enum, inlined here (instead of importing `ThreadMode` from
@@ -94,6 +98,7 @@ export const TurnSchema = z.object({
   finishedAt: z.string().optional(),
   items: z.array(TurnItem).default([]),
   attachmentIds: z.array(z.string().min(1)).default([]),
+  composerContexts: z.array(ComposerContextAttachmentSchema).max(MAX_COMPOSER_CONTEXT_ATTACHMENTS).optional(),
   activeSkillIds: z.array(z.string().min(1)).default([]),
   injectedMemoryIds: z.array(z.string().min(1)).default([]),
   injectedMemorySummaries: z.array(InjectedMemorySummarySchema).default([]),
@@ -117,6 +122,8 @@ export const TurnSchema = z.object({
   guiDesignCanvas: z.boolean().optional(),
   /** True only for product Design-mode turns; Code canvas turns leave it unset. */
   guiDesignMode: z.boolean().optional(),
+  /** Product surface that owns this turn. Missing legacy values behave as Code. */
+  agentSurface: z.enum(['code', 'write', 'design']).optional(),
   /** Reserved first-class SVG artifact for structured SVG tools. */
   guiDesignArtifact: GuiDesignArtifactContextSchema.optional(),
   /**
@@ -169,6 +176,13 @@ export const StartTurnRequest = z.object({
     (ids) => new Set(ids).size === ids.length,
     { message: 'attachmentIds must not contain duplicates' }
   ).default([]),
+  composerContexts: z.array(ComposerContextAttachmentSchema)
+    .max(MAX_COMPOSER_CONTEXT_ATTACHMENTS)
+    .refine(
+      (attachments) => new Set(attachments.map((attachment) => attachment.attachmentId)).size === attachments.length,
+      { message: 'composerContexts must not contain duplicate attachmentId values' }
+    )
+    .default([]),
   fileReferences: z.array(UserFileReferenceSchema).default([]),
   workspaceCheckpointId: z.string().min(1).optional(),
   /**
@@ -184,6 +198,8 @@ export const StartTurnRequest = z.object({
   guiDesignCanvas: z.boolean().optional(),
   /** True only for product Design-mode turns; Code canvas turns leave it unset. */
   guiDesignMode: z.boolean().optional(),
+  /** Product surface used to scope subagent discovery and execution. */
+  agentSurface: z.enum(['code', 'write', 'design']).optional(),
   /** Reserved first-class SVG artifact for structured SVG tools. */
   guiDesignArtifact: GuiDesignArtifactContextSchema.optional(),
   /**

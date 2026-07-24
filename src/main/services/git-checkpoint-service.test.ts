@@ -39,6 +39,55 @@ afterEach(async () => {
 })
 
 describe('git checkpoint service', () => {
+  it('creates and restores a checkpoint before the repository has its first commit', async () => {
+    const unbornRepo = join(sandbox, 'unborn-repo')
+    execFileSync('git', ['init', '-b', 'main', unbornRepo], { stdio: 'pipe' })
+    execFileSync('git', ['-C', unbornRepo, 'config', 'user.email', 'test@example.com'], { stdio: 'pipe' })
+    execFileSync('git', ['-C', unbornRepo, 'config', 'user.name', 'Test'], { stdio: 'pipe' })
+
+    await writeFile(join(unbornRepo, 'staged.txt'), 'staged checkpoint\n')
+    execFileSync('git', ['-C', unbornRepo, 'add', 'staged.txt'], { stdio: 'pipe' })
+    await writeFile(join(unbornRepo, 'staged.txt'), 'unstaged checkpoint\n')
+    await writeFile(join(unbornRepo, 'untracked.txt'), 'untracked checkpoint\n')
+
+    const checkpoint = await createGitCheckpoint({
+      dataDir,
+      workspaceRoot: unbornRepo,
+      threadId: 'thr_unborn'
+    })
+    expect(checkpoint.ok).toBe(true)
+    if (!checkpoint.ok) throw new Error(checkpoint.message)
+    expect(checkpoint.head).toBeNull()
+    expect(checkpoint.currentBranch).toBe('main')
+
+    const checkpointDir = join(dataDir, 'git-checkpoints', checkpoint.checkpointId)
+    await expect(stat(join(checkpointDir, 'head.bundle'))).rejects.toThrow()
+    const metadata = JSON.parse(await readFile(join(checkpointDir, 'metadata.json'), 'utf-8')) as { head: string | null }
+    expect(metadata.head).toBeNull()
+
+    await writeFile(join(unbornRepo, 'later.txt'), 'created after checkpoint\n')
+    execFileSync('git', ['-C', unbornRepo, 'add', '.'], { stdio: 'pipe' })
+    execFileSync('git', ['-C', unbornRepo, 'commit', '-m', 'after checkpoint'], { stdio: 'pipe' })
+    execFileSync('git', ['-C', unbornRepo, 'switch', '-c', 'later-work'], { stdio: 'pipe' })
+    await writeFile(join(unbornRepo, 'later-work.txt'), 'later branch\n')
+    execFileSync('git', ['-C', unbornRepo, 'add', 'later-work.txt'], { stdio: 'pipe' })
+    execFileSync('git', ['-C', unbornRepo, 'commit', '-m', 'later work'], { stdio: 'pipe' })
+
+    const restored = await restoreGitCheckpoint({ dataDir, checkpointId: checkpoint.checkpointId })
+    expect(restored.ok).toBe(true)
+    if (!restored.ok) throw new Error(restored.message)
+    expect(restored.head).toBeNull()
+    expect(restored.currentBranch).toBe('main')
+    expect(execFileSync('git', ['-C', unbornRepo, 'branch', '--show-current'], { encoding: 'utf-8' }).trim()).toBe('main')
+    expect(() => execFileSync('git', ['-C', unbornRepo, 'rev-parse', '--verify', '--quiet', 'HEAD'], { stdio: 'pipe' })).toThrow()
+    expect(await readFile(join(unbornRepo, 'staged.txt'), 'utf-8')).toBe('unstaged checkpoint\n')
+    expect(await readFile(join(unbornRepo, 'untracked.txt'), 'utf-8')).toBe('untracked checkpoint\n')
+    await expect(stat(join(unbornRepo, 'later.txt'))).rejects.toThrow()
+    await expect(stat(join(unbornRepo, 'later-work.txt'))).rejects.toThrow()
+    expect(execFileSync('git', ['-C', unbornRepo, 'status', '--porcelain=v1'], { encoding: 'utf-8' })
+      .trim().split('\n').sort()).toEqual(['AM staged.txt', '?? untracked.txt'].sort())
+  })
+
   it('stores checkpoint heads outside visible git refs', async () => {
     const checkpoint = await createGitCheckpoint({
       dataDir,

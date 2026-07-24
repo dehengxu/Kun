@@ -5,6 +5,7 @@ import type {
   ModelProviderImageCapabilityV1,
   ModelProviderMusicCapabilityV1,
   ModelProviderModelProfileV1,
+  ModelProviderPresetMode,
   ModelProviderProfileV1,
   ModelProviderReasoningCapabilityV1,
   ModelProviderSpeechCapabilityV1,
@@ -30,6 +31,9 @@ export type ModelProviderPresetId =
   | 'opencode-go'
   | 'codex'
   | 'claude-subscription'
+  | 'gemini-subscription'
+  | 'cursor-subscription'
+  | 'grok-subscription'
   | 'moonshot-cn'
   | 'moonshot-global'
   | 'xiaomi'
@@ -37,13 +41,30 @@ export type ModelProviderPresetId =
   | 'aliyun'
   | 'tencentcloud'
   | 'vercel-ai-gateway'
-  | 'claude-subscription'
 
 export const TOKEN_PLAN_PROVIDER_ID_SUFFIX = '-token-plan'
 
 export const CHATGPT_SUBSCRIPTION_PROVIDER_ID = 'codex'
 export const CHATGPT_SUBSCRIPTION_LEGACY_NAME = 'Codex (ChatGPT)'
 export const CHATGPT_SUBSCRIPTION_NAME = 'ChatGPT 订阅'
+export const GROK_SUBSCRIPTION_PROVIDER_ID = 'grok-subscription'
+export const GROK_SUBSCRIPTION_NAME = 'Grok 订阅'
+export const GEMINI_SUBSCRIPTION_PROVIDER_ID = 'gemini-subscription'
+export const GEMINI_SUBSCRIPTION_NAME = 'Gemini 订阅'
+export const CURSOR_SUBSCRIPTION_PROVIDER_ID = 'cursor-subscription'
+export const CURSOR_SUBSCRIPTION_NAME = 'Cursor 订阅'
+export const CURSOR_SUBSCRIPTION_MODEL_IDS = ['auto'] as const
+export const GEMINI_SUBSCRIPTION_MODEL_IDS = [
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3.1-pro'
+] as const
+export const GROK_SUBSCRIPTION_MODEL_IDS = [
+  'grok-4.5',
+  'grok-4-1-fast-reasoning',
+  'grok-4-1-fast-non-reasoning',
+  'grok-code-fast-1'
+] as const
 export const CHATGPT_SUBSCRIPTION_LEGACY_MODEL_IDS = [
   'gpt-5.5',
   'gpt-5.4',
@@ -120,9 +141,11 @@ export type ModelProviderPreset = {
   category?: 'api' | 'subscription'
   /**
    * 传输类型。'agent-sdk' = 把整轮委托给内置的官方 Claude Agent SDK(消耗 Claude
-   * Pro/Max 订阅额度,合规路径);缺省按 HTTP 模型客户端走 baseUrl。
+   * Pro/Max 订阅额度,合规路径);'antigravity-cli' = 把整轮委托给 Google 官方
+   * Antigravity CLI(使用 Gemini 订阅);'cursor-sdk' = 使用 Cursor API Key 把
+   * 整轮委托给官方 Cursor SDK;缺省按 HTTP 模型客户端走 baseUrl。
    */
-  kind?: 'agent-sdk'
+  kind?: 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk'
   baseUrl: string
   endpointFormat: ModelEndpointFormat
   models: string[]
@@ -187,6 +210,22 @@ const DEEPSEEK_REASONING: ModelProviderReasoningCapabilityV1 = {
   supportedEfforts: ['off', 'high', 'max'],
   defaultEffort: 'max',
   requestProtocol: 'deepseek-chat-completions'
+}
+
+const ANTIGRAVITY_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['low', 'medium', 'high'],
+  defaultEffort: 'medium',
+  // The delegated runtime maps this to `agy --effort`; the HTTP request
+  // protocol is intentionally unused.
+  requestProtocol: 'none'
+}
+
+export const CURSOR_SDK_ADAPTIVE_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['auto'],
+  defaultEffort: 'auto',
+  // Cursor's Agent SDK owns the model-specific thinking parameters. Omitting
+  // explicit SDK params preserves its adaptive default for every model family.
+  requestProtocol: 'none'
 }
 
 // 通义千问 / 混元 / 豆包的「思考」开关各家用私有 body 字段,无法用现有 requestProtocol 精确映射,
@@ -282,6 +321,43 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     },
     docsUrl: 'https://code.claude.com/docs/en/authentication',
     apiKeyUrl: 'https://claude.ai'
+  },
+  {
+    id: GEMINI_SUBSCRIPTION_PROVIDER_ID,
+    name: GEMINI_SUBSCRIPTION_NAME,
+    category: 'subscription',
+    // Consumer Gemini subscriptions are served by Google's official
+    // Antigravity CLI. Do not route these ids to the retired Code Assist
+    // v1internal endpoint or the public API-key endpoint.
+    kind: 'antigravity-cli',
+    baseUrl: '',
+    endpointFormat: 'custom_endpoint',
+    models: [...GEMINI_SUBSCRIPTION_MODEL_IDS],
+    modelProfiles: Object.fromEntries(
+      GEMINI_SUBSCRIPTION_MODEL_IDS.map((model) => [
+        model,
+        visionChatProfile(1_048_576, ANTIGRAVITY_REASONING)
+      ])
+    ),
+    docsUrl: 'https://github.com/google-antigravity/antigravity-cli',
+    apiKeyUrl: 'https://antigravity.google'
+  },
+  {
+    id: CURSOR_SUBSCRIPTION_PROVIDER_ID,
+    name: CURSOR_SUBSCRIPTION_NAME,
+    category: 'subscription',
+    // Cursor exposes an official Agent SDK instead of an OpenAI-compatible
+    // subscription endpoint. Account-visible models are pulled after the user
+    // supplies a Cursor API key; `auto` remains the offline fallback.
+    kind: 'cursor-sdk',
+    baseUrl: '',
+    endpointFormat: 'custom_endpoint',
+    models: [...CURSOR_SUBSCRIPTION_MODEL_IDS],
+    modelProfiles: {
+      auto: textChatProfile(undefined, CURSOR_SDK_ADAPTIVE_REASONING)
+    },
+    docsUrl: 'https://cursor.com/docs/api/sdk/typescript',
+    apiKeyUrl: 'https://cursor.com/dashboard?tab=integrations'
   },
   {
     id: 'zhipu-coding-plan',
@@ -697,6 +773,36 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     apiKeyUrl: 'https://chatgpt.com'
   },
   {
+    id: GROK_SUBSCRIPTION_PROVIDER_ID,
+    name: GROK_SUBSCRIPTION_NAME,
+    category: 'subscription',
+    // Session OAuth tokens must hit cli-chat-proxy (subscription quota). Pay-as-you-go
+    // XAI_API_KEY traffic uses https://api.x.ai/v1 instead — keep them separate.
+    baseUrl: 'https://cli-chat-proxy.grok.com/v1',
+    endpointFormat: 'responses',
+    models: [...GROK_SUBSCRIPTION_MODEL_IDS],
+    modelProfiles: {
+      'grok-4.5': visionChatProfile(500_000),
+      'grok-4-1-fast-reasoning': visionChatProfile(2_000_000),
+      'grok-4-1-fast-non-reasoning': visionChatProfile(2_000_000),
+      'grok-code-fast-1': textChatProfile(256_000)
+    },
+    // Grok Build deliberately sends subscription OAuth bearers directly to the
+    // public xAI media API. Chat remains on cli-chat-proxy above.
+    image: {
+      protocol: 'grok-imagine-image',
+      baseUrl: 'https://api.x.ai/v1',
+      models: ['grok-imagine-image-quality', 'grok-imagine-image']
+    },
+    video: {
+      protocol: 'grok-imagine-video',
+      baseUrl: 'https://api.x.ai/v1',
+      models: ['grok-imagine-video-1.5-preview', 'grok-imagine-video']
+    },
+    docsUrl: 'https://docs.x.ai/',
+    apiKeyUrl: 'https://accounts.x.ai'
+  },
+  {
     id: 'vercel-ai-gateway',
     name: 'Vercel AI Gateway',
     baseUrl: 'https://ai-gateway.vercel.sh/v1',
@@ -726,6 +832,7 @@ export function modelProviderPresetProfile(
   return {
     id: preset.id,
     name: preset.name,
+    presetSource: { presetId: preset.id, mode: 'api' },
     apiKey: apiKey.trim(),
     baseUrl: preset.baseUrl,
     endpointFormat: preset.endpointFormat,
@@ -758,6 +865,7 @@ export function modelProviderTokenPlanProfile(
   return {
     id: tokenPlanProviderId(preset.id),
     name: `${preset.name} Token Plan`,
+    presetSource: { presetId: preset.id, mode: 'token-plan' },
     apiKey: apiKey.trim(),
     baseUrl: resolvedBaseUrl,
     endpointFormat: tokenPlan.endpointFormat,
@@ -810,6 +918,90 @@ export function modelProviderTokenPlanProfile(
         }
       : {})
   }
+}
+
+export type ResolvedModelProviderPresetSource = {
+  preset: ModelProviderPreset
+  mode: ModelProviderPresetMode
+}
+
+/**
+ * Resolves a persisted profile back to its built-in preset. Explicit source
+ * metadata supports multi-account ids; exact legacy ids remain compatible.
+ */
+export function resolveModelProviderPresetSource(
+  profile: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>
+): ResolvedModelProviderPresetSource | null {
+  const explicit = profile.presetSource
+  if (explicit) {
+    const preset = getModelProviderPreset(explicit.presetId)
+    if (!preset || (explicit.mode === 'token-plan' && !preset.tokenPlan)) return null
+    return { preset, mode: explicit.mode }
+  }
+  const direct = getModelProviderPreset(profile.id)
+  if (direct) return { preset: direct, mode: 'api' }
+  if (!profile.id.endsWith(TOKEN_PLAN_PROVIDER_ID_SUFFIX)) return null
+  const preset = getModelProviderPreset(profile.id.slice(0, -TOKEN_PLAN_PROVIDER_ID_SUFFIX.length))
+  return preset?.tokenPlan ? { preset, mode: 'token-plan' } : null
+}
+
+export function isMultiAccountProviderPreset(
+  preset: ModelProviderPreset,
+  mode: ModelProviderPresetMode
+): boolean {
+  return mode === 'token-plan' || preset.category === 'subscription'
+}
+
+export function modelProviderPresetAccountCount(
+  preset: ModelProviderPreset,
+  mode: ModelProviderPresetMode,
+  providers: readonly Pick<ModelProviderProfileV1, 'id' | 'name' | 'presetSource'>[]
+): number {
+  return providers.filter((provider) => {
+    const source = resolveModelProviderPresetSource(provider)
+    return source?.preset.id === preset.id && source.mode === mode
+  }).length
+}
+
+/** Builds the next independent account profile for a preset/mode family. */
+export function modelProviderPresetAccountProfile(
+  preset: ModelProviderPreset,
+  mode: ModelProviderPresetMode,
+  providers: readonly Pick<ModelProviderProfileV1, 'id' | 'name' | 'presetSource'>[]
+): ModelProviderProfileV1 | null {
+  const base = mode === 'token-plan'
+    ? modelProviderTokenPlanProfile(preset)
+    : modelProviderPresetProfile(preset)
+  if (!base) return null
+  const family = providers.filter((provider) => {
+    const source = resolveModelProviderPresetSource(provider)
+    return source?.preset.id === preset.id && source.mode === mode
+  })
+  const idPattern = new RegExp(`^${escapeRegExp(base.id)}-(\\d+)$`)
+  const namePattern = new RegExp(`^${escapeRegExp(base.name)} (\\d+)$`, 'i')
+  let highestOrdinal = 0
+  for (const provider of family) {
+    highestOrdinal = Math.max(
+      highestOrdinal,
+      provider.id === base.id ? 1 : Number(idPattern.exec(provider.id)?.[1] ?? 0),
+      provider.name.toLowerCase() === base.name.toLowerCase() ? 1 : Number(namePattern.exec(provider.name)?.[1] ?? 0)
+    )
+  }
+  let ordinal = family.length === 0 ? 1 : Math.max(highestOrdinal, family.length) + 1
+  const usedIds = new Set(providers.map((provider) => provider.id.toLowerCase()))
+  const usedNames = new Set(providers.map((provider) => provider.name.trim().toLowerCase()).filter(Boolean))
+  while (true) {
+    const id = ordinal === 1 ? base.id : `${base.id}-${ordinal}`
+    const name = ordinal === 1 ? base.name : `${base.name} ${ordinal}`
+    if (!usedIds.has(id.toLowerCase()) && !usedNames.has(name.toLowerCase())) {
+      return { ...base, id, name }
+    }
+    ordinal += 1
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function tokenPlanCapabilityBaseUrl(

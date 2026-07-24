@@ -2,6 +2,7 @@ import type { TurnItem } from '../contracts/items.js'
 import type { ModelRequest, ModelToolSpec } from '../ports/model-client.js'
 import type { RequestHistoryHygieneOptions } from './request-history-hygiene.js'
 import { isModelVisibleImageOutput } from './tool-result-image.js'
+import { appendKunTurnContextBlock } from '../prompt/kun-prompt-context.js'
 
 export type TokenEconomyConfig = {
   enabled?: boolean
@@ -36,7 +37,7 @@ export const TOKEN_ECONOMY_INSTRUCTION = [
   'Token economy mode is enabled.',
   'Reply concisely: answer directly, skip pleasantries, filler, and hedging.',
   'Preserve exact code, commands, paths, URLs, identifiers, and quoted errors.',
-  'When tool output says content was omitted, use narrower read/grep/bash ranges instead of guessing.'
+  'When tool output says content was omitted, use an available narrower inspection range instead of guessing.'
 ].join('\n')
 
 const MAX_COMMAND_LINES = 180
@@ -91,7 +92,11 @@ export function applyTokenEconomyToRequest(
   return {
     ...request,
     contextInstructions: economy.conciseResponses
-      ? [...(request.contextInstructions ?? []), TOKEN_ECONOMY_INSTRUCTION]
+      ? appendKunTurnContextBlock(request.contextInstructions ?? [], {
+          kind: 'token-economy',
+          authority: 'runtime',
+          content: TOKEN_ECONOMY_INSTRUCTION
+        })
       : request.contextInstructions,
     tools: economy.compressToolDescriptions
       ? request.tools.map(compactToolSpec)

@@ -26,9 +26,15 @@ import {
 import { resolveWorkspacePath, shellRuntimeInstruction } from '../adapters/tool/builtin-tool-utils.js'
 import { VERIFY_CHANGES_TOOL_NAME } from '../adapters/tool/builtin-verify-tool.js'
 import { buildToolPreferenceInstruction } from '../prompt/kun-system-prompt.js'
+import {
+  buildKunTurnContextInstructions,
+  type KunTurnContextAuthority,
+  type KunTurnContextBlock
+} from '../prompt/kun-prompt-context.js'
 import { effectiveHistoryAfterLatestCompaction } from './compaction-history.js'
 import { resolveCoherentProviderAccount } from './compaction-summary.js'
 import {
+  EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP,
   emptyPostToolRecoveryInstruction,
   hasSuccessfulCreatePlanResult,
   userInputUnavailableInstruction
@@ -73,6 +79,7 @@ import type { TurnContextResolver } from './turn-context-resolver.js'
 import { resolveTurnModeContext } from './turn-context-resolver.js'
 import type {
   ModelRoundOutcome,
+  PreparedTurnContext,
   TurnExecutionFailure
 } from './turn-execution-types.js'
 import type { TokenEconomyConfig } from './token-economy.js'
@@ -87,6 +94,7 @@ import {
 } from '../cache/immutable-prefix.js'
 import { buildToolCatalogFingerprint } from '../cache/tool-catalog-fingerprint.js'
 import { rewriteItemHistoryWithRetry } from '../services/history-commit-coordinator.js'
+import { TurnToolCatalogFreezer } from './turn-tool-catalog.js'
 
 export type ModelStepServiceDeps = {
   threadStore: ThreadStore
@@ -139,6 +147,8 @@ export type ModelStepServiceDeps = {
 }
 
 export class ModelStepService {
+  private readonly turnToolCatalogs = new TurnToolCatalogFreezer()
+
   constructor(private readonly deps: ModelStepServiceDeps) {}
 
   async run(
@@ -288,8 +298,15 @@ export class ModelStepService {
       allowedToolNames,
       userInputDisabled,
       toolDiscoveryContext: toolContext,
-      tools
+      tools: liveTools
     } = prepared
+    const frozenToolCatalog = this.turnToolCatalogs.resolve(
+      threadId,
+      turnId,
+      [...liveTools],
+      toolCatalogPolicyScope(prepared)
+    )
+    const tools = frozenToolCatalog.tools
     if (dedicatedSvgTurn) {
       const toolNames = new Set(tools.map((tool) => tool.name))
       const hasMutationTool = toolNames.has(DESIGN_SVG_EDIT_TOOL_NAME) || toolNames.has(DESIGN_SVG_ANIMATE_TOOL_NAME)
@@ -321,7 +338,7 @@ export class ModelStepService {
       tools.map((tool) => [tool.name, tool.providerKind])
     )
     const toolCatalog = buildToolCatalogFingerprint(toolSpecs)
-    const toolCatalogDrift = this.deps.telemetry.recordToolCatalogFingerprint({
+    const previousTurnDrift = this.deps.telemetry.recordToolCatalogFingerprint({
       threadId,
       workspace: thread?.workspace ?? '',
       mode: effectiveMode ?? 'agent',
@@ -336,16 +353,24 @@ export class ModelStepService {
       toolNames: toolCatalog.toolNames,
       toolHashes: toolCatalog.toolHashes
     })
+    const toolCatalogDrift = frozenToolCatalog.pendingDrift.kind !== 'none'
+      ? frozenToolCatalog.pendingDrift
+      : previousTurnDrift
+    const diagnosticCatalog = frozenToolCatalog.pendingCatalog ?? toolCatalog
     const toolCatalogDriftMessage = toolCatalogDrift.kind !== 'none'
-      ? buildToolCatalogDriftMessage(toolCatalog, toolCatalogDrift.kind)
+      ? buildToolCatalogDriftMessage(
+          diagnosticCatalog,
+          toolCatalogDrift.kind,
+          frozenToolCatalog.pendingCatalog ? 'deferred' : 'applied'
+        )
       : undefined
     if (toolCatalogDrift.kind !== 'none' && toolCatalogDriftMessage) {
       await this.deps.recordToolCatalogDrift({
         threadId,
         turnId,
-        fingerprint: toolCatalog.fingerprint,
-        toolCount: toolCatalog.toolCount,
-        toolNames: toolCatalog.toolNames,
+        fingerprint: diagnosticCatalog.fingerprint,
+        toolCount: diagnosticCatalog.toolCount,
+        toolNames: diagnosticCatalog.toolNames,
         changeKind: toolCatalogDrift.kind,
         message: toolCatalogDriftMessage
       })
@@ -365,17 +390,6 @@ export class ModelStepService {
         toolCatalogToolCount: toolCatalog.toolCount,
         toolCatalogDrift: toolCatalogDrift.kind !== 'none'
       })
-    }
-    if (toolCatalogDrift.kind === 'breaking') {
-      if (dedicatedSvgTurn && !svgArtifactCompletionState(historyItems, turnId).validationAfterMutation) {
-        this.deps.rememberFailure(turnId, {
-          error: 'The SVG tool catalog changed before the required mutation and validation completed.',
-          code: 'svg_tool_catalog_changed',
-          severity: 'error'
-        })
-        return 'failed'
-      }
-      return 'stop'
     }
     const toolKinds = new Map(toolSpecs.map((tool) => [tool.name, tool.toolKind]))
     const createPlanSatisfied = planTurnActive
@@ -403,6 +417,10 @@ export class ModelStepService {
       createPlanSatisfied,
       stepIndex
     })
+    const emptyPostToolRecoveryStep = this.deps.roundOutcome.emptyPostToolRecoverySteps(turnId)
+    const forceFinalAnswerRecovery =
+      emptyPostToolRecoveryStep >= EMPTY_POST_TOOL_FINAL_ANSWER_RECOVERY_STEP
+    const requestToolSpecs = forceFinalAnswerRecovery ? [] : effectiveToolSpecs
     const history = await this.deps.historyCompaction.compactIfNeeded({
       items,
       model,
@@ -411,7 +429,7 @@ export class ModelStepService {
       signal,
       threadId,
       turnId,
-      toolSpecs: effectiveToolSpecs,
+      toolSpecs: requestToolSpecs,
       reserveModelRequest: () => this.deps.budgetGate.reserveAdditionalModelRequest(threadId, turnId)
     })
     if (signal.aborted) return 'aborted'
@@ -458,40 +476,71 @@ export class ModelStepService {
           nowIso: this.deps.nowIso()
         })
       : null
-    const toolPreferenceInstruction = buildToolPreferenceInstruction(tools)
-    const contextInstructions = [
-      ...(runtimeContextInstruction ? [runtimeContextInstruction] : []),
+    const toolPreferenceInstruction = buildToolPreferenceInstruction(requestToolSpecs)
+    const contextBlocks: KunTurnContextBlock[] = [
+      ...(runtimeContextInstruction
+        ? [kunContextBlock('runtime-context', 'runtime', runtimeContextInstruction)]
+        : []),
       ...(thread.extensionProfile?.instructionOverlay?.trim()
-        ? [buildExtensionProfileInstruction(
-            thread.ownerExtensionId ?? 'unknown',
-            thread.extensionProfile.id,
-            thread.extensionProfile.instructionOverlay
+        ? [kunContextBlock(
+            'extension-profile',
+            'extension',
+            buildExtensionProfileInstruction(
+              thread.ownerExtensionId ?? 'unknown',
+              thread.extensionProfile.id,
+              thread.extensionProfile.instructionOverlay
+            )
           )]
         : []),
-      ...(instructionResolution.instruction ? [instructionResolution.instruction] : []),
-      ...(activeGoalInstruction ? [activeGoalInstruction] : []),
-      ...(goalRecoveryInstruction && this.deps.roundOutcome.goalNoToolRecoverySteps(turnId) > 0
-        ? [goalRecoveryInstruction]
+      ...(instructionResolution.instruction
+        ? [kunContextBlock('agents-instructions', 'workspace', instructionResolution.instruction)]
         : []),
-      ...(activeTodoInstruction ? [activeTodoInstruction] : []),
-      ...(this.deps.roundOutcome.hasEmptyPostToolRecovery(turnId)
-        ? [emptyPostToolRecoveryInstruction()]
+      ...(activeGoalInstruction
+        ? [kunContextBlock('active-goal', 'runtime', activeGoalInstruction)]
+        : []),
+      ...(goalRecoveryInstruction && this.deps.roundOutcome.goalNoToolRecoverySteps(turnId) > 0
+        ? [kunContextBlock('goal-recovery', 'runtime', goalRecoveryInstruction)]
+        : []),
+      ...(activeTodoInstruction
+        ? [kunContextBlock('thread-todos', 'runtime', activeTodoInstruction)]
+        : []),
+      ...(emptyPostToolRecoveryStep > 0
+        ? [kunContextBlock(
+            'model-recovery',
+            'runtime',
+            emptyPostToolRecoveryInstruction(emptyPostToolRecoveryStep)
+          )]
         : []),
       ...imageGenerationReferenceInstructions({
         imageAttachments: attachments.imageAttachments,
         textFallbacks: attachments.textFallbacks,
         workspace: thread?.workspace ?? '',
-        tools: effectiveToolSpecs
-      }),
-      ...memoryInstructions(memories),
-      ...(skillResolution.catalogInstruction ? [skillResolution.catalogInstruction] : []),
-      ...skillResolution.instructions,
-      ...(userInputDisabled ? [userInputUnavailableInstruction()] : []),
-      ...(toolPreferenceInstruction ? [toolPreferenceInstruction] : []),
-      ...(effectiveToolSpecs.some((tool) => tool.name === 'bash') ? [shellRuntimeInstruction()] : []),
-      ...(suggestVerification ? [verificationSuggestionInstruction()] : []),
-      ...(toolCatalogDriftMessage ? [toolCatalogDriftMessage] : [])
+        tools: requestToolSpecs
+      }).map((content) => kunContextBlock('attachment-reference', 'reference', content)),
+      ...memoryInstructions(memories)
+        .map((content) => kunContextBlock('memory', 'user', content)),
+      ...(skillResolution.catalogInstruction
+        ? [kunContextBlock('skill-catalog', 'skill', skillResolution.catalogInstruction)]
+        : []),
+      ...skillResolution.instructions
+        .map((content) => kunContextBlock('skill-instruction', 'skill', content)),
+      ...(userInputDisabled
+        ? [kunContextBlock('user-input-capability', 'runtime', userInputUnavailableInstruction())]
+        : []),
+      ...(toolPreferenceInstruction
+        ? [kunContextBlock('tool-guidance', 'runtime', toolPreferenceInstruction)]
+        : []),
+      ...(requestToolSpecs.some((tool) => tool.name === 'bash')
+        ? [kunContextBlock('shell-runtime', 'runtime', shellRuntimeInstruction())]
+        : []),
+      ...(!forceFinalAnswerRecovery && suggestVerification
+        ? [kunContextBlock('verification', 'runtime', verificationSuggestionInstruction())]
+        : []),
+      ...(toolCatalogDriftMessage
+        ? [kunContextBlock('tool-catalog', 'runtime', toolCatalogDriftMessage)]
+        : [])
     ]
+    const contextInstructions = buildKunTurnContextInstructions(contextBlocks)
     await this.deps.recordPipelineStage(threadId, turnId, 'input_remembered', {
       memoryCount: memories.length,
       contextInstructionCount: contextInstructions.length
@@ -517,8 +566,8 @@ export class ModelStepService {
       contextInstructions,
       history: forwardHistory,
       attachments,
-      tools: effectiveToolSpecs,
-      ...(requiredToolName ? { requiredToolName } : {}),
+      tools: requestToolSpecs,
+      ...(!forceFinalAnswerRecovery && requiredToolName ? { requiredToolName } : {}),
       ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
       signal
     })
@@ -614,6 +663,7 @@ export class ModelStepService {
       turn,
       prepared,
       ...(providerId ? { modelProviderId: providerId } : {}),
+      modelReasoningEffort: modelRoute.reasoningEffort ?? turn.reasoningEffort ?? 'auto',
       toolProviderMetadata,
       toolKinds,
       toolProviderKinds,
@@ -631,23 +681,52 @@ export function buildExtensionProfileInstruction(extensionId: string, profileId:
   ].join('\n')
 }
 
+function kunContextBlock(
+  kind: string,
+  authority: KunTurnContextAuthority,
+  content: string
+): KunTurnContextBlock {
+  return { kind, authority, content }
+}
+
 function buildToolCatalogDriftMessage(toolCatalog: {
   fingerprint: string
   toolCount: number
   toolNames: string[]
-}, changeKind: 'additive' | 'breaking'): string {
+}, changeKind: 'additive' | 'breaking', phase: 'deferred' | 'applied'): string {
   const sample = toolCatalog.toolNames.slice(0, 12).join(', ')
   const suffix = toolCatalog.toolNames.length > 12
     ? `, +${toolCatalog.toolNames.length - 12} more`
     : ''
-  const policy = changeKind === 'additive'
-    ? 'Only additive tool changes are allowed in-place; Kun will continue with the refreshed tool list.'
-    : 'Non-additive tool changes can invalidate prompt-cache assumptions; Kun stopped this turn. Start a new thread after editing, removing, or reordering tool schemas.'
+  const policy = phase === 'deferred'
+    ? 'The active turn keeps its frozen tool schemas; this update will be available on the next turn.'
+    : changeKind === 'additive'
+      ? 'The additive update is active from the start of this turn.'
+      : 'The updated catalog is active from the start of this turn; earlier turns keep their original schema fingerprints.'
   return [
     `Tool catalog changed for this thread (${toolCatalog.toolCount} tools, fingerprint ${toolCatalog.fingerprint}).`,
     policy,
     sample ? `Current tools: ${sample}${suffix}.` : ''
   ].filter(Boolean).join(' ')
+}
+
+function toolCatalogPolicyScope(prepared: Pick<
+  PreparedTurnContext,
+  | 'mode'
+  | 'dedicatedSvgTurn'
+  | 'allowedToolNames'
+  | 'skillResolution'
+  | 'extensionToolCatalogEpoch'
+  | 'userInputDisabled'
+>): string {
+  return JSON.stringify({
+    mode: prepared.mode,
+    dedicatedSvgTurn: prepared.dedicatedSvgTurn,
+    activeSkillIds: [...prepared.skillResolution.activeSkillIds].sort(),
+    allowedToolNames: prepared.allowedToolNames ? [...prepared.allowedToolNames].sort() : [],
+    extensionToolCatalogEpoch: prepared.extensionToolCatalogEpoch?.fingerprint ?? null,
+    userInputDisabled: prepared.userInputDisabled
+  })
 }
 
 function prefixVolatilityStageDetails(

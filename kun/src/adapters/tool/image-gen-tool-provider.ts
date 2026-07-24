@@ -16,6 +16,7 @@ const GENERATED_IMAGE_DIR = '.deepseekgui-images'
 const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
 const REFERENCE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const ASPECT_RATIOS = new Set(['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9'])
+const GROK_IMAGINE_ASPECT_RATIOS = ['1:1', '16:9', '9:16', '3:2', '2:3'] as const
 const SIZE_TIERS: Record<string, number> = { '1K': 1024, '2K': 2048 }
 const COMPATIBLE_SIZE_FALLBACK = SIZE_TIERS['1K']
 const SIZE_STEP = 64
@@ -34,6 +35,7 @@ export type GeneratedImage = { data: Buffer; mimeType: string }
 export type ImageGenRequest = {
   prompt: string
   model: string
+  aspectRatio?: string
   size?: string
   quality?: ImageGenerationQuality
   timeoutMs: number
@@ -228,6 +230,7 @@ export function buildImageGenToolProviders(
   // edit; otherwise the param is dropped so the model never tries a reference edit
   // the provider would silently mishandle.
   const supportsEdit = protocolSupportsImageEdit(config.protocol)
+  const isGrokImagine = config.protocol === 'grok-imagine-image'
 
   const tool = LocalToolHost.defineTool({
     name: 'generate_image',
@@ -248,12 +251,12 @@ export function buildImageGenToolProviders(
         prompt: { type: 'string', description: 'Detailed description of the image to generate' },
         aspect_ratio: {
           type: 'string',
-          enum: [...ASPECT_RATIOS],
+          enum: isGrokImagine ? [...GROK_IMAGINE_ASPECT_RATIOS] : [...ASPECT_RATIOS],
           description: 'Optional output aspect ratio. It changes proportions while preserving the selected or default resolution.'
         },
         image_size: {
           type: 'string',
-          enum: Object.keys(SIZE_TIERS),
+          enum: isGrokImagine ? ['1K'] : Object.keys(SIZE_TIERS),
           description: 'Optional resolution override. Set it only when the user explicitly requests 1K or 2K; otherwise omit it so the Settings default resolution is used. Resolution is independent of image quality.'
         },
         ...(supportsEdit
@@ -278,7 +281,13 @@ export function buildImageGenToolProviders(
 
       const aspectRatio = pickString(args.aspect_ratio)
       const imageSize = pickString(args.image_size)
-      const size = mapImageSize(aspectRatio, imageSize, config.defaultSize, config.defaultResolution)
+      // Grok Build's verified Imagine wire contract currently requests 1k.
+      const size = mapImageSize(
+        aspectRatio,
+        isGrokImagine ? '1K' : imageSize,
+        isGrokImagine ? undefined : config.defaultSize,
+        isGrokImagine ? '1K' : config.defaultResolution
+      )
 
       const references = await collectReferenceImages(
         args.reference_image_paths,
@@ -303,6 +312,7 @@ export function buildImageGenToolProviders(
         const request = {
           prompt,
           model,
+          ...(aspectRatio ? { aspectRatio } : {}),
           ...(size && size !== 'auto' ? { size } : {}),
           quality: config.quality,
           timeoutMs: config.timeoutMs,
@@ -487,6 +497,9 @@ export function createImageGenClient(config: {
   }
   if (config.protocol === 'codex-responses-image') {
     return new CodexResponsesImageClient(config.baseUrl!, config.apiKey!, config.headers)
+  }
+  if (config.protocol === 'grok-imagine-image') {
+    return new GrokImagineImageClient(config.baseUrl!, config.apiKey!, config.headers)
   }
   return new OpenAiCompatImageClient(config.baseUrl!, config.apiKey!)
 }
@@ -787,6 +800,60 @@ export class OpenAiCompatImageClient implements ImageGenClient {
       return { data: Buffer.from(await download.arrayBuffer()), mimeType }
     }
     throw new Error('image provider returned no image data')
+  }
+}
+
+export class GrokImagineImageClient implements ImageGenClient {
+  readonly id = 'grok-imagine-image'
+  private readonly endpointUrl: string
+
+  constructor(
+    baseUrl: string,
+    private readonly apiKey: string,
+    private readonly headers: Record<string, string> = {}
+  ) {
+    this.endpointUrl = openAiCompatImageUrl(baseUrl, 'generations')
+  }
+
+  async generate(request: ImageGenRequest): Promise<GeneratedImage> {
+    const signal = withTimeout(request.signal, request.timeoutMs)
+    let response: Response
+    try {
+      response = await fetch(this.endpointUrl, {
+        method: 'POST',
+        headers: {
+          ...this.headers,
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: request.model,
+          prompt: request.prompt,
+          n: 1,
+          aspect_ratio: request.aspectRatio ?? 'auto',
+          resolution: '1k',
+          response_format: 'b64_json'
+        }),
+        signal
+      })
+    } catch (error) {
+      throw imageFetchFailure(this.endpointUrl, error, request)
+    }
+    const text = await response.text()
+    if (!response.ok) throw new ImageGenHttpError(response.status, text)
+    let payload: ImagesApiPayload
+    try {
+      payload = JSON.parse(text) as ImagesApiPayload
+    } catch {
+      throw new Error('Grok Imagine image provider returned invalid JSON')
+    }
+    const b64 = payload.data?.[0]?.b64_json
+    if (!b64) throw new Error('Grok Imagine image provider returned no image data')
+    return { data: Buffer.from(b64, 'base64'), mimeType: 'image/jpeg' }
+  }
+
+  async edit(_request: ImageGenEditRequest): Promise<GeneratedImage> {
+    throw new Error('Grok Imagine image editing is not supported by this tool')
   }
 }
 

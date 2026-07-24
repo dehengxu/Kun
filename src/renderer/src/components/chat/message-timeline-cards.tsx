@@ -176,27 +176,33 @@ export function ReviewSummaryCard({ review }: { review: ReviewBlock }): ReactEle
 export function TurnChangeSummary({
   changes,
   viewportRef,
-  compact = false
+  compact = false,
+  onOpenChanges,
+  onReviewChanges,
+  reviewChangesDisabled = false
 }: {
   changes: ToolBlock[]
   viewportRef: RefObject<HTMLDivElement | null>
   compact?: boolean
+  onOpenChanges?: () => void
+  onReviewChanges?: () => void
+  reviewChangesDisabled?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
-  const [expanded, setExpanded] = useState(false)
-  const [activeId, setActiveId] = useState<string | null>(
-    () => changes.find((change) => change.detail?.trim())?.id ?? changes[0]?.id ?? null
-  )
+  const [showAllFiles, setShowAllFiles] = useState(false)
+  const [activeId, setActiveId] = useState<string | null>(null)
 
   useEffect(() => {
     if (changes.length === 0) {
       setActiveId(null)
+      setShowAllFiles(false)
       return
     }
     setActiveId((current) => {
       if (current && changes.some((change) => change.id === current)) return current
-      return changes.find((change) => change.detail?.trim())?.id ?? changes[0]?.id ?? null
+      return null
     })
+    if (changes.length <= 3) setShowAllFiles(false)
   }, [changes])
 
   const totals = useMemo(() => sumDiffStats(changes.map((change) => change.detail)), [changes])
@@ -207,112 +213,158 @@ export function TurnChangeSummary({
         : t('turnChangeFilesMany', { count: changes.length }),
     [changes.length, t]
   )
+  const visibleChanges = showAllFiles ? changes : changes.slice(0, 3)
+  const hiddenFileCount = Math.max(0, changes.length - 3)
   const { ref: deferredBodyRef, shouldRender: shouldRenderBody } = useDeferredRender<HTMLDivElement>({
-    enabled: expanded,
+    enabled: activeId !== null,
     root: viewportRef
   })
 
   return (
     <section
+      data-turn-change-summary
       className={`ds-card-strong overflow-hidden border border-ds-border shadow-[0_16px_40px_rgba(86,103,136,0.08)] ${
         compact ? 'rounded-[20px]' : 'rounded-[24px]'
       }`}
     >
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        aria-expanded={expanded}
-        className={`flex w-full items-center text-left transition hover:bg-ds-hover/40 ${
+      <div
+        className={`flex min-w-0 flex-col border-b border-ds-border-muted/70 sm:flex-row sm:items-center ${
           compact ? 'gap-3 px-4 py-3' : 'gap-4 px-5 py-4'
         }`}
       >
-        <span
-          className={`flex shrink-0 items-center justify-center bg-ds-card-muted text-ds-muted ${
-            compact ? 'h-10 w-10 rounded-[14px]' : 'h-12 w-12 rounded-[16px]'
-          }`}
-        >
-          <FileEdit className={compact ? 'h-4.5 w-4.5' : 'h-5 w-5'} strokeWidth={1.85} />
-        </span>
-        <span className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <span
-            className={`block font-semibold tracking-[-0.02em] text-ds-ink ${
-              compact ? 'text-[15px]' : 'text-[18px]'
+            className={`flex shrink-0 items-center justify-center bg-ds-card-muted text-ds-muted ${
+              compact ? 'h-10 w-10 rounded-[14px]' : 'h-11 w-11 rounded-[15px]'
             }`}
           >
-            {title}
+            <FileEdit className={compact ? 'h-4.5 w-4.5' : 'h-5 w-5'} strokeWidth={1.85} />
           </span>
-          {totals ? (
-            <span className={`block font-mono ${compact ? 'mt-0.5 text-[11px]' : 'mt-1 text-[12px]'}`}>
-              <span className="text-ds-diff-added">+{totals.added}</span>
-              <span className="mx-1.5 text-ds-faint">·</span>
-              <span className="text-ds-diff-removed">-{totals.removed}</span>
+          <span className="min-w-0 flex-1">
+            <span
+              className={`block truncate font-semibold tracking-[-0.02em] text-ds-ink ${
+                compact ? 'text-[15px]' : 'text-[17px]'
+              }`}
+            >
+              {title}
             </span>
-          ) : null}
-        </span>
-        {expanded ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />
-        ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />
-        )}
-      </button>
+            {totals ? (
+              <span className={`block font-mono ${compact ? 'mt-0.5 text-[11px]' : 'mt-1 text-[12px]'}`}>
+                <span className="text-ds-diff-added">+{totals.added}</span>
+                <span className="mx-1.5 text-ds-faint">·</span>
+                <span className="text-ds-diff-removed">-{totals.removed}</span>
+              </span>
+            ) : null}
+          </span>
+        </div>
+        {onOpenChanges || onReviewChanges ? (
+          <div className="flex shrink-0 items-center gap-1.5 self-end sm:self-auto">
+            {onOpenChanges ? (
+              <button
+                type="button"
+                onClick={onOpenChanges}
+                className="rounded-full px-3 py-1.5 text-[12px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+              >
+                {t('composerOpenChanges')}
+              </button>
+            ) : null}
+            {onReviewChanges ? (
+              <button
+                type="button"
+                disabled={reviewChangesDisabled}
+                onClick={onReviewChanges}
+                className="inline-flex items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
+              >
+                <SearchCode className="h-3.5 w-3.5" strokeWidth={1.8} />
+                {t('composerReviewChanges')}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
 
-      {expanded ? (
-        <div
-          ref={deferredBodyRef}
-          className="border-t border-ds-border-muted/70"
-          style={{ contentVisibility: 'auto', containIntrinsicSize: compact ? 'auto 180px' : 'auto 280px' }}
-        >
-          {shouldRenderBody
-            ? changes.map((change) => {
-            const stats = countDiffStats(change.detail)
-            const open = activeId === change.id
-            const primary = change.filePath ?? t('toolActionFile')
+      <div className="divide-y divide-ds-border-muted/60">
+        {visibleChanges.map((change) => {
+          const stats = countDiffStats(change.detail)
+          const open = activeId === change.id
+          const primary = change.filePath ?? t('toolActionFile')
 
-            return (
-              <div key={change.id} className="border-b border-ds-border-muted/60 last:border-b-0">
-                <button
-                  type="button"
-                  onClick={() => setActiveId(open ? null : change.id)}
-                  aria-expanded={open}
-                  className={`flex w-full items-start text-left transition ${
-                    open ? 'bg-ds-hover/45' : 'hover:bg-ds-hover/35'
-                  } ${compact ? 'gap-2.5 px-4 py-2.5' : 'gap-3 px-5 py-3'}`}
+          return (
+            <div key={change.id} data-turn-change-file>
+              <button
+                type="button"
+                onClick={() => setActiveId(open ? null : change.id)}
+                aria-expanded={open}
+                className={`flex w-full items-center text-left transition ${
+                  open ? 'bg-ds-hover/45' : 'hover:bg-ds-hover/35'
+                } ${compact ? 'gap-2.5 px-4 py-2.5' : 'gap-3 px-5 py-3'}`}
+              >
+                <span
+                  className={`min-w-0 flex-1 truncate font-medium text-ds-muted ${
+                    compact ? 'text-[12px]' : 'text-[13px]'
+                  }`}
+                  title={primary}
                 >
-                  <span className="min-w-0 flex-1">
-                    <span
-                      className={`block truncate font-medium text-ds-ink ${compact ? 'text-[12px]' : 'text-[13px]'}`}
-                      title={primary}
-                    >
-                      {primary}
-                    </span>
+                  {primary}
+                </span>
+                {stats ? (
+                  <span className={`shrink-0 font-mono tabular-nums ${compact ? 'text-[11px]' : 'text-[12px]'}`}>
+                    <span className="text-ds-diff-added">+{stats.added}</span>
+                    <span className="ml-1.5 text-ds-diff-removed">-{stats.removed}</span>
                   </span>
-                  {stats ? (
-                    <span className={`shrink-0 font-mono tabular-nums ${compact ? 'text-[11px]' : 'text-[12px]'}`}>
-                      <span className="text-ds-diff-added">+{stats.added}</span>
-                      <span className="ml-1.5 text-ds-diff-removed">-{stats.removed}</span>
-                    </span>
-                  ) : null}
-                  {open ? (
-                    <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />
-                  ) : (
-                    <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />
-                  )}
-                </button>
+                ) : null}
+                {open ? (
+                  <ChevronDown className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />
+                ) : (
+                  <ChevronRight className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />
+                )}
+              </button>
 
-                {open && change.detail ? (
-                  <div className={`bg-ds-card-muted/45 ${compact ? 'px-3 pb-2.5 pt-1' : 'px-4 pb-3 pt-1'}`}>
+              {open && change.detail ? (
+                <div
+                  ref={deferredBodyRef}
+                  className={`bg-ds-card-muted/45 ${compact ? 'px-3 pb-2.5 pt-1' : 'px-4 pb-3 pt-1'}`}
+                  style={{ contentVisibility: 'auto', containIntrinsicSize: compact ? 'auto 148px' : 'auto 260px' }}
+                >
+                  {shouldRenderBody ? (
                     <DiffView
                       patch={change.detail}
                       filePath={change.filePath}
                       maxHeight={compact ? 148 : 260}
                       className="border border-ds-border-muted/70"
                     />
-                  </div>
-                ) : null}
-              </div>
-            )
-          })
-            : null}
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+
+      {hiddenFileCount > 0 ? (
+        <div
+          className={`border-t border-ds-border-muted/70 ${compact ? 'px-4 py-2' : 'px-5 py-2.5'}`}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              if (showAllFiles && activeId && !changes.slice(0, 3).some((change) => change.id === activeId)) {
+                setActiveId(null)
+              }
+              setShowAllFiles(!showAllFiles)
+            }}
+            aria-expanded={showAllFiles}
+            className="inline-flex items-center gap-1.5 rounded-lg py-1 text-[12.5px] font-semibold text-ds-muted transition hover:text-ds-ink"
+          >
+            {showAllFiles
+              ? t('turnChangeShowFewer')
+              : t('turnChangeShowMore', { count: hiddenFileCount })}
+            {showAllFiles ? (
+              <ChevronDown className="h-3.5 w-3.5 rotate-180" strokeWidth={1.8} />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.8} />
+            )}
+          </button>
         </div>
       ) : null}
     </section>

@@ -50,6 +50,7 @@ export function buildDesignTurnSendOverrides(options: DesignTurnSendOptions): Se
   const attachments = options.attachments ?? []
   return {
     displayText: options.displayText,
+    agentSurface: 'design',
     ...buildAssistantModelOverrides(options),
     ...(options.target === 'canvas' ? { guiDesignCanvas: true, guiDesignMode: true } : {}),
     ...(options.target === 'svg' ? {
@@ -64,6 +65,7 @@ export function buildCodeCanvasSendOverrides(options: CodeCanvasSendOptions): Se
   return {
     ...(options.displayText ? { displayText: options.displayText } : {}),
     guiDesignCanvas: true,
+    agentSurface: 'code',
     ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {})
   }
 }

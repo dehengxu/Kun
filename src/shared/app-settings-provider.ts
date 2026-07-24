@@ -13,6 +13,7 @@ import {
   DEFAULT_VIDEO_GENERATION_PROTOCOL,
   MODEL_REASONING_EFFORTS,
   MODEL_REASONING_REQUEST_PROTOCOLS,
+  MODEL_ROUTE_STRATEGIES,
   CUSTOM_IMAGE_GENERATION_PROVIDER_ID,
   CUSTOM_SPEECH_TO_TEXT_PROVIDER_ID,
   CUSTOM_TEXT_TO_SPEECH_PROVIDER_ID,
@@ -39,7 +40,14 @@ import {
   type ModelProviderReasoningCapabilityV1,
   type ModelProviderProfilePatchV1,
   type ModelProviderProfileV1,
+  type ModelProviderPresetSourceV1,
   type ModelRequestRetrySettingsV1,
+  type ModelRouteFailurePolicyV1,
+  type ModelRouteHealthPolicyV1,
+  type ModelRoutePoolV1,
+  type ModelRouteTargetResolutionV1,
+  type ModelRouteTargetV1,
+  type ModelRouteStrategy,
   type ModelProviderSettingsPatchV1,
   type ModelProviderSettingsV1,
   type NetworkProxySettingsV1,
@@ -63,15 +71,16 @@ import {
   CHATGPT_SUBSCRIPTION_MODEL_IDS,
   CHATGPT_SUBSCRIPTION_NAME,
   CHATGPT_SUBSCRIPTION_PROVIDER_ID,
+  GEMINI_SUBSCRIPTION_MODEL_IDS,
   TOKEN_PLAN_PROVIDER_ID_SUFFIX,
-  getModelProviderPreset,
   modelProviderPresetProfile,
   modelProviderTokenPlanProfile,
+  resolveModelProviderPresetSource,
   type ModelProviderPreset
 } from './model-provider-presets'
 
 const DEFAULT_MODEL_PROVIDER_NAME = 'DeepSeek'
-const DEFAULT_PROVIDER_CONTEXT_WINDOW_TOKENS = 128_000
+const DEFAULT_PROVIDER_CONTEXT_WINDOW_TOKENS = 256_000
 const DEFAULT_TEXT_MODEL_PROFILE: ModelProviderModelProfileV1 = {
   inputModalities: ['text'],
   outputModalities: ['text'],
@@ -99,7 +108,9 @@ export function defaultModelProviderSettings(): ModelProviderSettingsV1 {
     apiKey: defaultProvider.apiKey,
     baseUrl: defaultProvider.baseUrl,
     proxy: defaultNetworkProxySettings(),
-    providers: [defaultProvider]
+    providers: [defaultProvider],
+    routePools: [],
+    localGateway: { enabled: false, name: 'Kun API' }
   }
 }
 
@@ -130,11 +141,19 @@ export function normalizeModelProviderSettings(
       : provider)
   }
   const providers = [...providersById.values()]
+  const routePools = normalizeModelRoutePools(input?.routePools, providers)
   return {
     apiKey,
     baseUrl,
     proxy: normalizeNetworkProxySettings(input?.proxy),
-    providers
+    providers,
+    routePools,
+    localGateway: {
+      enabled: input?.localGateway?.enabled === true,
+      name: typeof input?.localGateway?.name === 'string' && input.localGateway.name.trim()
+        ? input.localGateway.name.trim().slice(0, 80)
+        : defaults.localGateway.name
+    }
   }
 }
 
@@ -150,7 +169,126 @@ export function mergeModelProviderSettings(
           ...current.proxy,
           ...patch.proxy
         }
-      : current.proxy
+      : current.proxy,
+    routePools: patch?.routePools ?? current.routePools,
+    localGateway: patch?.localGateway
+      ? { ...current.localGateway, ...patch.localGateway }
+      : current.localGateway
+  })
+}
+
+export const DEFAULT_MODEL_ROUTE_FAILURE_POLICY: ModelRouteFailurePolicyV1 = {
+  failoverHttpStatusCodes: [401, 402, 403, 404, 408, 425, 429, 500, 502, 503, 504],
+  failoverOnNetworkError: true,
+  failoverOnTimeout: true,
+  failoverOnAuthError: true
+}
+
+export const DEFAULT_MODEL_ROUTE_HEALTH_POLICY: ModelRouteHealthPolicyV1 = {
+  failureThreshold: 3,
+  cooldownMs: 60_000,
+  halfOpenMaxAttempts: 1
+}
+
+export function normalizeModelRoutePools(
+  input: readonly Partial<ModelRoutePoolV1>[] | undefined,
+  _providers?: readonly ModelProviderProfileV1[]
+): ModelRoutePoolV1[] {
+  const usedIds = new Set<string>()
+  const usedModels = new Set<string>()
+  const out: ModelRoutePoolV1[] = []
+  for (const raw of Array.isArray(input) ? input.slice(0, 100) : []) {
+    const id = normalizeModelProviderId(raw.id)
+    const modelId = typeof raw.modelId === 'string' ? raw.modelId.trim().slice(0, 512) : ''
+    if (!id || !modelId || usedIds.has(id) || usedModels.has(modelId.toLowerCase())) continue
+    const targetIds = new Set<string>()
+    const targets = (Array.isArray(raw.targets) ? raw.targets : []).slice(0, 50).flatMap((target: ModelRoutePoolV1['targets'][number], index: number) => {
+      const providerId = normalizeModelProviderId(target?.providerId)
+      const targetModel = typeof target?.modelId === 'string' ? target.modelId.trim().slice(0, 512) : ''
+      if (!providerId || !targetModel) return []
+      const targetId = normalizeModelProviderId(target?.id) || `${id}-target-${index + 1}`
+      if (targetIds.has(targetId)) return []
+      targetIds.add(targetId)
+      return [{
+        id: targetId,
+        providerId,
+        modelId: targetModel,
+        enabled: target?.enabled !== false,
+        weight: Math.min(100, Math.max(1, boundedNonNegativeInteger(target?.weight, 1, 100)))
+      }]
+    })
+    const strategy: ModelRouteStrategy = MODEL_ROUTE_STRATEGIES.includes(raw.strategy as ModelRouteStrategy)
+      ? raw.strategy as ModelRouteStrategy
+      : 'priority'
+    const failureCodes = normalizeRetryHttpStatusCodes(
+      raw.failurePolicy?.failoverHttpStatusCodes,
+      DEFAULT_MODEL_ROUTE_FAILURE_POLICY.failoverHttpStatusCodes
+    )
+    const pool: ModelRoutePoolV1 = {
+      id,
+      name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 80) : modelId,
+      modelId,
+      // A public route alias may intentionally match a concrete model id
+      // (for example, a routed `kimi-k3` backed by several providers). Kun
+      // disambiguates the virtual route from a direct provider selection with
+      // the request's provider id, so only duplicate route aliases are invalid.
+      enabled: raw.enabled !== false,
+      strategy,
+      targets,
+      failurePolicy: {
+        failoverHttpStatusCodes: failureCodes,
+        failoverOnNetworkError: raw.failurePolicy?.failoverOnNetworkError !== false,
+        failoverOnTimeout: raw.failurePolicy?.failoverOnTimeout !== false,
+        failoverOnAuthError: raw.failurePolicy?.failoverOnAuthError !== false
+      },
+      healthPolicy: {
+        failureThreshold: Math.min(20, Math.max(1, boundedNonNegativeInteger(raw.healthPolicy?.failureThreshold, 3, 20))),
+        cooldownMs: Math.min(3_600_000, Math.max(1_000, boundedNonNegativeInteger(raw.healthPolicy?.cooldownMs, 60_000, 3_600_000))),
+        halfOpenMaxAttempts: Math.min(10, Math.max(1, boundedNonNegativeInteger(raw.healthPolicy?.halfOpenMaxAttempts, 1, 10)))
+      }
+    }
+    usedIds.add(id)
+    usedModels.add(modelId.toLowerCase())
+    out.push(pool)
+  }
+  return out
+}
+
+export function resolveModelRouteTargetReference(
+  target: Pick<ModelRouteTargetV1, 'providerId' | 'modelId'>,
+  providers: readonly ModelProviderProfileV1[]
+): ModelRouteTargetResolutionV1 {
+  const providerId = normalizeModelProviderId(target.providerId)
+  const provider = providers.find((candidate) => candidate.id.toLowerCase() === providerId)
+  if (!provider) return { status: 'provider-missing' }
+  const requestedModel = target.modelId.trim().toLowerCase()
+  const modelId = provider.models.find((candidate) => candidate.trim().toLowerCase() === requestedModel)
+  if (!modelId) return { status: 'model-missing', provider }
+  return { status: 'valid', provider, modelId }
+}
+
+/**
+ * Projects durable user intent into the concrete configuration Kun may run.
+ * Missing references remain in settings but never reach the Runtime.
+ */
+export function projectExecutableModelRoutePools(
+  settings: Pick<ModelProviderSettingsV1, 'providers' | 'routePools'>
+): ModelRoutePoolV1[] {
+  return settings.routePools.map((pool) => {
+    const targets = pool.targets.flatMap((target) => {
+      const resolved = resolveModelRouteTargetReference(target, settings.providers)
+      if (resolved.status !== 'valid' || !resolved.provider || !resolved.modelId) return []
+      return [{
+        ...target,
+        providerId: resolved.provider.id,
+        modelId: resolved.modelId
+      }]
+    })
+    return {
+      ...pool,
+      enabled: pool.enabled && targets.some((target) => target.enabled),
+      targets
+    }
   })
 }
 
@@ -195,9 +333,10 @@ export function getModelProviderProfile(
 }
 
 export function listModelProviderModelIds(settings: AppSettingsV1): string[] {
-  const nonTextModelIds = listNonTextModelIds(settings)
   const ids = new Set<string>()
-  for (const provider of getModelProviderSettings(settings).providers) {
+  const providerSettings = getModelProviderSettings(settings)
+  for (const provider of providerSettings.providers) {
+    const nonTextModelIds = listProviderNonTextModelIds(provider)
     for (const model of provider.models) {
       const trimmed = model.trim()
       if (!trimmed || !isComposerChatModelId(trimmed, nonTextModelIds)) continue
@@ -205,7 +344,29 @@ export function listModelProviderModelIds(settings: AppSettingsV1): string[] {
       ids.add(trimmed)
     }
   }
+  for (const pool of projectExecutableModelRoutePools(providerSettings)) {
+    if (pool.enabled && pool.targets.some((target) => target.enabled)) ids.add(pool.modelId)
+  }
   return [...ids].sort((a, b) => a.localeCompare(b))
+}
+
+/**
+ * Media model IDs apply only to the provider that declares them. Different
+ * providers can expose the same model ID with different capabilities.
+ */
+export function listProviderNonTextModelIds(
+  provider: Pick<ModelProviderProfileV1, 'image' | 'speech' | 'textToSpeech' | 'music' | 'video'>
+): string[] {
+  return [...new Set([
+    ...(provider.speech?.models ?? []),
+    ...(provider.image?.models ?? []),
+    ...(provider.textToSpeech?.models ?? []),
+    ...(provider.music?.models ?? []),
+    ...(provider.video?.models ?? [])
+  ])]
+    .map((model) => model.trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))
 }
 
 export function listSpeechToTextModelIds(settings: AppSettingsV1): string[] {
@@ -264,13 +425,9 @@ export function listVideoGenerationModelIds(settings: AppSettingsV1): string[] {
 }
 
 export function listNonTextModelIds(settings: AppSettingsV1): string[] {
-  return [...new Set([
-    ...listSpeechToTextModelIds(settings),
-    ...listImageGenerationModelIds(settings),
-    ...listTextToSpeechModelIds(settings),
-    ...listMusicGenerationModelIds(settings),
-    ...listVideoGenerationModelIds(settings)
-  ])].sort((a, b) => a.localeCompare(b))
+  return [...new Set(
+    getModelProviderSettings(settings).providers.flatMap((provider) => listProviderNonTextModelIds(provider))
+  )].sort((a, b) => a.localeCompare(b))
 }
 
 export function isComposerChatModelId(
@@ -466,7 +623,7 @@ function configuredMiniMaxMediaCapability(
   currentProviderId: string | undefined
 ): { provider: ModelProviderProfileV1; capability: MiniMaxMediaCapability; model: string } | null {
   const byId = new Map(providers.map((provider) => [provider.id, providerWithPresetCapabilities(provider)]))
-  for (const id of preferredMiniMaxMediaProviderIds(currentProviderId)) {
+  for (const id of preferredMiniMaxMediaProviderIds(currentProviderId, providers)) {
     const provider = byId.get(id)
     if (!provider?.apiKey.trim()) continue
     const capability = provider[key]
@@ -477,11 +634,23 @@ function configuredMiniMaxMediaCapability(
   return null
 }
 
-function preferredMiniMaxMediaProviderIds(currentProviderId: string | undefined): string[] {
+function preferredMiniMaxMediaProviderIds(
+  currentProviderId: string | undefined,
+  providers: readonly ModelProviderProfileV1[]
+): string[] {
   const normalized = normalizeModelProviderId(currentProviderId)
-  const ids = normalized === MINIMAX_PROVIDER_ID || normalized === MINIMAX_TOKEN_PLAN_PROVIDER_ID
-    ? [normalized, MINIMAX_PROVIDER_ID, MINIMAX_TOKEN_PLAN_PROVIDER_ID]
-    : [MINIMAX_PROVIDER_ID, MINIMAX_TOKEN_PLAN_PROVIDER_ID]
+  const current = providers.find((provider) => provider.id === normalized)
+  const currentSource = current ? resolveModelProviderPresetSource(current) : null
+  const accountIds = providers.flatMap((provider) => {
+    const source = resolveModelProviderPresetSource(provider)
+    return source?.preset.id === MINIMAX_PROVIDER_ID ? [provider.id] : []
+  })
+  const ids = [
+    ...(currentSource?.preset.id === MINIMAX_PROVIDER_ID ? [normalized] : []),
+    MINIMAX_PROVIDER_ID,
+    MINIMAX_TOKEN_PLAN_PROVIDER_ID,
+    ...accountIds
+  ]
   return ids.filter((id, index) => ids.indexOf(id) === index)
 }
 
@@ -507,8 +676,8 @@ function providerWithPresetCapabilities(provider: ModelProviderProfileV1): Model
 }
 
 function modelProviderPresetProfileForProvider(provider: ModelProviderProfileV1): ModelProviderProfileV1 | null {
-  const preset = getModelProviderPreset(provider.id)
-  return preset ? modelProviderPresetProfile(preset, provider.apiKey) : null
+  const source = resolveModelProviderPresetSource(provider)
+  return source?.mode === 'api' ? modelProviderPresetProfile(source.preset, provider.apiKey) : null
 }
 
 function mergePresetCapability<T extends { baseUrl: string; models: string[] }>(
@@ -761,11 +930,11 @@ export function resolveKunVideoGenerationSettings(settings: AppSettingsV1): KunV
   const videoGeneration = runtime.videoGeneration
   const providerId = normalizeModelProviderId(videoGeneration.providerId)
   if (!providerId || providerId === CUSTOM_VIDEO_GENERATION_PROVIDER_ID) {
-    return {
+    return normalizeResolvedGrokVideoDefaults({
       ...videoGeneration,
       providerId,
       protocol: normalizeVideoGenerationProtocol(videoGeneration.protocol)
-    }
+    })
   }
   const provider = getModelProviderProfile(settings, providerId)
   const capability = provider.video
@@ -776,13 +945,41 @@ export function resolveKunVideoGenerationSettings(settings: AppSettingsV1): KunV
       protocol: normalizeVideoGenerationProtocol(videoGeneration.protocol)
     }
   }
-  return {
+  return normalizeResolvedGrokVideoDefaults({
     ...videoGeneration,
     providerId: provider.id,
     protocol: capability.protocol,
     baseUrl: resolveProviderCapabilityBaseUrl(provider, capability, 'video'),
     apiKey: provider.apiKey.trim(),
-    model: resolveProviderCapabilityModel(videoGeneration.model, capability.models)
+    model: resolveVideoProviderCapabilityModel(videoGeneration.model, capability)
+  })
+}
+
+function resolveVideoProviderCapabilityModel(
+  configuredModel: string,
+  capability: ModelProviderVideoCapabilityV1
+): string {
+  const fallback = capability.protocol === 'grok-imagine-video' &&
+    capability.models.includes('grok-imagine-video-1.5-preview')
+    ? 'grok-imagine-video-1.5-preview'
+    : capability.models[0] ?? ''
+  const model = configuredModel.trim()
+  if (!model) return fallback
+  if (capability.models.length === 0) return model
+  return capability.models.some((providerModel) => providerModel.trim().toLowerCase() === model.toLowerCase())
+    ? model
+    : fallback || model
+}
+
+function normalizeResolvedGrokVideoDefaults(
+  value: KunVideoGenerationSettingsV1
+): KunVideoGenerationSettingsV1 {
+  if (value.protocol !== 'grok-imagine-video') return value
+  const resolution = value.defaultResolution.trim().toUpperCase()
+  return {
+    ...value,
+    defaultDuration: value.defaultDuration === 10 ? 10 : 6,
+    defaultResolution: resolution === '720P' ? '720P' : '480P'
   }
 }
 
@@ -816,10 +1013,11 @@ function resolveImageProviderCapabilityModel(
     : fallback || model
 }
 
-function tokenPlanPresetForProvider(provider: Pick<ModelProviderProfileV1, 'id'>) {
-  if (!provider.id.endsWith(TOKEN_PLAN_PROVIDER_ID_SUFFIX)) return null
-  const preset = getModelProviderPreset(provider.id.slice(0, -TOKEN_PLAN_PROVIDER_ID_SUFFIX.length))
-  return preset?.tokenPlan ? preset : null
+function tokenPlanPresetForProvider(
+  provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>
+) {
+  const source = resolveModelProviderPresetSource(provider)
+  return source?.mode === 'token-plan' ? source.preset : null
 }
 
 function sameModelIds(a: readonly string[], b: readonly string[]): boolean {
@@ -921,12 +1119,20 @@ function normalizeModelProviderProfile(
 ): ModelProviderProfileV1 | null {
   const id = normalizeModelProviderId(input?.id)
   if (!id) return null
+  const presetSource = normalizeModelProviderPresetSource(input, id)
   const rawName = typeof input?.name === 'string' && input.name.trim() ? input.name.trim() : id
   const baseUrl = normalizeModelProviderBaseUrl(input?.baseUrl)
-  const rawModels = normalizeProviderModels(input?.models)
+  const savedModels = normalizeProviderModels(input?.models)
+  // Existing builds persisted the retired Code Assist model list. Replace it
+  // once during transport migration so 3.5/3.6 are visible immediately; later
+  // Antigravity CLI syncs remain authoritative.
+  const rawModels =
+    presetSource?.presetId === 'gemini-subscription' && input?.kind === 'gemini-code-assist'
+      ? [...GEMINI_SUBSCRIPTION_MODEL_IDS]
+      : savedModels
   const { name, models } = migrateChatGptSubscriptionProfile(id, rawName, rawModels)
   const modelProfiles = withPresetModelProfiles(
-    id,
+    { id, presetSource },
     models,
     normalizeModelProviderModelProfiles(input?.modelProfiles, models)
   )
@@ -938,11 +1144,23 @@ function normalizeModelProviderProfile(
   return providerWithPresetCapabilities({
     id,
     name,
-    apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : '',
+    ...(presetSource ? { presetSource } : {}),
+    apiKey:
+      input?.kind === 'antigravity-cli' || input?.kind === 'gemini-code-assist'
+        ? ''
+        : typeof input?.apiKey === 'string'
+          ? input.apiKey.trim()
+          : '',
     baseUrl,
     endpointFormat: normalizeModelEndpointFormat(input?.endpointFormat),
     retry: normalizeModelRequestRetrySettings(input?.retry),
-    ...(input?.kind === 'agent-sdk' ? { kind: 'agent-sdk' as const } : {}),
+    ...(input?.kind === 'agent-sdk'
+      ? { kind: 'agent-sdk' as const }
+      : input?.kind === 'cursor-sdk'
+        ? { kind: 'cursor-sdk' as const }
+      : input?.kind === 'antigravity-cli' || input?.kind === 'gemini-code-assist'
+        ? { kind: 'antigravity-cli' as const }
+        : {}),
     models,
     modelProfiles,
     ...(image ? { image } : {}),
@@ -951,6 +1169,23 @@ function normalizeModelProviderProfile(
     ...(music ? { music } : {}),
     ...(video ? { video } : {})
   })
+}
+
+function normalizeModelProviderPresetSource(
+  input: ModelProviderProfilePatchV1 | undefined,
+  id: string
+): ModelProviderPresetSourceV1 | undefined {
+  const raw = input?.presetSource
+  if (raw !== undefined) {
+    if (!raw || typeof raw !== 'object') return undefined
+    const presetId = typeof raw.presetId === 'string' ? raw.presetId.trim() : ''
+    const mode = raw.mode === 'api' || raw.mode === 'token-plan' ? raw.mode : undefined
+    if (!presetId || !mode) return undefined
+    const resolved = resolveModelProviderPresetSource({ id, presetSource: { presetId, mode } })
+    return resolved ? { presetId: resolved.preset.id, mode: resolved.mode } : undefined
+  }
+  const inferred = resolveModelProviderPresetSource({ id })
+  return inferred ? { presetId: inferred.preset.id, mode: inferred.mode } : undefined
 }
 
 function migrateChatGptSubscriptionProfile(
@@ -1024,11 +1259,11 @@ function deepseekTextModelProfile(): ModelProviderModelProfileV1 {
  * in Settings keep surviving normalization.
  */
 function withPresetModelProfiles(
-  providerId: string,
+  provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>,
   models: readonly string[],
   stored: Record<string, ModelProviderModelProfileV1>
 ): Record<string, ModelProviderModelProfileV1> {
-  const presetProfiles = presetModelProfilesForProvider(providerId)
+  const presetProfiles = presetModelProfilesForProvider(provider)
   if (!presetProfiles) return stored
   const knownModelKeys = new Set(models.map(normalizeModelKey).filter(Boolean))
   const merged: Record<string, ModelProviderModelProfileV1> = {}
@@ -1059,16 +1294,13 @@ function withPresetModelProfiles(
 }
 
 function presetModelProfilesForProvider(
-  providerId: string
+  provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>
 ): Record<string, ModelProviderModelProfileV1> | null {
-  const isTokenPlan = providerId.endsWith(TOKEN_PLAN_PROVIDER_ID_SUFFIX)
-  const preset = getModelProviderPreset(
-    isTokenPlan ? providerId.slice(0, -TOKEN_PLAN_PROVIDER_ID_SUFFIX.length) : providerId
-  )
-  if (!preset) return null
-  const profiles = isTokenPlan
-    ? preset.tokenPlan?.modelProfiles ?? preset.modelProfiles
-    : preset.modelProfiles
+  const source = resolveModelProviderPresetSource(provider)
+  if (!source) return null
+  const profiles = source.mode === 'token-plan'
+    ? source.preset.tokenPlan?.modelProfiles ?? source.preset.modelProfiles
+    : source.preset.modelProfiles
   return profiles ?? null
 }
 
@@ -1229,6 +1461,7 @@ function normalizeModelProviderImageCapability(
 export function normalizeImageGenerationProtocol(value: unknown): ImageGenerationProtocol {
   if (value === 'minimax-image') return 'minimax-image'
   if (value === 'codex-responses-image') return 'codex-responses-image'
+  if (value === 'grok-imagine-image') return 'grok-imagine-image'
   return DEFAULT_IMAGE_GENERATION_PROTOCOL
 }
 
@@ -1312,6 +1545,7 @@ function normalizeModelProviderVideoCapability(
 }
 
 export function normalizeVideoGenerationProtocol(value: unknown): VideoGenerationProtocol {
+  if (value === 'grok-imagine-video') return 'grok-imagine-video'
   return value === 'minimax-video' ? 'minimax-video' : DEFAULT_VIDEO_GENERATION_PROTOCOL
 }
 

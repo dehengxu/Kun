@@ -1,5 +1,6 @@
 import { isAbsolute, relative, resolve } from 'node:path'
 import type { ToolCallLike, ToolHostContext } from '../../ports/tool-host.js'
+import { normalizeForFuzzyMatch } from './edit-diff.js'
 
 export type ReadTrackerOptions = {
   enabled?: boolean
@@ -13,9 +14,21 @@ type ReadRecord = {
   absolutePath: string
   relativePath?: string
   content?: string
-  truncated: boolean
+  partial: boolean
   turnId: string
 }
+
+export type ReadTrackerValidation =
+  | { ok: true }
+  | {
+      ok: false
+      message: string
+      guidance: string
+      nextAction: {
+        tool: 'read'
+        arguments: { path: string }
+      }
+    }
 
 export class ReadTracker {
   private readonly records = new Map<string, Map<string, ReadRecord>>()
@@ -36,7 +49,10 @@ export class ReadTracker {
     const absolutePath = normalizePath(rawPath, input.context.workspace)
     const record: ReadRecord = {
       absolutePath,
-      truncated: output.truncated === true,
+      // A bounded read, an explicit line window, or a first line that is too
+      // large is not a complete snapshot. The edit tool still validates the
+      // requested oldText against current bytes before writing.
+      partial: isPartialRead(output),
       turnId: input.context.turnId,
       ...(typeof output.relative_path === 'string' ? { relativePath: output.relative_path } : {}),
       ...(typeof output.content === 'string' ? { content: output.content } : {})
@@ -56,18 +72,20 @@ export class ReadTracker {
     }
   }
 
-  validateBeforeTool(input: { context: ToolHostContext; call: ToolCallLike }): { ok: true } | { ok: false; message: string } {
+  validateBeforeTool(input: { context: ToolHostContext; call: ToolCallLike }): ReadTrackerValidation {
     if (!this.options.enabled || !isEditTool(input.call)) return { ok: true }
     const rawPath = typeof input.call.arguments.path === 'string' ? input.call.arguments.path : ''
     if (!rawPath.trim()) return { ok: true }
     const absolutePath = normalizePath(rawPath, input.context.workspace)
     const record = this.records.get(input.context.threadId)?.get(absolutePath)
     if (!record) {
+      const recovery = recoveryDetails(rawPath, input.context.workspace)
       return {
         ok: false,
         message:
           `read-before-edit guard blocked edit for ${displayPath(rawPath, input.context.workspace)}. ` +
-          'Read the current file contents in this turn before editing so SEARCH text is based on fresh bytes.'
+          `The file has not been read in this thread. ${recovery.guidance}`,
+        ...recovery
       }
     }
     // A read from an earlier turn still counts: agent responses routinely span
@@ -78,17 +96,19 @@ export class ReadTracker {
     // oldText fragments against the cached read content, and the edit's own
     // fuzzy matching runs against the current bytes on disk, so a stale SEARCH
     // string fails there with a clear error instead of corrupting the file.
-    if (!this.options.requireOldTextInRead) return { ok: true }
+    if (!this.options.requireOldTextInRead || record.partial) return { ok: true }
     const missing = oldTextFragments(input.call.arguments).filter((fragment) => {
       if (!fragment.trim()) return false
-      return !record.content || !record.content.includes(fragment)
+      return !record.content || !containsNormalized(record.content, fragment)
     })
     if (missing.length === 0) return { ok: true }
+    const recovery = recoveryDetails(rawPath, input.context.workspace)
     return {
       ok: false,
       message:
         `read-before-edit guard blocked edit for ${record.relativePath ?? displayPath(rawPath, input.context.workspace)}. ` +
-        'At least one oldText fragment was not present in the latest read output; read a narrower range that includes the exact text before editing.'
+        `At least one oldText fragment was not present in the latest read output. ${recovery.guidance}`,
+      ...recovery
     }
   }
 
@@ -99,6 +119,22 @@ export class ReadTracker {
     }
     this.records.clear()
   }
+}
+
+function isPartialRead(output: Record<string, unknown>): boolean {
+  if (output.truncated === true || output.first_line_exceeds_limit === true) return true
+  const startLine = typeof output.start_line === 'number' ? output.start_line : undefined
+  const endLine = typeof output.end_line === 'number' ? output.end_line : undefined
+  const totalLines = typeof output.total_lines === 'number' ? output.total_lines : undefined
+  // A window can reach EOF while still omitting the beginning of the file.
+  // `end_line === total_lines` therefore does not by itself prove that the
+  // cached content is a complete snapshot.
+  return (startLine !== undefined && startLine > 1) ||
+    (endLine !== undefined && totalLines !== undefined && endLine < totalLines)
+}
+
+function containsNormalized(content: string, fragment: string): boolean {
+  return normalizeForFuzzyMatch(content).includes(normalizeForFuzzyMatch(fragment))
 }
 
 export function normalizeReadTrackerOptions(input: boolean | ReadTrackerOptions | undefined): Required<ReadTrackerOptions> {
@@ -135,4 +171,22 @@ function displayPath(path: string, workspace: string): string {
   const absolutePath = normalizePath(path, workspace)
   const rel = workspace ? relative(resolve(workspace), absolutePath) : ''
   return rel && !rel.startsWith('..') ? rel : absolutePath
+}
+
+function recoveryDetails(path: string, workspace: string): Omit<
+  Extract<ReadTrackerValidation, { ok: false }>,
+  'ok' | 'message'
+> {
+  const target = displayPath(path, workspace)
+  return {
+    guidance:
+      `Call read with path ${JSON.stringify(target)} now to fetch the current disk contents ` +
+      '(or a range containing the exact target). ' +
+      'Rebuild every oldText fragment from that returned content, then retry edit. ' +
+      'Do not bypass this guard with bash, shell redirection, or another shell-based file mutation.',
+    nextAction: {
+      tool: 'read',
+      arguments: { path }
+    }
+  }
 }

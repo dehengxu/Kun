@@ -76,7 +76,7 @@ export function SubagentDetailPanel({ className, onCollapse }: Props): ReactElem
   }, [load])
 
   return (
-    <div className={`flex min-h-0 flex-col bg-ds-sidebar ${className ?? ''}`}>
+    <div className={`ds-no-drag flex h-full min-h-0 flex-col overflow-hidden bg-ds-sidebar ${className ?? ''}`}>
       <SubagentPanelHeader onCollapse={onCollapse} />
       {error ? (
         <div role="alert" className="mx-3 mt-3 flex items-start gap-2 rounded-lg border border-red-300/70 bg-red-50 px-3 py-2 text-[12px] leading-5 text-red-800 dark:border-red-700/60 dark:bg-red-950/30 dark:text-red-200">

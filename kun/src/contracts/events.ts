@@ -90,6 +90,7 @@ const RuntimeEventBase = z.object({
     childModel: z.string().optional(),
     childProviderId: z.string().optional(),
     childProfile: z.string().optional(),
+    childProfileName: z.string().optional(),
     childToolPolicy: SubagentToolPolicy.optional(),
     prefixReused: z.boolean().optional(),
     inheritedHistoryItems: z.number().int().nonnegative().optional(),
@@ -151,7 +152,8 @@ export const ApprovalEvent = RuntimeEventBase.extend({
   status: z.enum(['pending', 'allowed', 'denied', 'expired']),
   approvalPolicy: ApprovalPolicySchema.optional(),
   sandboxMode: SandboxModeSchema.optional(),
-  summary: z.string().optional()
+  summary: z.string().optional(),
+  reason: z.string().optional()
 })
 export type ApprovalEvent = z.infer<typeof ApprovalEvent>
 

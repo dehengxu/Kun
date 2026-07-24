@@ -174,6 +174,125 @@ describe('createAgentSdkRuntime handlesProvider', () => {
 })
 
 describe('createAgentSdkRuntime turn context', () => {
+  test('applies a child capability boundary to SDK discovery and execution', async () => {
+    const executionContexts: Array<{
+      allowedToolNames?: readonly string[]
+      allowedProviderIds?: readonly string[]
+      blockedToolNames?: readonly string[]
+      blockedProviderIds?: readonly string[]
+      blockedSkillIds?: readonly string[]
+    }> = []
+    const readTool = LocalToolHost.defineTool({
+      name: 'read',
+      description: 'Read safely',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: async (_args, context) => {
+        executionContexts.push(context)
+        return { output: 'safe' }
+      }
+    })
+    const writeTool = LocalToolHost.defineTool({
+      name: 'write',
+      description: 'Write a file',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: async () => ({ output: 'mutated' })
+    })
+    const registry = CapabilityRegistry.fromLocalTools([readTool, writeTool])
+    const host = new LocalToolHost({ registry })
+    const skillRuntime = {
+      resolveTurn: vi.fn(async () => ({
+        activeSkillIds: [],
+        activations: [],
+        instructions: [],
+        injectedBytes: 0
+      })),
+      availableSkillIdsForWorkspace: vi.fn(async () => ['safe-skill', 'blocked-skill'])
+    }
+    const sdkTurn = { id: 'tn', prompt: 'inspect' } as ThreadRecord['turns'][number]
+    const runtime = createAgentSdkRuntime({
+      registry,
+      toolHost: host,
+      turns: { updateTurnMetadata: async () => undefined } as never,
+      sessionStore: {
+        loadItems: async () => [{
+          id: 'item_user',
+          turnId: 'tn',
+          threadId: 'th',
+          kind: 'user_message',
+          role: 'user',
+          status: 'completed',
+          text: 'inspect',
+          createdAt: '2026-07-10T00:00:00.000Z'
+        }]
+      } as never,
+      threadStore: {
+        get: async () => threadWith({
+          id: 'th',
+          providerId: 'claude-subscription',
+          turns: [sdkTurn]
+        })
+      } as never,
+      events: {} as never,
+      ids: { next: (prefix) => prefix },
+      prefix: { systemPrompt: '' },
+      providerConfigs: {
+        'claude-subscription': { kind: 'agent-sdk', apiKey: 'tok' }
+      } as never,
+      agentSdkProviderIds: new Set(['claude-subscription']),
+      defaultApprovalPolicy: 'auto',
+      allowSdkBuiltins: false,
+      skillRuntime: skillRuntime as never,
+      toolContextBoundary: {
+        allowedProviderIds: ['builtin'],
+        allowedToolNames: ['read'],
+        blockedProviderIds: ['mcp:private'],
+        blockedToolNames: ['write'],
+        blockedSkillIds: ['blocked-skill']
+      }
+    })
+    const deps = (runtime as unknown as {
+      deps: {
+        loadTurnContext(threadId: string, turnId: string): Promise<{
+          bridgeableTools: Array<{ name: string }>
+          allowSdkBuiltins?: boolean
+        } | null>
+        executeKunTool(
+          threadId: string,
+          turnId: string,
+          toolName: string,
+          args: Record<string, unknown>
+        ): Promise<{ output: unknown; isError?: boolean }>
+      }
+    }).deps
+
+    const context = await deps.loadTurnContext('th', 'tn')
+    expect(context).toMatchObject({
+      allowSdkBuiltins: false,
+      bridgeableTools: [{ name: 'read' }]
+    })
+    await expect(deps.executeKunTool('th', 'tn', 'read', {})).resolves.toEqual({
+      output: 'safe',
+      isError: false
+    })
+    await expect(deps.executeKunTool('th', 'tn', 'write', {})).resolves.toMatchObject({
+      isError: true
+    })
+    expect(executionContexts).toEqual([
+      expect.objectContaining({
+        allowedProviderIds: ['builtin'],
+        allowedToolNames: ['read'],
+        blockedProviderIds: ['mcp:private'],
+        blockedToolNames: ['write'],
+        blockedSkillIds: ['blocked-skill']
+      })
+    ])
+    expect(skillRuntime.resolveTurn).toHaveBeenCalledWith(expect.objectContaining({
+      blockedSkillIds: ['blocked-skill']
+    }))
+  })
+
   test('scopes dedicated SVG turns to structured tools and the artifact-specific policy', async () => {
     type DesignContext = {
       guiDesignCanvas?: boolean
@@ -717,6 +836,132 @@ describe('createAgentSdkRuntime turn context', () => {
 
     await expect(deps.decideToolApproval('th', 'tn', 'Bash', { command: 'pwd' })).resolves.toEqual({ allow: true })
     expect(immediatelyAllowed).toBe(true)
+  })
+
+  test('aborts while approval_requested persistence is blocked and records one expired resolution', async () => {
+    type ApprovalEvent = { kind: string; approvalId?: string; status?: string; reason?: string }
+    const approvalGate = new InMemoryApprovalGate()
+    const calls: ApprovalEvent[] = []
+    const persisted: ApprovalEvent[] = []
+    let releaseRequested!: () => void
+    const requestedBarrier = new Promise<void>((resolve) => {
+      releaseRequested = resolve
+    })
+    const runtime = createAgentSdkRuntime({
+      registry: {} as never,
+      turns: {} as never,
+      sessionStore: {} as never,
+      threadStore: { get: async () => threadWith({ approvalPolicy: 'always' }) } as never,
+      events: {
+        record: async (event: ApprovalEvent) => {
+          calls.push(event)
+          if (event.kind === 'approval_requested') await requestedBarrier
+          persisted.push(event)
+        }
+      } as never,
+      ids: { next: (prefix) => `${prefix}_1` },
+      prefix: { systemPrompt: '' },
+      providerConfigs: {},
+      agentSdkProviderIds: new Set(),
+      defaultApprovalPolicy: 'auto',
+      approvalGate
+    })
+    const deps = (runtime as unknown as {
+      deps: {
+        decideToolApproval(
+          threadId: string,
+          turnId: string,
+          toolName: string,
+          input: Record<string, unknown>,
+          signal?: AbortSignal
+        ): Promise<{ allow: boolean }>
+      }
+    }).deps
+    const controller = new AbortController()
+
+    const waiting = deps.decideToolApproval('th', 'tn', 'Bash', { command: 'pwd' }, controller.signal)
+    await vi.waitFor(() => {
+      expect(calls).toContainEqual(expect.objectContaining({ kind: 'approval_requested' }))
+      expect(approvalGate.pending('th')).toHaveLength(1)
+    })
+    const approval = approvalGate.pending('th')[0]
+    if (!approval) throw new Error('expected a pending SDK approval')
+
+    controller.abort()
+
+    await expect(waiting).resolves.toMatchObject({ allow: false })
+    expect(approvalGate.get(approval.id)).toMatchObject({
+      status: 'expired',
+      reason: 'turn aborted while awaiting approval'
+    })
+    expect(persisted).toEqual([])
+
+    releaseRequested()
+    await vi.waitFor(() => {
+      expect(persisted.map((event) => event.kind)).toEqual([
+        'approval_requested',
+        'approval_resolved'
+      ])
+    })
+    expect(persisted.filter((event) => event.kind === 'approval_resolved')).toEqual([
+      expect.objectContaining({
+        approvalId: approval.id,
+        status: 'expired',
+        reason: 'turn aborted while awaiting approval'
+      })
+    ])
+  })
+
+  test('consumes a delayed approval_requested failure after abort without publishing an orphan resolution', async () => {
+    type ApprovalEvent = { kind: string; approvalId?: string; status?: string }
+    const approvalGate = new InMemoryApprovalGate()
+    const calls: ApprovalEvent[] = []
+    let rejectRequested!: (error: Error) => void
+    const requestedFailure = new Promise<never>((_resolve, reject) => {
+      rejectRequested = reject
+    })
+    const runtime = createAgentSdkRuntime({
+      registry: {} as never,
+      turns: {} as never,
+      sessionStore: {} as never,
+      threadStore: { get: async () => threadWith({ approvalPolicy: 'always' }) } as never,
+      events: {
+        record: async (event: ApprovalEvent) => {
+          calls.push(event)
+          if (event.kind === 'approval_requested') await requestedFailure
+        }
+      } as never,
+      ids: { next: (prefix) => `${prefix}_1` },
+      prefix: { systemPrompt: '' },
+      providerConfigs: {},
+      agentSdkProviderIds: new Set(),
+      defaultApprovalPolicy: 'auto',
+      approvalGate
+    })
+    const deps = (runtime as unknown as {
+      deps: {
+        decideToolApproval(
+          threadId: string,
+          turnId: string,
+          toolName: string,
+          input: Record<string, unknown>,
+          signal?: AbortSignal
+        ): Promise<{ allow: boolean }>
+      }
+    }).deps
+    const controller = new AbortController()
+
+    const waiting = deps.decideToolApproval('th', 'tn', 'Bash', { command: 'pwd' }, controller.signal)
+    await vi.waitFor(() => {
+      expect(calls).toContainEqual(expect.objectContaining({ kind: 'approval_requested' }))
+    })
+    controller.abort()
+    await expect(waiting).resolves.toMatchObject({ allow: false })
+
+    rejectRequested(new Error('approval request persistence failed'))
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    expect(calls.filter((event) => event.kind === 'approval_resolved')).toEqual([])
   })
 
   test('denies SDK built-in tools under a thread never policy', async () => {

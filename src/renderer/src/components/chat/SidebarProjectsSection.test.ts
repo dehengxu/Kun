@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { NormalizedThread } from '../../agent/types'
 import type { SddDraftHistoryItem } from '../../sdd/sdd-draft-history'
+import { SidebarConversationsSection } from './SidebarConversationsSection'
 import {
   buildSidebarThreadMoveTargets,
   buildSidebarDraftWorkspacePaths,
@@ -13,16 +14,20 @@ import {
   mergeSidebarWorkspaceGroupsWithDraftHistory,
   MoveThreadDialog,
   resolveThreadPreviewPosition,
+  SidebarProjectsSection,
   sortSidebarThreads,
   SddDraftHistoryRows,
   SidebarActionDialog,
   ThreadRow,
   ThreadRenameDialog
 } from './SidebarProjectsSection'
+import { SIDEBAR_ORDER_STORAGE_KEY } from './sidebar-order'
+import { SIDEBAR_FOLDERS_STORAGE_KEY } from './sidebar-folders'
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
+    i18n: { language: 'en-US' },
     t: (key: string, opts?: Record<string, unknown>) =>
       key === 'sidebarThreadWorktree' ? `Worktree ${String(opts?.branch)}` : key
   })
@@ -575,6 +580,36 @@ describe('MoveThreadDialog', () => {
 })
 
 describe('ThreadRow', () => {
+  it('retains active styling for the thread identified by the conversation title bar', () => {
+    const html = renderToStaticMarkup(
+      createElement(ThreadRow, {
+        thread: thread({
+          id: 'thr_active',
+          title: 'Active conversation',
+          workspace: '/Users/zxy/project-a'
+        }),
+        active: true,
+        deleting: false,
+        locale: 'en-US',
+        showRunning: false,
+        showUnread: false,
+        onSelect: vi.fn(),
+        onContextMenu: vi.fn(),
+        onPreviewOpen: vi.fn(),
+        onPreviewClose: vi.fn(),
+        onPin: vi.fn(),
+        onRename: vi.fn(),
+        onArchive: vi.fn(),
+        onDelete: vi.fn(),
+        onRestore: vi.fn()
+      })
+    )
+
+    expect(html).toContain('data-active="true"')
+    expect(html).toContain('bg-[var(--ds-sidebar-row-active)]')
+    expect(html).toContain('Active conversation')
+  })
+
   it('anchors the preview beside the row instead of following the pointer', () => {
     expect(
       resolveThreadPreviewPosition(
@@ -669,6 +704,205 @@ describe('ThreadRow', () => {
     expect(html).toContain('sidebarThreadPinned')
     expect(html).toContain('sidebarThreadUnpin')
     expect(html).toContain('bg-[color-mix(in_srgb,var(--ds-sidebar-row-active)_72%,var(--ds-accent)_28%)]')
+  })
+
+  it('renders draggable and before-target feedback states', () => {
+    const html = renderToStaticMarkup(
+      createElement(ThreadRow, {
+        thread: thread({ id: 'thr_drag', workspace: '/Users/zxy/project-a' }),
+        active: false,
+        deleting: false,
+        locale: 'en-US',
+        showRunning: false,
+        showUnread: false,
+        draggable: true,
+        dragging: true,
+        dropPosition: 'before',
+        onSelect: vi.fn(),
+        onContextMenu: vi.fn(),
+        onPreviewOpen: vi.fn(),
+        onPreviewClose: vi.fn(),
+        onPin: vi.fn(),
+        onRename: vi.fn(),
+        onArchive: vi.fn(),
+        onDelete: vi.fn(),
+        onRestore: vi.fn()
+      })
+    )
+
+    expect(html).toContain('draggable="true"')
+    expect(html).toContain('opacity-55')
+    expect(html).toContain('before:bg-accent')
+  })
+})
+
+describe('SidebarProjectsSection drag ordering', () => {
+  it('restores saved workspace order and renders workspace headers as draggable', () => {
+    const storageValue = JSON.stringify({
+      version: 1,
+      workspacePaths: ['/Users/zxy/project-b', '/Users/zxy/project-a'],
+      threadIdsByScope: {}
+    })
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => key === SIDEBAR_ORDER_STORAGE_KEY ? storageValue : null,
+      setItem: vi.fn()
+    })
+    try {
+      const html = renderToStaticMarkup(
+        createElement(SidebarProjectsSection, {
+          threads: [],
+          activeView: 'chat',
+          activeThreadId: null,
+          runtimeReady: true,
+          searchQuery: '',
+          showArchived: false,
+          workspaceRoot: '/Users/zxy/project-a',
+          workspaceRoots: ['/Users/zxy/project-a', '/Users/zxy/project-b'],
+          conversationRoot: '/Users/zxy/Documents/Kun',
+          busy: false,
+          watchTurnCompletion: {},
+          unreadThreadIds: {},
+          locale: 'en-US',
+          onPickWorkspace: vi.fn(),
+          onRemoveWorkspace: vi.fn(async () => undefined),
+          onCreateThreadInWorkspace: vi.fn(),
+          onOpenRequirementDraft: vi.fn(),
+          onSelectThread: vi.fn(),
+          onRenameThread: vi.fn(async () => undefined),
+          onPinThread: vi.fn(async () => undefined),
+          onArchiveThread: vi.fn(async () => undefined),
+          onDeleteThread: vi.fn(async () => undefined),
+          onRestoreThread: vi.fn(async () => undefined),
+          onSearchQueryChange: vi.fn(),
+          t: (key: string) => key
+        })
+      )
+
+      expect(html.indexOf('title="/Users/zxy/project-b"')).toBeLessThan(
+        html.indexOf('title="/Users/zxy/project-a"')
+      )
+      expect(html.match(/draggable="true"/g)).toHaveLength(2)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('renders project-local virtual folders without changing thread workspaces', () => {
+    const folderStorageValue = JSON.stringify({
+      version: 1,
+      foldersByScope: {
+        '/users/zxy/project-a': [{
+          id: 'folder-research',
+          name: 'Research',
+          threadIds: ['thread-a']
+        }]
+      }
+    })
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => key === SIDEBAR_FOLDERS_STORAGE_KEY ? folderStorageValue : null,
+      setItem: vi.fn()
+    })
+    try {
+      const html = renderToStaticMarkup(
+        createElement(SidebarProjectsSection, {
+          threads: [
+            thread({
+              id: 'thread-a',
+              title: 'Folder thread',
+              workspace: '/Users/zxy/project-a'
+            }),
+            thread({
+              id: 'thread-b',
+              title: 'Root thread',
+              workspace: '/Users/zxy/project-a'
+            })
+          ],
+          activeView: 'chat',
+          activeThreadId: null,
+          runtimeReady: true,
+          searchQuery: '',
+          showArchived: false,
+          workspaceRoot: '/Users/zxy/project-a',
+          workspaceRoots: ['/Users/zxy/project-a'],
+          conversationRoot: '/Users/zxy/Documents/Kun',
+          busy: false,
+          watchTurnCompletion: {},
+          unreadThreadIds: {},
+          locale: 'en-US',
+          onPickWorkspace: vi.fn(),
+          onRemoveWorkspace: vi.fn(async () => undefined),
+          onCreateThreadInWorkspace: vi.fn(),
+          onOpenRequirementDraft: vi.fn(),
+          onSelectThread: vi.fn(),
+          onRenameThread: vi.fn(async () => undefined),
+          onPinThread: vi.fn(async () => undefined),
+          onArchiveThread: vi.fn(async () => undefined),
+          onDeleteThread: vi.fn(async () => undefined),
+          onRestoreThread: vi.fn(async () => undefined),
+          onSearchQueryChange: vi.fn(),
+          t: (key: string) => key
+        })
+      )
+
+      expect(html).toContain('title="Research"')
+      expect(html.indexOf('Folder thread')).toBeGreaterThan(html.indexOf('title="Research"'))
+      expect(html.indexOf('Root thread')).toBeGreaterThan(html.indexOf('Folder thread'))
+      expect(html).toContain('sidebarFolderCreate')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('SidebarConversationsSection drag ordering', () => {
+  it('restores saved conversation order and renders conversations as draggable', () => {
+    const storageValue = JSON.stringify({
+      version: 1,
+      workspacePaths: [],
+      threadIdsByScope: {
+        '/users/zxy/documents/kun': ['conversation-b', 'conversation-a']
+      }
+    })
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => key === SIDEBAR_ORDER_STORAGE_KEY ? storageValue : null,
+      setItem: vi.fn()
+    })
+    try {
+      const html = renderToStaticMarkup(
+        createElement(SidebarConversationsSection, {
+          threads: [
+            thread({
+              id: 'conversation-a',
+              title: 'Conversation A',
+              workspace: '/Users/zxy/Documents/Kun/conversation-a'
+            }),
+            thread({
+              id: 'conversation-b',
+              title: 'Conversation B',
+              workspace: '/Users/zxy/Documents/Kun/conversation-b'
+            })
+          ],
+          activeThreadId: null,
+          runtimeReady: true,
+          conversationRoot: '/Users/zxy/Documents/Kun',
+          onNewConversation: vi.fn(),
+          onSelectThread: vi.fn(),
+          onRenameThread: vi.fn(async () => undefined),
+          onPinThread: vi.fn(async () => undefined),
+          onArchiveThread: vi.fn(async () => undefined),
+          onDeleteThread: vi.fn(async () => undefined),
+          onRestoreThread: vi.fn(async () => undefined),
+          t: (key: string) => key
+        })
+      )
+
+      expect(html.indexOf('title="Conversation B"')).toBeLessThan(
+        html.indexOf('title="Conversation A"')
+      )
+      expect(html.match(/draggable="true"/g)).toHaveLength(2)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 

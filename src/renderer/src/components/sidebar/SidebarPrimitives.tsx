@@ -78,7 +78,7 @@ export function SidebarFrame({
       {children}
 
       {footer ? (
-        <div className="ds-no-drag mt-2 border-t border-[var(--ds-sidebar-divider)] px-1.5 pt-3">
+        <div className="ds-sidebar-footer ds-no-drag mt-2 border-t border-[var(--ds-sidebar-divider)] px-1.5 pt-3">
           {footer}
         </div>
       ) : null}
@@ -117,11 +117,13 @@ export function SidebarCommandRow({
     <button
       type="button"
       data-cursor-spotlight-target
+      data-active={active ? 'true' : 'false'}
+      data-variant={variant}
       disabled={disabled}
       title={disabled ? disabledHint : undefined}
       onClick={onClick}
       className={cx(
-        'flex min-h-[34px] w-full items-center gap-2.5 rounded-[8px] px-3 py-1.5 text-[13px] font-normal transition',
+        'ds-sidebar-command-row flex min-h-[34px] w-full items-center gap-2.5 rounded-[8px] px-3 py-1.5 text-[13px] font-normal transition',
         disabled
           ? 'cursor-not-allowed text-[#a8a8a8] opacity-55'
           : active
@@ -166,7 +168,7 @@ export function SidebarSectionHeader({
   actions
 }: SidebarSectionHeaderProps): ReactElement {
   return (
-    <div className="flex items-center justify-between px-2.5 pb-2 pt-5">
+    <div className="ds-sidebar-section-header flex items-center justify-between px-2.5 pb-2 pt-5">
       <span
         className="min-w-0 truncate text-[12px] font-normal text-[#9aa5b5] dark:text-white/35"
         title={title}
@@ -221,7 +223,7 @@ export function SidebarIconButton({
         onClick?.()
       }}
       className={cx(
-        'ds-no-drag inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-transparent text-[#9a9a9a] transition disabled:cursor-not-allowed disabled:opacity-40 dark:text-white/45',
+        'ds-sidebar-icon-button ds-no-drag inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-transparent text-[#9a9a9a] transition disabled:cursor-not-allowed disabled:opacity-40 dark:text-white/45',
         active ? 'bg-[color-mix(in_srgb,var(--ds-sidebar-row-active)_72%,var(--ds-accent)_28%)] text-[#1f1f1f] shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)] dark:text-white' : toneClass,
         className
       )}
@@ -248,7 +250,10 @@ export function SidebarSearchField({
   onChange
 }: SidebarSearchFieldProps): ReactElement {
   return (
-    <label data-cursor-spotlight-target className="relative min-w-0 flex-1 rounded-[8px]">
+    <label
+      data-cursor-spotlight-target
+      className="ds-sidebar-search-field relative min-w-0 flex-1 rounded-[8px]"
+    >
       <Search
         className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ds-faint"
         strokeWidth={1.8}
@@ -350,8 +355,10 @@ export function SidebarTreeRow({
   return (
     <div
       data-cursor-spotlight-target
+      data-active={active ? 'true' : 'false'}
+      data-active-variant={activeVariant}
       className={cx(
-        'group relative flex w-full items-center overflow-hidden rounded-[8px] text-[13px] font-normal transition',
+        'ds-sidebar-tree-row group relative flex w-full items-center overflow-hidden rounded-[8px] text-[13px] font-normal transition',
         outlined
           ? 'bg-[var(--ds-sidebar-row-active)] text-[#1f1f1f] shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)] dark:text-white'
           : active

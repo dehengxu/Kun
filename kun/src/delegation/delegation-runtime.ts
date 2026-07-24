@@ -1,7 +1,14 @@
 import { chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { SubagentToolPolicy, type SubagentMode, type SubagentProfileConfig, type SubagentsCapabilityConfig } from '../contracts/capabilities.js'
+import {
+  ModelReasoningEffort,
+  SubagentProfileConfig,
+  SubagentToolPolicy,
+  type SubagentMode,
+  type SubagentsCapabilityConfig
+} from '../contracts/capabilities.js'
 import {
   ApprovalPolicySchema,
   SandboxModeSchema,
@@ -13,6 +20,9 @@ import type { UsageSnapshot } from '../contracts/usage.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { TurnService } from '../services/turn-service.js'
 import { loadWorkspaceAgentProfiles } from './workspace-agents.js'
+import type { SubagentRoutingDocument } from './subagent-router.js'
+import { BUILTIN_SUBAGENT_PROFILES } from './builtin-profiles.js'
+import { BUILTIN_AGENT_CATALOG_BY_ID } from './builtin-agent-catalog.js'
 
 const ChildRunUsage = z.object({
   promptTokens: z.number().int().nonnegative().default(0),
@@ -35,18 +45,90 @@ const ChildRunUsage = z.object({
 const ChildReturnFormat = z.enum(['summary', 'evidence'])
 export type ChildReturnFormat = z.infer<typeof ChildReturnFormat>
 
+const ChildSecuritySnapshot = z.object({
+  /** Immutable parent workspace boundary; also used as the child working directory. */
+  sandboxRoot: z.string().min(1),
+  allowedProviderIds: z.array(z.string().min(1)).optional(),
+  allowedToolNames: z.array(z.string().min(1)).optional(),
+  blockedProviderIds: z.array(z.string().min(1)).optional(),
+  blockedToolNames: z.array(z.string().min(1)).optional(),
+  blockedSkillIds: z.array(z.string().min(1)).optional(),
+  memoryEnabled: z.boolean().default(false)
+}).strict()
+export type ChildSecuritySnapshot = z.infer<typeof ChildSecuritySnapshot>
+
+const ChildRoutingMetadata = z.object({
+  method: z.enum([
+    'explicit-profile',
+    'explicit-skill',
+    'explicit-custom',
+    'explicit-generated',
+    'bm25-llm-profile',
+    'bm25-llm-skill',
+    'bm25-llm-custom',
+    'bm25-llm-generated',
+    'bm25-fallback-profile',
+    'bm25-fallback-skill',
+    'bm25-fallback-custom',
+    'bm25-fallback-generated'
+  ]),
+  selectedKind: z.enum(['profile', 'skill', 'custom', 'generated']),
+  selectedId: z.string().min(1),
+  agentSurface: z.enum(['code', 'write', 'design']).optional(),
+  reason: z.string().max(2_000).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  candidates: z.array(z.object({
+    kind: z.enum(['profile', 'skill']),
+    targetId: z.string().min(1),
+    name: z.string().min(1).max(256),
+    description: z.string().max(2_000).optional(),
+    toolPolicy: SubagentToolPolicy.optional(),
+    source: z.enum(['builtin', 'configured', 'workspace', 'skill']),
+    score: z.number().nonnegative()
+  }).strict()).max(5).default([]),
+  /** Snapshot of a one-shot custom role. It is never merged into persistent config. */
+  customAgent: SubagentProfileConfig.optional(),
+  generation: z.object({
+    method: z.enum(['llm-exemplars', 'deterministic-fallback']),
+    referenceAgentIds: z.array(z.string().min(1)).max(3),
+    reason: z.string().max(2_000)
+  }).strict().optional()
+}).strict()
+export type ChildRoutingMetadata = z.infer<typeof ChildRoutingMetadata>
+
+export function profileAvailableOnSurface(
+  profile: Pick<SubagentProfileConfig, 'surfaces'>,
+  surface: 'code' | 'write' | 'design'
+): boolean {
+  const surfaces = profile.surfaces ?? ['shared']
+  return surfaces.includes('shared') || surfaces.includes(surface)
+}
+
 export const ChildRunRecord = z.object({
   id: z.string().min(1),
   parentThreadId: z.string().min(1),
   parentTurnId: z.string().min(1),
+  agentSurface: z.enum(['code', 'write', 'design']).optional(),
   label: z.string().optional(),
   prompt: z.string().min(1),
   workspace: z.string().optional(),
   model: z.string().optional(),
   /** Resolved provider id the child routed through, when one was selected. */
   providerId: z.string().optional(),
+  /** Effective reasoning strength used by the child model request. */
+  reasoningEffort: ModelReasoningEffort.optional(),
   /** Resolved subagent profile name, when one was selected. */
   profile: z.string().optional(),
+  /** Legacy read compatibility; new child runs never write skillId. */
+  skillId: z.string().optional(),
+  /** Retrieval/judge decision captured for diagnostics and reproducibility. */
+  routing: ChildRoutingMetadata.optional(),
+  /** Exact role definition executed by this child, including fixed/workspace profiles. */
+  profileSnapshot: SubagentProfileConfig.optional(),
+  profileSource: z.enum(['builtin', 'configured', 'workspace', 'custom', 'generated']).optional(),
+  profileFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  /** Immutable parent capability boundary captured before the child is queued. */
+  security: ChildSecuritySnapshot.optional(),
   /** Effective tool policy applied to the child (read-only vs inherited). */
   toolPolicy: SubagentToolPolicy.optional(),
   /** Parent policy captured when the child was created. */
@@ -58,6 +140,7 @@ export const ChildRunRecord = z.object({
   summary: z.string().optional(),
   evidence: z.array(z.string().min(1).max(2_000)).max(32).optional(),
   tokenBudget: z.number().int().positive().optional(),
+  /** Legacy persisted field. New child runs do not use wall-clock budgets. */
   timeBudgetMs: z.number().int().positive().optional(),
   returnFormat: ChildReturnFormat.default('summary'),
   budgetExceeded: z.enum(['token', 'time']).optional(),
@@ -82,6 +165,14 @@ export const ChildRunRecord = z.object({
 }).strict()
 export type ChildRunRecord = z.infer<typeof ChildRunRecord>
 
+export type ChildRunLifecycleMetadata = {
+  model?: string
+  providerId?: string
+  reasoningEffort?: string
+  profile?: string
+  profileName?: string
+}
+
 export type ChildRunExecutor = (input: {
   childId: string
   parentThreadId: string
@@ -94,13 +185,19 @@ export type ChildRunExecutor = (input: {
   model?: string
   providerId?: string
   systemPrompt?: string
+  /** When true with a non-empty systemPrompt, skip prepending the Kun base prefix. */
+  omitBasePrompt?: boolean
   allowedTools?: string[]
+  /** Parent tool/provider/memory boundary; profile permissions may only narrow it. */
+  security?: ChildSecuritySnapshot
   /** Built-in tool names blocked for this child (deny-list layered on inherit). */
   blockedTools?: string[]
   /** MCP server ids blocked for this child (deny-list; whole server toolset hidden). */
   blockedMcpServers?: string[]
   /** Skill ids blocked for this child (deny-list; catalog + activation + load_skill). */
   blockedSkills?: string[]
+  /** Disable skill discovery and load_skill for standalone profile agents. */
+  skillsEnabled?: boolean
   toolPolicy: SubagentToolPolicy
   /** Parent security snapshot; it takes precedence over executor defaults. */
   approvalPolicy?: ApprovalPolicy
@@ -110,8 +207,6 @@ export type ChildRunExecutor = (input: {
   guiDesignCanvas?: boolean
   /** Reasoning depth for this profile's child model requests (default 'off'). */
   reasoningEffort?: string
-  tokenBudget?: number
-  timeBudgetMs?: number
   returnFormat?: ChildReturnFormat
   signal: AbortSignal
 }) => Promise<{
@@ -184,7 +279,7 @@ export class DelegationRuntime {
   private readonly childSeqById = new Map<string, number>()
   /** Children waiting for a parallel slot, in FIFO order. */
   private readonly slotWaiters: SlotWaiter[] = []
-  /** Per-thread child counts (persisted + in-flight) for the budget cap. */
+  /** Per-thread child counts (persisted + in-flight) for the scheduler limit. */
   private readonly threadCounts = new Map<string, number>()
   /** Cached per-thread seed reads so concurrent first-spawns don't double-count. */
   private readonly threadSeeds = new Map<string, Promise<void>>()
@@ -237,14 +332,26 @@ export class DelegationRuntime {
     inheritedModel?: string
     /** Parent turn/thread provider id inherited by delegate_task when no profile overrides it. */
     inheritedProviderId?: string
+    /** Effective parent-turn reasoning strength inherited by custom one-run agents. */
+    inheritedReasoningEffort?: string
     /** Effective parent policy captured by the delegating tool call. */
     approvalPolicy?: ApprovalPolicy
     sandboxMode?: SandboxMode
     profile?: string
+    /** Trusted, one-run-only profile designed by the parent/router; never persisted as config. */
+    inlineProfile?: {
+      id: string
+      profile: SubagentProfileConfig
+      source?: 'builtin' | 'configured' | 'workspace' | 'custom' | 'generated'
+    }
+    routing?: ChildRoutingMetadata
+    agentSurface?: 'code' | 'write' | 'design'
+    /** Optional task-level maximum applied after profile resolution. */
+    toolPolicyCeiling?: 'readOnly'
+    /** Immutable parent capability boundary captured by delegate_task. */
+    security?: ChildSecuritySnapshot
     /** Forward GUI design-canvas scope into the child turn when present. */
     guiDesignCanvas?: boolean
-    tokenBudget?: number
-    timeBudgetMs?: number
     returnFormat?: ChildReturnFormat
     /**
      * When true, runChild returns the queued ChildRunRecord immediately and
@@ -260,53 +367,105 @@ export class DelegationRuntime {
      * can offer "open session" mid-run. Carries the resolved profile id so the
      * caller can keep showing the subagent type while it runs.
      */
-    onStart?: (childId: string, profile?: string) => void
+    onStart?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => void
+    /** Queued and running are distinct states; callbacks are awaited in order. */
+    onQueued?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
+    onRunning?: (childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void
     signal: AbortSignal
   }): Promise<ChildRunRecord> {
     const config = this.options.config
     if (!config.enabled) throw new Error('delegation is disabled by config')
+    if (input.signal.aborted) throw new Error('child run aborted before routing completed')
+    const security = input.security ? ChildSecuritySnapshot.parse(input.security) : undefined
+    // The parent boundary is authoritative. A model/profile cannot replace the
+    // workspace-write root by supplying another child working directory.
+    const workspace = security?.sandboxRoot ?? input.workspace
 
     // Resolve the profile up front so model/preamble/tool-policy are
     // captured on the record even if the child later fails.
-    const profileName = input.profile?.trim() || config.defaultProfile
+    if (input.profile?.trim() && input.inlineProfile) {
+      throw new Error('profile and inlineProfile are mutually exclusive')
+    }
+    const inlineProfile = input.inlineProfile
+      ? {
+          id: input.inlineProfile.id.trim(),
+          profile: SubagentProfileConfig.parse(input.inlineProfile.profile),
+          source: input.inlineProfile.source
+        }
+      : undefined
+    if (inlineProfile && !inlineProfile.id) throw new Error('inlineProfile.id is required')
+    const explicitProfileName = input.profile?.trim() || undefined
+    const profileName = inlineProfile?.id ?? explicitProfileName ?? config.defaultProfile
     // Workspace overlay: `.kun/agents/*.md` in the call's workspace wins
     // over the static `config.profiles` map. Loaded fresh per call so the
     // user can edit overlays without restarting the runtime.
-    let profile: SubagentProfileConfig | undefined = profileName ? config.profiles[profileName] : undefined
-    if (profileName && input.workspace) {
-      const overlay = await loadWorkspaceAgentProfiles(input.workspace)
+    const configuredProfile = profileName && Object.prototype.hasOwnProperty.call(config.profiles, profileName)
+      ? config.profiles[profileName]
+      : undefined
+    let profile: SubagentProfileConfig | undefined = inlineProfile?.profile ?? configuredProfile
+    let profileSource = inlineProfile?.source ?? (configuredProfile
+      ? BUILTIN_SUBAGENT_PROFILES[profileName ?? ''] === configuredProfile ? 'builtin' as const : 'configured' as const
+      : undefined)
+    if (!inlineProfile && profileName && workspace) {
+      const overlay = await loadWorkspaceAgentProfiles(workspace)
       const hit = overlay.find((entry) => entry.id === profileName)
-      if (hit) profile = hit.profile
+      if (hit) {
+        profile = hit.profile
+        profileSource = 'workspace'
+      }
     }
     if (profileName && !profile) {
       throw new Error(`unknown subagent profile: ${profileName}`)
     }
-    const toolPolicy = profile?.toolPolicy ?? config.defaultToolPolicy
+    if (profile?.mode === 'primary') {
+      throw new Error(`subagent profile "${profileName}" is primary-session-only`)
+    }
+    const agentSurface = input.agentSurface ?? 'code'
+    if (!inlineProfile && profile && !profileAvailableOnSurface(profile, agentSurface)) {
+      throw new Error(`subagent profile "${profileName}" is unavailable on the ${agentSurface} surface`)
+    }
+    const toolPolicy = input.toolPolicyCeiling === 'readOnly'
+      ? 'readOnly'
+      : profile?.toolPolicy ?? config.defaultToolPolicy
+    // One-run custom/generated roles follow the user's effective session
+    // model, provider, and reasoning selection. Model-authored role content
+    // must not silently change how the child runs. Reusable profiles keep
+    // their trusted configured precedence.
+    const ephemeralAgentInheritsSessionSelection =
+      profileSource === 'custom' || profileSource === 'generated'
     const selection = resolveChildModelSelection({
-      explicitModel: input.model,
-      explicitProviderId: input.providerId,
-      profileModel: profile?.model,
-      profileProviderId: profile?.providerId,
+      explicitModel: ephemeralAgentInheritsSessionSelection ? undefined : input.model,
+      explicitProviderId: ephemeralAgentInheritsSessionSelection ? undefined : input.providerId,
+      profileModel: ephemeralAgentInheritsSessionSelection ? undefined : profile?.model,
+      profileProviderId: ephemeralAgentInheritsSessionSelection ? undefined : profile?.providerId,
       inheritedModel: input.inheritedModel,
       inheritedProviderId: input.inheritedProviderId
     })
     const resolvedModel = selection.model
     const resolvedProviderId = selection.providerId
     const resolvedSystemPrompt = profile?.systemPrompt
+    const resolvedOmitBasePrompt = profile?.omitBasePrompt === true
     const resolvedAllowedTools = profile?.allowedTools
-    const resolvedBlockedTools = profile?.blockedTools
+    // Delegation is intentionally one level deep. Enforce this in the host,
+    // including for user/workspace profiles that forgot to declare a deny-list.
+    const resolvedBlockedTools = [...new Set([
+      'delegate_task',
+      'generate_subagent',
+      ...(profile?.blockedTools ?? [])
+    ])]
     const resolvedBlockedMcpServers = profile?.blockedMcpServers
     const resolvedBlockedSkills = profile?.blockedSkills
+    const resolvedSkillsEnabled = profile?.skillsEnabled ?? true
     const promptPreamble = profile?.promptPreamble
-    const resolvedReasoningEffort = profile?.reasoningEffort
-    const tokenBudget = positiveInteger(input.tokenBudget)
-    const timeBudgetMs = positiveInteger(input.timeBudgetMs)
+    const resolvedReasoningEffort = ephemeralAgentInheritsSessionSelection
+      ? normalizeInheritedReasoningEffort(input.inheritedReasoningEffort)
+      : profile?.reasoningEffort
     const returnFormat = input.returnFormat ?? 'summary'
 
-    // Reserve against the per-thread budget before persisting anything.
+    // Reserve against the per-thread child-count limit before persisting anything.
     await this.ensureSeeded(input.parentThreadId)
     if (!this.reserveChild(input.parentThreadId)) {
-      throw new Error('delegation child-run budget exhausted')
+      throw new Error('delegation child-run limit exhausted')
     }
 
     const queuedAt = this.now()
@@ -315,17 +474,22 @@ export class DelegationRuntime {
       id,
       parentThreadId: input.parentThreadId,
       parentTurnId: input.parentTurnId,
+      agentSurface,
       label: input.label,
       prompt: input.prompt,
-      workspace: input.workspace,
+      workspace,
       model: resolvedModel,
       providerId: resolvedProviderId,
+      reasoningEffort: resolvedReasoningEffort,
       profile: profileName,
+      ...(input.routing ? { routing: ChildRoutingMetadata.parse(input.routing) } : {}),
+      ...(profile ? { profileSnapshot: profile } : {}),
+      ...(profileSource ? { profileSource } : {}),
+      ...(profile ? { profileFingerprint: fingerprintProfile(profile) } : {}),
+      ...(security ? { security } : {}),
       toolPolicy,
       ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
       ...(input.sandboxMode ? { sandboxMode: input.sandboxMode } : {}),
-      tokenBudget,
-      timeBudgetMs,
       returnFormat,
       ...(input.detach ? { detached: true } : {}),
       status: 'queued',
@@ -335,11 +499,27 @@ export class DelegationRuntime {
     })
     await this.options.store.upsert(record)
     await this.recordChildEvent(record)
-    // Surface the child id immediately (both sync + detached paths) so the
-    // caller can show it while the child is still running.
-    input.onStart?.(record.id, profileName)
+    // Surface allocation as queued. Running is emitted only after a scheduler
+    // slot has actually been acquired.
+    await notifyLifecycle(input.onQueued, record)
+    try {
+      input.onStart?.(record.id, profileName, childLifecycleMetadata(record))
+    } catch {
+      // UI observers cannot prevent or strand an already-persisted child.
+    }
 
     if (input.detach) {
+      if (input.signal.aborted) {
+        record = ChildRunRecord.parse({
+          ...record,
+          status: 'aborted',
+          error: 'child run aborted before detached execution started',
+          updatedAt: this.now()
+        })
+        await this.options.store.upsert(record)
+        await this.recordChildEvent(record)
+        return record
+      }
       // Spawn an independent signal so the parent turn's signal aborting
       // doesn't reach into the background run. The user can still cancel
       // via abortChild(id).
@@ -362,19 +542,21 @@ export class DelegationRuntime {
         resolvedModel,
         resolvedProviderId,
         resolvedSystemPrompt,
+        resolvedOmitBasePrompt,
         resolvedAllowedTools,
         resolvedBlockedTools,
         resolvedBlockedMcpServers,
         resolvedBlockedSkills,
+        skillsEnabled: resolvedSkillsEnabled,
         promptPreamble,
         approvalPolicy: input.approvalPolicy,
         sandboxMode: input.sandboxMode,
         guiDesignCanvas: input.guiDesignCanvas === true,
         resolvedReasoningEffort,
-        tokenBudget,
-        timeBudgetMs,
         returnFormat,
-        workspace: input.workspace,
+        workspace,
+        security,
+        onRunning: input.onRunning,
         label: input.label,
         parentThreadId: input.parentThreadId,
         parentTurnId: input.parentTurnId,
@@ -412,37 +594,39 @@ export class DelegationRuntime {
     record = ChildRunRecord.parse({ ...record, status: 'running', startedAt, queuedMs, updatedAt: startedAt })
     await this.options.store.upsert(record)
     await this.recordChildEvent(record)
+    await notifyLifecycle(input.onRunning, record)
     try {
       const executor: ChildRunExecutor = this.options.executor ?? defaultExecutor
-      const result = await executeWithinTimeBudget(input.signal, timeBudgetMs, (signal) => executor({
+      const result = await executeWithParentSignal(input.signal, (signal) => executor({
         childId: id,
         parentThreadId: input.parentThreadId,
         parentTurnId: input.parentTurnId,
         ...(input.label ? { label: input.label } : {}),
         ...(profileName ? { profile: profileName } : {}),
         prompt: input.prompt,
-        workspace: input.workspace,
+        workspace,
         model: resolvedModel,
         ...(resolvedProviderId ? { providerId: resolvedProviderId } : {}),
         ...(resolvedSystemPrompt ? { systemPrompt: resolvedSystemPrompt } : {}),
+        ...(resolvedOmitBasePrompt ? { omitBasePrompt: true } : {}),
         ...(resolvedAllowedTools ? { allowedTools: resolvedAllowedTools } : {}),
+        ...(security ? { security } : {}),
         ...(resolvedBlockedTools ? { blockedTools: resolvedBlockedTools } : {}),
         ...(resolvedBlockedMcpServers ? { blockedMcpServers: resolvedBlockedMcpServers } : {}),
         ...(resolvedBlockedSkills ? { blockedSkills: resolvedBlockedSkills } : {}),
+        skillsEnabled: resolvedSkillsEnabled,
         toolPolicy,
         ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
         ...(input.sandboxMode ? { sandboxMode: input.sandboxMode } : {}),
         ...(promptPreamble ? { promptPreamble } : {}),
         ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(resolvedReasoningEffort ? { reasoningEffort: resolvedReasoningEffort } : {}),
-        ...(tokenBudget ? { tokenBudget } : {}),
-        ...(timeBudgetMs ? { timeBudgetMs } : {}),
         returnFormat,
         signal
       }))
       const finishedAt = this.now()
       const usage = result.usage ?? record.usage
-      const contractError = childContractError({ tokenBudget, returnFormat }, result.evidence, usage)
+      const contractError = childContractError(returnFormat, result.evidence)
       record = ChildRunRecord.parse({
         ...record,
         status: contractError ? 'failed' : 'completed',
@@ -452,14 +636,7 @@ export class DelegationRuntime {
         toolInvocations: result.toolInvocations,
         prefixReused: result.prefixReused,
         inheritedHistoryItems: result.inheritedHistoryItems,
-        ...(contractError
-          ? {
-              error: contractError,
-              ...(usage.totalTokens > (tokenBudget ?? Number.POSITIVE_INFINITY)
-                ? { budgetExceeded: 'token' as const }
-                : {})
-            }
-          : {}),
+        ...(contractError ? { error: contractError } : {}),
         durationMs: elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
       })
@@ -473,7 +650,6 @@ export class DelegationRuntime {
         ...record,
         status: input.signal.aborted ? 'aborted' : 'failed',
         error: errorMessage(error),
-        ...(error instanceof ChildTimeBudgetExceededError ? { budgetExceeded: 'time' } : {}),
         durationMs: elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
       })
@@ -500,19 +676,21 @@ export class DelegationRuntime {
     resolvedModel: string | undefined
     resolvedProviderId: string | undefined
     resolvedSystemPrompt: string | undefined
+    resolvedOmitBasePrompt: boolean
     resolvedAllowedTools: string[] | undefined
     resolvedBlockedTools: string[] | undefined
     resolvedBlockedMcpServers: string[] | undefined
     resolvedBlockedSkills: string[] | undefined
+    skillsEnabled: boolean
     promptPreamble: string | undefined
     approvalPolicy: ApprovalPolicy | undefined
     sandboxMode: SandboxMode | undefined
     guiDesignCanvas: boolean
     resolvedReasoningEffort: string | undefined
-    tokenBudget: number | undefined
-    timeBudgetMs: number | undefined
     returnFormat: ChildReturnFormat
     workspace: string | undefined
+    security: ChildSecuritySnapshot | undefined
+    onRunning: ((childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void) | undefined
     label: string | undefined
     parentThreadId: string
     parentTurnId: string
@@ -539,9 +717,10 @@ export class DelegationRuntime {
     record = ChildRunRecord.parse({ ...record, status: 'running', startedAt, queuedMs, updatedAt: startedAt })
     await this.options.store.upsert(record)
     await this.recordChildEvent(record)
+    await notifyLifecycle(args.onRunning, record)
     try {
       const executor: ChildRunExecutor = this.options.executor ?? defaultExecutor
-      const result = await executeWithinTimeBudget(args.signal, args.timeBudgetMs, (signal) => executor({
+      const result = await executeWithParentSignal(args.signal, (signal) => executor({
         childId: record.id,
         parentThreadId: args.parentThreadId,
         parentTurnId: args.parentTurnId,
@@ -552,28 +731,25 @@ export class DelegationRuntime {
         model: args.resolvedModel,
         ...(args.resolvedProviderId ? { providerId: args.resolvedProviderId } : {}),
         ...(args.resolvedSystemPrompt ? { systemPrompt: args.resolvedSystemPrompt } : {}),
+        ...(args.resolvedOmitBasePrompt ? { omitBasePrompt: true } : {}),
         ...(args.resolvedAllowedTools ? { allowedTools: args.resolvedAllowedTools } : {}),
+        ...(args.security ? { security: args.security } : {}),
         ...(args.resolvedBlockedTools ? { blockedTools: args.resolvedBlockedTools } : {}),
         ...(args.resolvedBlockedMcpServers ? { blockedMcpServers: args.resolvedBlockedMcpServers } : {}),
         ...(args.resolvedBlockedSkills ? { blockedSkills: args.resolvedBlockedSkills } : {}),
+        skillsEnabled: args.skillsEnabled,
         toolPolicy: args.toolPolicy,
         ...(args.approvalPolicy ? { approvalPolicy: args.approvalPolicy } : {}),
         ...(args.sandboxMode ? { sandboxMode: args.sandboxMode } : {}),
         ...(args.promptPreamble ? { promptPreamble: args.promptPreamble } : {}),
         ...(args.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(args.resolvedReasoningEffort ? { reasoningEffort: args.resolvedReasoningEffort } : {}),
-        ...(args.tokenBudget ? { tokenBudget: args.tokenBudget } : {}),
-        ...(args.timeBudgetMs ? { timeBudgetMs: args.timeBudgetMs } : {}),
         returnFormat: args.returnFormat,
         signal
       }))
       const finishedAt = this.now()
       const usage = result.usage ?? record.usage
-      const contractError = childContractError(
-        { tokenBudget: args.tokenBudget, returnFormat: args.returnFormat },
-        result.evidence,
-        usage
-      )
+      const contractError = childContractError(args.returnFormat, result.evidence)
       record = ChildRunRecord.parse({
         ...record,
         status: contractError ? 'failed' : 'completed',
@@ -583,14 +759,7 @@ export class DelegationRuntime {
         toolInvocations: result.toolInvocations,
         prefixReused: result.prefixReused,
         inheritedHistoryItems: result.inheritedHistoryItems,
-        ...(contractError
-          ? {
-              error: contractError,
-              ...(usage.totalTokens > (args.tokenBudget ?? Number.POSITIVE_INFINITY)
-                ? { budgetExceeded: 'token' as const }
-                : {})
-            }
-          : {}),
+        ...(contractError ? { error: contractError } : {}),
         durationMs: elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
       })
@@ -604,7 +773,6 @@ export class DelegationRuntime {
         ...record,
         status: args.signal.aborted ? 'aborted' : 'failed',
         error: errorMessage(error),
-        ...(error instanceof ChildTimeBudgetExceededError ? { budgetExceeded: 'time' } : {}),
         durationMs: elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
       })
@@ -756,8 +924,110 @@ export class DelegationRuntime {
     }))
   }
 
+  /**
+   * Workspace `.kun/agents/*.md` overlays for the GUI roster.
+   * Returned separately from `listProfiles()` so Settings/Sidebar can merge
+   * them without rewriting persistent GUI settings.
+   */
+  async listWorkspaceProfiles(workspace: string): Promise<Array<{
+    id: string
+    source: 'workspace'
+    filePath: string
+    name?: string
+    description?: string
+    mode: SubagentMode
+    toolPolicy: SubagentToolPolicy
+    color?: string
+    systemPrompt?: string
+    promptPreamble?: string
+    allowedTools?: string[]
+    blockedTools?: string[]
+    omitBasePrompt?: boolean
+  }>> {
+    const overlay = await loadWorkspaceAgentProfiles(workspace)
+    return overlay.map((entry) => ({
+      id: entry.id,
+      source: 'workspace' as const,
+      filePath: entry.filePath,
+      ...(entry.profile.name ? { name: entry.profile.name } : {}),
+      ...(entry.profile.description ? { description: entry.profile.description } : {}),
+      mode: entry.profile.mode,
+      toolPolicy: entry.profile.toolPolicy,
+      ...(entry.profile.color ? { color: entry.profile.color } : {}),
+      ...(entry.profile.systemPrompt ? { systemPrompt: entry.profile.systemPrompt } : {}),
+      ...(entry.profile.promptPreamble ? { promptPreamble: entry.profile.promptPreamble } : {}),
+      ...(entry.profile.allowedTools ? { allowedTools: entry.profile.allowedTools } : {}),
+      ...(entry.profile.blockedTools ? { blockedTools: entry.profile.blockedTools } : {}),
+      ...(entry.profile.omitBasePrompt ? { omitBasePrompt: true } : {})
+    }))
+  }
+
+  /** Resolve one explicit profile once so routing and execution share a snapshot. */
+  async resolveProfileSnapshot(
+    profileId: string,
+    workspace?: string,
+    agentSurface: 'code' | 'write' | 'design' = 'code'
+  ): Promise<{ id: string; source: 'builtin' | 'configured' | 'workspace'; profile: SubagentProfileConfig } | undefined> {
+    const id = profileId.trim()
+    if (!id) return undefined
+    if (workspace) {
+      const hit = (await loadWorkspaceAgentProfiles(workspace)).find((entry) => entry.id === id)
+      if (hit) {
+        return profileAvailableOnSurface(hit.profile, agentSurface)
+          ? { id, source: 'workspace', profile: hit.profile }
+          : undefined
+      }
+    }
+    if (!Object.prototype.hasOwnProperty.call(this.options.config.profiles, id)) return undefined
+    const profile = this.options.config.profiles[id]
+    if (!profile) return undefined
+    if (!profileAvailableOnSurface(profile, agentSurface)) return undefined
+    return {
+      id,
+      source: BUILTIN_SUBAGENT_PROFILES[id] === profile ? 'builtin' : 'configured',
+      profile
+    }
+  }
+
+  /** Profiles visible to automatic routing, including workspace overlays. */
+  async listRoutingProfiles(
+    workspace?: string,
+    agentSurface: 'code' | 'write' | 'design' = 'code'
+  ): Promise<SubagentRoutingDocument[]> {
+    const profiles = new Map<string, SubagentProfileConfig>(Object.entries(this.options.config.profiles))
+    const sources = new Map<string, 'builtin' | 'configured' | 'workspace'>(
+      Object.entries(this.options.config.profiles).map(([id, profile]) => [
+        id,
+        BUILTIN_SUBAGENT_PROFILES[id] === profile ? 'builtin' : 'configured'
+      ])
+    )
+    if (workspace) {
+      const overlay = await loadWorkspaceAgentProfiles(workspace)
+      for (const entry of overlay) {
+        profiles.set(entry.id, entry.profile)
+        sources.set(entry.id, 'workspace')
+      }
+    }
+    return [...profiles.entries()]
+      .filter(([, profile]) => profile.mode !== 'primary' && profileAvailableOnSurface(profile, agentSurface))
+      .map(([id, profile]) => ({
+        kind: 'profile' as const,
+        id,
+        source: sources.get(id) ?? 'configured',
+        profile,
+        ...(BUILTIN_AGENT_CATALOG_BY_ID[id]?.routingTerms
+          ? { routingTerms: BUILTIN_AGENT_CATALOG_BY_ID[id]!.routingTerms }
+          : {})
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id))
+  }
+
   get defaultProfileName(): string | undefined {
     return this.options.config.defaultProfile
+  }
+
+  get useExistingAgents(): boolean {
+    return this.options.config.useExistingAgents
   }
 
   get defaultToolPolicy(): SubagentToolPolicy {
@@ -798,6 +1068,7 @@ export class DelegationRuntime {
         ...(record.model ? { childModel: record.model } : {}),
         ...(record.providerId ? { childProviderId: record.providerId } : {}),
         ...(record.profile ? { childProfile: record.profile } : {}),
+        ...(record.profileSnapshot?.name ? { childProfileName: record.profileSnapshot.name } : {}),
         ...(record.toolPolicy ? { childToolPolicy: record.toolPolicy } : {}),
         ...(record.prefixReused !== undefined ? { prefixReused: record.prefixReused } : {}),
         ...(record.inheritedHistoryItems !== undefined ? { inheritedHistoryItems: record.inheritedHistoryItems } : {}),
@@ -879,12 +1150,39 @@ function resolveChildModelSelection(input: {
   inheritedModel?: string
   inheritedProviderId?: string
 }): { model?: string; providerId?: string } {
-  const model = input.explicitModel?.trim() || input.profileModel?.trim() || input.inheritedModel?.trim()
-  const providerId = input.explicitProviderId?.trim() || input.profileProviderId?.trim() || input.inheritedProviderId?.trim()
-  return {
-    ...(model ? { model } : {}),
-    ...(providerId ? { providerId } : {})
+  return (
+    completeModelProviderPair('explicit child override', input.explicitModel, input.explicitProviderId) ??
+    completeModelProviderPair('subagent profile', input.profileModel, input.profileProviderId) ??
+    completeModelProviderPair(
+      'inherited parent selection',
+      input.inheritedModel,
+      input.inheritedProviderId,
+      { allowDefaultProvider: true }
+    ) ??
+    {}
+  )
+}
+
+function completeModelProviderPair(
+  source: string,
+  rawModel: string | undefined,
+  rawProviderId: string | undefined,
+  options: { allowDefaultProvider?: boolean } = {}
+): { model: string; providerId?: string } | undefined {
+  const model = rawModel?.trim()
+  const providerId = rawProviderId?.trim()
+  if (!model && !providerId) return undefined
+  // A normal parent turn on the runtime's default provider has an effective
+  // model but no explicit providerId. Preserve that selection as one source;
+  // absence here means "runtime default", not a field to fill from elsewhere.
+  if (model && !providerId && options.allowDefaultProvider) return { model }
+  if (!model || !providerId) {
+    const missing = model ? 'providerId' : 'model'
+    throw new Error(
+      `${source} must configure model and providerId together; missing ${missing}`
+    )
   }
+  return { model, providerId }
 }
 
 function toUsageSnapshot(usage: ChildRunRecord['usage']): UsageSnapshot {
@@ -947,65 +1245,55 @@ export function aggregateChildRuns(records: readonly ChildRunRecord[]): ChildRun
   )
 }
 
-class ChildTimeBudgetExceededError extends Error {
-  constructor(readonly timeBudgetMs: number) {
-    super(`child time budget exhausted after ${timeBudgetMs}ms`)
-    this.name = 'ChildTimeBudgetExceededError'
-  }
-}
-
-async function executeWithinTimeBudget<T>(
+async function executeWithParentSignal<T>(
   parentSignal: AbortSignal,
-  timeBudgetMs: number | undefined,
   execute: (signal: AbortSignal) => Promise<T>
 ): Promise<T> {
   if (parentSignal.aborted) throw new Error('child run aborted')
-  if (!timeBudgetMs) return execute(parentSignal)
-
-  const controller = new AbortController()
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let rejectCancellation: ((error: Error) => void) | undefined
-  const cancellation = new Promise<never>((_resolve, reject) => {
-    rejectCancellation = reject
-  })
-  const onParentAbort = (): void => {
-    controller.abort(parentSignal.reason)
-    rejectCancellation?.(new Error('child run aborted'))
-  }
-  parentSignal.addEventListener('abort', onParentAbort, { once: true })
-  timer = setTimeout(() => {
-    const error = new ChildTimeBudgetExceededError(timeBudgetMs)
-    controller.abort(error)
-    rejectCancellation?.(error)
-  }, timeBudgetMs)
-  timer.unref?.()
-
-  try {
-    return await Promise.race([execute(controller.signal), cancellation])
-  } finally {
-    if (timer) clearTimeout(timer)
-    parentSignal.removeEventListener('abort', onParentAbort)
-  }
+  return execute(parentSignal)
 }
 
 function childContractError(
-  contract: { tokenBudget: number | undefined; returnFormat: ChildReturnFormat },
-  evidence: string[] | undefined,
-  usage: ChildRunRecord['usage']
+  returnFormat: ChildReturnFormat,
+  evidence: string[] | undefined
 ): string | undefined {
-  if (contract.tokenBudget !== undefined && usage.totalTokens > contract.tokenBudget) {
-    return `child token budget exhausted (${usage.totalTokens} > ${contract.tokenBudget})`
-  }
-  if (contract.returnFormat === 'evidence' && !evidence?.some((item) => item.trim().length > 0)) {
+  if (returnFormat === 'evidence' && !evidence?.some((item) => item.trim().length > 0)) {
     return 'child contract requires evidence but none was returned'
   }
   return undefined
 }
 
-function positiveInteger(value: number | undefined): number | undefined {
-  if (value === undefined) return undefined
-  if (!Number.isInteger(value) || value <= 0) throw new Error('child budgets must be positive integers')
-  return value
+function fingerprintProfile(profile: SubagentProfileConfig): string {
+  return createHash('sha256')
+    .update(JSON.stringify(profile, Object.keys(profile).sort()))
+    .digest('hex')
+}
+
+async function notifyLifecycle(
+  callback: ((childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void) | undefined,
+  record: ChildRunRecord
+): Promise<void> {
+  try {
+    await callback?.(record.id, record.profile, childLifecycleMetadata(record))
+  } catch {
+    // Lifecycle updates are observational; persisted child state remains the
+    // authority and a renderer disconnect must not consume a scheduler slot.
+  }
+}
+
+function childLifecycleMetadata(record: ChildRunRecord): ChildRunLifecycleMetadata {
+  return {
+    ...(record.model ? { model: record.model } : {}),
+    ...(record.providerId ? { providerId: record.providerId } : {}),
+    ...(record.reasoningEffort ? { reasoningEffort: record.reasoningEffort } : {}),
+    ...(record.profile ? { profile: record.profile } : {}),
+    ...(record.profileSnapshot?.name ? { profileName: record.profileSnapshot.name } : {})
+  }
+}
+
+function normalizeInheritedReasoningEffort(value: string | undefined): z.infer<typeof ModelReasoningEffort> {
+  const parsed = ModelReasoningEffort.safeParse(value?.trim().toLowerCase())
+  return parsed.success ? parsed.data : 'auto'
 }
 
 function formatDetachedChildDisplayText(record: ChildRunRecord): string {

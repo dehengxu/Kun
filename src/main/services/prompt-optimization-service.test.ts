@@ -190,13 +190,28 @@ describe('optimizePrompt', () => {
   })
 
   it('uses unwrapped ChatGPT OAuth and Responses Lite for GPT-5.6', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ output_text: 'Optimized.' }), { status: 200 }))
+    const fetchMock = vi.fn(async () => new Response([
+      'event: response.output_text.delta',
+      'data: {"type":"response.output_text.delta","delta":"Optimized"}',
+      '',
+      'event: response.output_text.delta',
+      'data: {"type":"response.output_text.delta","delta":"."}',
+      '',
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"status":"completed"}}',
+      '',
+      'data: [DONE]',
+      ''
+    ].join('\n'), {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' }
+    }))
     vi.stubGlobal('fetch', fetchMock)
     const settings = createSettings({
       promptOptimization: {
         enabled: true,
         providerId: 'codex',
-        model: 'gpt-5.6-sol',
+        model: 'gpt-5.6-luna',
         prompt: 'Optimize.',
         timeoutMs: 60_000
       }
@@ -210,28 +225,40 @@ describe('optimizePrompt', () => {
       }),
       baseUrl: 'https://chatgpt.com/backend-api/codex',
       endpointFormat: 'responses',
-      models: ['gpt-5.6-sol'],
+      models: ['gpt-5.6-luna'],
       modelProfiles: {
-        'gpt-5.6-sol': {
+        'gpt-5.6-luna': {
           inputModalities: ['text', 'image'], outputModalities: ['text'],
           supportsToolCalling: true, messageParts: ['text', 'image_url'], responsesMode: 'lite'
         }
       }
     })
 
-    await optimizePrompt(settings, 'rough prompt')
+    const result = await optimizePrompt(settings, 'rough prompt')
 
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(init.headers).toMatchObject({
       Authorization: 'Bearer oauth-token',
       'ChatGPT-Account-Id': 'account',
+      Accept: 'text/event-stream',
       'x-openai-internal-codex-responses-lite': 'true'
     })
     const body = JSON.parse(String(init.body)) as Record<string, unknown>
-    expect(body).toMatchObject({ store: false, parallel_tool_calls: false, reasoning: { context: 'all_turns' } })
+    expect(body).toMatchObject({
+      stream: true,
+      store: false,
+      parallel_tool_calls: false,
+      reasoning: { context: 'all_turns' }
+    })
     expect(body).not.toHaveProperty('instructions')
     expect(body.input).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'additional_tools', role: 'developer' })
     ]))
+    expect(result).toEqual({
+      ok: true,
+      text: 'Optimized.',
+      model: 'gpt-5.6-luna',
+      providerId: 'codex'
+    })
   })
 })

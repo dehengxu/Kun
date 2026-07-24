@@ -1,30 +1,46 @@
+import { randomUUID } from 'node:crypto'
 import type { UsageSnapshot } from '../contracts/usage.js'
+import {
+  MAX_MODEL_REQUEST_TRACE_PROVIDER_ID_LENGTH,
+  MAX_MODEL_REQUEST_TRACE_PROVIDER_KIND_LENGTH,
+  MAX_MODEL_REQUEST_TRACE_TOOL_CATALOG_ENTRIES,
+  MAX_MODEL_REQUEST_TRACE_TOOL_NAME_LENGTH,
+  MODEL_REQUEST_TRACE_SCHEMA_VERSION,
+  type ModelRequestTraceDecoded,
+  type ModelRequestTraceLimits,
+  type ModelRequestTracePage,
+  type ModelRequestTraceRecord,
+  type ModelRequestTraceToolCatalogEntry
+} from '../contracts/model-request-trace.js'
 import type { ModelStreamChunk } from '../ports/model-client.js'
+import {
+  BoundedModelTraceBodyAccumulator,
+  boundedModelTraceText,
+  sanitizeModelTraceHeaders,
+  sanitizeModelTraceUrl
+} from './model-request-trace-safety.js'
+import {
+  MAX_MODEL_REQUEST_TRACE_PAGE_SIZE,
+  ModelRequestTraceStore
+} from './model-request-trace-store.js'
 
-/**
- * One captured LLM round: a bounded representation of the HTTP request body
- * and raw output streamed back. Kept in-memory only so the troubleshooting
- * view can inspect recent requests without retaining an unbounded prompt or
- * response history.
- */
+/** Legacy round projection retained for `/v1/debug/llm-rounds`. */
 export type LlmDebugRound = {
   id: number
   threadId: string
   turnId: string
   provider: string
   model: string
-  /** Redacted endpoint URL the request was sent to. */
   url: string
   startedAt: string
   finishedAt: string
   durationMs: number
-  /** The request body, or a diagnostic prefix when it exceeded the capture budget. */
   requestBody: Record<string, unknown> | null
   requestBodyTruncated?: boolean
   requestBodyOriginalBytes?: number
   output: LlmDebugOutput
-  /** Approximate serialized bytes retained by this completed round. */
   retainedBytes?: number
+  exchanges: ModelRequestTraceRecord[]
 }
 
 export type LlmDebugToolCall = {
@@ -53,66 +69,114 @@ export type LlmDebugRoundMeta = {
   turnId: string
   provider: string
   model: string
+  toolCatalog?: readonly ModelRequestTraceToolCatalogEntry[]
+}
+
+export type LlmHttpAttemptReason = ModelRequestTraceRecord['attemptReason']
+
+export type LlmHttpAttemptMeta = {
+  endpointFormat: string
+  attempt: number
+  reason: LlmHttpAttemptReason
+  url: string
+  headers: Record<string, string>
+  bodyText: string
+  secretValues?: readonly string[]
+}
+
+export type LlmCliInvocationMeta = {
+  endpointFormat: string
+  target: string
+  bodyText: string
+}
+
+export type LlmSdkInvocationMeta = {
+  endpointFormat: string
+  target: string
+  bodyText: string
+  secretValues?: readonly string[]
 }
 
 /** Narrow sink used by model clients to retain bounded debug data. */
 export interface LlmDebugSink {
   start(meta: LlmDebugRoundMeta): LlmDebugRound
-  captureRequest(round: LlmDebugRound, requestBody: Record<string, unknown>, redactedUrl: string): void
+  beginHttpAttempt(round: LlmDebugRound, meta: LlmHttpAttemptMeta): ModelRequestTraceRecord
+  beginCliInvocation(round: LlmDebugRound, meta: LlmCliInvocationMeta): ModelRequestTraceRecord
+  beginSdkInvocation?(round: LlmDebugRound, meta: LlmSdkInvocationMeta): ModelRequestTraceRecord
+  captureHttpResponse(round: LlmDebugRound, record: ModelRequestTraceRecord, response: Response): void
+  captureHttpError(record: ModelRequestTraceRecord, error: unknown): void
+  captureTransportError(record: ModelRequestTraceRecord, error: unknown): void
   captureChunk(round: LlmDebugRound, chunk: ModelStreamChunk): void
-  finish(round: LlmDebugRound): void
+  finish(round: LlmDebugRound): Promise<void>
 }
 
 export type LlmDebugRecorderLimits = {
   capacity: number
   maxRequestBodyBytes: number
+  maxResponseBodyBytes: number
   maxRoundBytes: number
   maxTotalBytes: number
+  maxPageSize: number
 }
 
 export const DEFAULT_LLM_DEBUG_RECORDER_LIMITS: LlmDebugRecorderLimits = {
   capacity: 25,
-  maxRequestBodyBytes: 512 * 1024,
-  maxRoundBytes: 2 * 1024 * 1024,
-  maxTotalBytes: 16 * 1024 * 1024
+  maxRequestBodyBytes: 4 * 1024 * 1024,
+  maxResponseBodyBytes: 4 * 1024 * 1024,
+  maxRoundBytes: 8 * 1024 * 1024,
+  maxTotalBytes: 32 * 1024 * 1024,
+  maxPageSize: MAX_MODEL_REQUEST_TRACE_PAGE_SIZE
+}
+
+export type LlmDebugRecorderOptions = Partial<LlmDebugRecorderLimits> & {
+  dataDir?: string
 }
 
 type CaptureState = {
   requestBytes: number
   outputBytes: number
+  toolCatalog: ModelRequestTraceToolCatalogEntry[]
   text: StringBlockAccumulator
   reasoning: StringBlockAccumulator
+  pendingCaptures: Promise<void>[]
 }
 
-type StringBlockAccumulator = {
-  blocks: string[]
-  parts: string[]
-}
+type StringBlockAccumulator = { blocks: string[]; parts: string[] }
 
 const DEBUG_TEXT_BLOCK_FRAGMENT_WINDOW = 256
 
 /**
- * Count- and byte-bounded in-memory buffer of recent LLM rounds. Streaming
- * text is accumulated in blocks and joined only once when the round finishes.
+ * Count/byte-bounded live recorder plus private per-thread JSONL persistence.
+ * Wire records never contain provider credentials: URL/header sanitization is
+ * performed synchronously before a record is put into active memory.
  */
 export class LlmDebugRecorder implements LlmDebugSink {
   private readonly rounds: LlmDebugRound[] = []
   private readonly states = new WeakMap<LlmDebugRound, CaptureState>()
+  private readonly activeByThread = new Map<string, Set<LlmDebugRound>>()
   private readonly limits: LlmDebugRecorderLimits
+  private readonly store?: ModelRequestTraceStore
   private nextId = 1
+  private nextTraceSequence = 1
   private totalRetainedBytes = 0
   private activeCaptureCountValue = 0
 
-  constructor(limits: Partial<LlmDebugRecorderLimits> = {}) {
+  constructor(options: LlmDebugRecorderOptions = {}) {
     this.limits = {
-      capacity: positiveInteger(limits.capacity, DEFAULT_LLM_DEBUG_RECORDER_LIMITS.capacity),
+      capacity: positiveInteger(options.capacity, DEFAULT_LLM_DEBUG_RECORDER_LIMITS.capacity),
       maxRequestBodyBytes: positiveInteger(
-        limits.maxRequestBodyBytes,
+        options.maxRequestBodyBytes,
         DEFAULT_LLM_DEBUG_RECORDER_LIMITS.maxRequestBodyBytes
       ),
-      maxRoundBytes: positiveInteger(limits.maxRoundBytes, DEFAULT_LLM_DEBUG_RECORDER_LIMITS.maxRoundBytes),
-      maxTotalBytes: positiveInteger(limits.maxTotalBytes, DEFAULT_LLM_DEBUG_RECORDER_LIMITS.maxTotalBytes)
+      maxResponseBodyBytes: positiveInteger(
+        options.maxResponseBodyBytes,
+        DEFAULT_LLM_DEBUG_RECORDER_LIMITS.maxResponseBodyBytes
+      ),
+      maxRoundBytes: positiveInteger(options.maxRoundBytes, DEFAULT_LLM_DEBUG_RECORDER_LIMITS.maxRoundBytes),
+      maxTotalBytes: positiveInteger(options.maxTotalBytes, DEFAULT_LLM_DEBUG_RECORDER_LIMITS.maxTotalBytes),
+      maxPageSize: positiveInteger(options.maxPageSize, DEFAULT_LLM_DEBUG_RECORDER_LIMITS.maxPageSize)
     }
+    if (options.dataDir) this.store = new ModelRequestTraceStore(options.dataDir)
   }
 
   start(meta: LlmDebugRoundMeta): LlmDebugRound {
@@ -128,43 +192,140 @@ export class LlmDebugRecorder implements LlmDebugSink {
       finishedAt: startedAt,
       durationMs: 0,
       requestBody: null,
-      output: { text: '', reasoning: '', toolCalls: [] }
+      output: { text: '', reasoning: '', toolCalls: [] },
+      exchanges: []
     }
-    this.states.set(round, {
-      requestBytes: 0,
-      outputBytes: 0,
-      text: { blocks: [], parts: [] },
-      reasoning: { blocks: [], parts: [] }
-    })
+    this.states.set(round, createCaptureState(meta.toolCatalog))
+    const active = this.activeByThread.get(meta.threadId) ?? new Set<LlmDebugRound>()
+    active.add(round)
+    this.activeByThread.set(meta.threadId, active)
     this.activeCaptureCountValue += 1
     return round
   }
 
-  captureRequest(
-    round: LlmDebugRound,
-    requestBody: Record<string, unknown>,
-    redactedUrl: string
-  ): void {
-    const state = this.stateFor(round)
-    const serialized = serializeJson(requestBody)
-    const originalBytes = Buffer.byteLength(serialized.json, 'utf8')
-    const availableBytes = Math.max(
-      0,
-      Math.min(this.limits.maxRequestBodyBytes, this.limits.maxRoundBytes - state.outputBytes)
-    )
+  beginHttpAttempt(round: LlmDebugRound, meta: LlmHttpAttemptMeta): ModelRequestTraceRecord {
+    return this.beginAttempt(round, {
+      transport: 'http',
+      method: 'POST',
+      endpointFormat: meta.endpointFormat,
+      attempt: meta.attempt,
+      reason: meta.reason,
+      target: meta.url,
+      headers: meta.headers,
+      bodyText: meta.bodyText,
+      ...(meta.secretValues ? { secretValues: meta.secretValues } : {})
+    })
+  }
 
-    round.url = redactedUrl
-    round.requestBodyOriginalBytes = originalBytes
-    if (serialized.exact && originalBytes <= availableBytes) {
-      round.requestBody = requestBody
-      round.requestBodyTruncated = false
-      state.requestBytes = originalBytes
+  beginCliInvocation(round: LlmDebugRound, meta: LlmCliInvocationMeta): ModelRequestTraceRecord {
+    return this.beginAttempt(round, {
+      transport: 'cli',
+      method: 'CLI',
+      endpointFormat: meta.endpointFormat,
+      attempt: 1,
+      reason: 'initial',
+      target: meta.target,
+      headers: {},
+      bodyText: meta.bodyText
+    })
+  }
+
+  beginSdkInvocation(round: LlmDebugRound, meta: LlmSdkInvocationMeta): ModelRequestTraceRecord {
+    return this.beginAttempt(round, {
+      transport: 'sdk',
+      method: 'SDK',
+      endpointFormat: meta.endpointFormat,
+      attempt: 1,
+      reason: 'initial',
+      target: meta.target,
+      headers: {},
+      bodyText: meta.bodyText,
+      ...(meta.secretValues ? { secretValues: meta.secretValues } : {})
+    })
+  }
+
+  private beginAttempt(
+    round: LlmDebugRound,
+    meta: {
+      transport: 'http' | 'cli' | 'sdk'
+      method: 'POST' | 'CLI' | 'SDK'
+      endpointFormat: string
+      attempt: number
+      reason: LlmHttpAttemptReason
+      target: string
+      headers: Record<string, string>
+      bodyText: string
+      secretValues?: readonly string[]
+    }
+  ): ModelRequestTraceRecord {
+    const state = this.stateFor(round)
+    const sanitizedUrl = sanitizeModelTraceUrl(meta.target)
+    const body = boundedModelTraceText(meta.bodyText, this.limits.maxRequestBodyBytes)
+    const record: ModelRequestTraceRecord = {
+      schemaVersion: MODEL_REQUEST_TRACE_SCHEMA_VERSION,
+      id: randomUUID(),
+      sequence: this.nextTraceSequence++,
+      threadId: round.threadId,
+      turnId: round.turnId,
+      provider: round.provider,
+      model: round.model,
+      transport: meta.transport,
+      endpointFormat: meta.endpointFormat,
+      attempt: meta.attempt,
+      attemptReason: meta.reason,
+      status: 'pending',
+      startedAt: new Date().toISOString(),
+      ...(state.toolCatalog.length
+        ? { toolCatalog: state.toolCatalog.map((tool) => ({ ...tool })) }
+        : {}),
+      request: {
+        method: meta.method,
+        url: sanitizedUrl.value,
+        urlRedacted: sanitizedUrl.redacted,
+        headers: sanitizeModelTraceHeaders(meta.headers, meta.secretValues),
+        body
+      }
+    }
+    round.exchanges.push(record)
+    round.url = sanitizedUrl.value
+    round.requestBodyOriginalBytes = body.originalBytes
+    round.requestBodyTruncated = body.truncated
+    round.requestBody = parseLegacyRequestBody(body.text, body)
+    state.requestBytes = Math.max(state.requestBytes, body.capturedBytes)
+    return record
+  }
+
+  captureHttpResponse(round: LlmDebugRound, record: ModelRequestTraceRecord, response: Response): void {
+    const responseStartedAt = new Date().toISOString()
+    record.responseStartedAt = responseStartedAt
+    record.timeToHeadersMs = elapsedMs(record.startedAt, responseStartedAt)
+    record.response = {
+      status: response.status,
+      statusText: response.statusText,
+      headers: sanitizeModelTraceHeaders(response.headers)
+    }
+    let clone: Response
+    try {
+      clone = response.clone()
+    } catch (error) {
+      record.status = 'capture_error'
+      record.response.captureError = safeError(error)
+      addCaptureWarning(record, 'response clone failed')
+      finishRecord(record)
       return
     }
+    const capture = this.captureResponseBody(record, clone)
+    this.stateFor(round).pendingCaptures.push(capture)
+  }
 
-    round.requestBodyTruncated = true
-    round.requestBody = truncatedRequestBody(serialized.json, originalBytes, availableBytes)
-    state.requestBytes = round.requestBody ? jsonBytes(round.requestBody) : 0
+  captureHttpError(record: ModelRequestTraceRecord, error: unknown): void {
+    this.captureTransportError(record, error)
+  }
+
+  captureTransportError(record: ModelRequestTraceRecord, error: unknown): void {
+    record.status = 'transport_error'
+    record.error = safeError(error)
+    finishRecord(record)
   }
 
   captureChunk(round: LlmDebugRound, chunk: ModelStreamChunk): void {
@@ -184,7 +345,7 @@ export class LlmDebugRecorder implements LlmDebugSink {
         })
         break
       case 'usage':
-        this.captureValue(round, state, 'usage', chunk.usage)
+        this.captureValue(round, state, chunk.usage)
         break
       case 'completed':
         this.captureString(round, state, 'stopReason', chunk.stopReason)
@@ -195,36 +356,98 @@ export class LlmDebugRecorder implements LlmDebugSink {
     }
   }
 
-  finish(round: LlmDebugRound): void {
+  async finish(round: LlmDebugRound): Promise<void> {
     const state = this.stateFor(round)
+    await Promise.allSettled(state.pendingCaptures)
     round.output.text = joinStringBlocks(state.text)
     round.output.reasoning = joinStringBlocks(state.reasoning)
-    if (this.states.delete(round)) {
-      this.activeCaptureCountValue = Math.max(0, this.activeCaptureCountValue - 1)
+    const lastExchange = round.exchanges.at(-1)
+    if (lastExchange) lastExchange.decoded = cloneDecoded(round.output)
+    for (const record of round.exchanges) {
+      if (record.status === 'pending') {
+        record.status = record.response?.captureError ? 'capture_error' : 'completed'
+        finishRecord(record)
+      }
+      await this.store?.append(record)
     }
+    if (this.states.delete(round)) this.activeCaptureCountValue = Math.max(0, this.activeCaptureCountValue - 1)
+    const active = this.activeByThread.get(round.threadId)
+    active?.delete(round)
+    if (active?.size === 0) this.activeByThread.delete(round.threadId)
     round.finishedAt = new Date().toISOString()
-    round.durationMs = Math.max(0, Date.parse(round.finishedAt) - Date.parse(round.startedAt))
-    round.retainedBytes = 0
-    for (let pass = 0; pass < 4; pass += 1) {
-      const measured = jsonBytes(round)
-      if (measured === round.retainedBytes) break
-      round.retainedBytes = measured
-    }
+    round.durationMs = elapsedMs(round.startedAt, round.finishedAt)
+    round.retainedBytes = jsonBytes(round)
     this.totalRetainedBytes += round.retainedBytes
     this.rounds.push(round)
-    while (
-      this.rounds.length > this.limits.capacity ||
-      this.totalRetainedBytes > this.limits.maxTotalBytes
-    ) {
+    while (this.rounds.length > this.limits.capacity || this.totalRetainedBytes > this.limits.maxTotalBytes) {
       const removed = this.rounds.shift()
       if (!removed) break
       this.totalRetainedBytes = Math.max(0, this.totalRetainedBytes - (removed.retainedBytes ?? jsonBytes(removed)))
     }
   }
 
-  /** Most-recent-first copy of the retained rounds. */
+  /** Most-recent-first compatibility projection. */
   snapshot(): LlmDebugRound[] {
     return [...this.rounds].reverse()
+  }
+
+  async listThread(
+    threadId: string,
+    options: { limit?: number; cursor?: string } = {}
+  ): Promise<ModelRequestTracePage> {
+    const limit = Math.min(this.limits.maxPageSize, Math.max(1, Math.floor(options.limit ?? 50)))
+    const active = options.cursor ? [] : this.activeRecords(threadId)
+    if (active.length >= limit) {
+      return {
+        schemaVersion: MODEL_REQUEST_TRACE_SCHEMA_VERSION,
+        records: active.slice(0, limit),
+        activeCount: active.length,
+        limits: this.traceLimits(),
+        warnings: this.store?.warnings() ?? []
+      }
+    }
+    const remaining = limit - active.length
+    const persisted = this.store
+      ? await this.store.list(threadId, { limit: remaining, cursor: options.cursor })
+      : {
+          records: this.rounds
+            .filter((round) => round.threadId === threadId)
+            .flatMap((round) => round.exchanges)
+            .sort(newestRecordFirst)
+            .slice(0, remaining),
+          warnings: []
+        }
+    return {
+      schemaVersion: MODEL_REQUEST_TRACE_SCHEMA_VERSION,
+      records: [...active, ...persisted.records].sort(newestRecordFirst).slice(0, limit),
+      ...(persisted.nextCursor ? { nextCursor: persisted.nextCursor } : {}),
+      activeCount: active.length,
+      limits: this.traceLimits(),
+      warnings: persisted.warnings
+    }
+  }
+
+  async deleteThread(threadId: string): Promise<void> {
+    const active = this.activeByThread.get(threadId)
+    if (active) {
+      for (const round of active) {
+        for (const record of round.exchanges) addCaptureWarning(record, 'thread deleted during capture')
+      }
+      this.activeByThread.delete(threadId)
+    }
+    for (let index = this.rounds.length - 1; index >= 0; index -= 1) {
+      if (this.rounds[index].threadId !== threadId) continue
+      this.totalRetainedBytes = Math.max(
+        0,
+        this.totalRetainedBytes - (this.rounds[index].retainedBytes ?? jsonBytes(this.rounds[index]))
+      )
+      this.rounds.splice(index, 1)
+    }
+    await this.store?.deleteThread(threadId)
+  }
+
+  async shutdown(): Promise<void> {
+    await this.store?.shutdown()
   }
 
   clear(): void {
@@ -232,9 +455,54 @@ export class LlmDebugRecorder implements LlmDebugSink {
     this.totalRetainedBytes = 0
   }
 
-  /** Number of in-flight rounds that still retain block accumulators. */
   get activeCaptureCount(): number {
     return this.activeCaptureCountValue
+  }
+
+  traceLimits(): ModelRequestTraceLimits {
+    return {
+      maxRequestBodyBytes: this.limits.maxRequestBodyBytes,
+      maxResponseBodyBytes: this.limits.maxResponseBodyBytes,
+      maxPageSize: this.limits.maxPageSize
+    }
+  }
+
+  private activeRecords(threadId: string): ModelRequestTraceRecord[] {
+    return [...(this.activeByThread.get(threadId) ?? [])]
+      .flatMap((round) => round.exchanges.map((record) => ({
+        ...record,
+        ...(record === round.exchanges.at(-1) ? { decoded: cloneDecodedLive(round, this.states.get(round)) } : {})
+      })))
+      .sort(newestRecordFirst)
+  }
+
+  private async captureResponseBody(record: ModelRequestTraceRecord, response: Response): Promise<void> {
+    const accumulator = new BoundedModelTraceBodyAccumulator(this.limits.maxResponseBodyBytes)
+    try {
+      if (response.body) {
+        const reader = response.body.getReader()
+        try {
+          while (true) {
+            const { value, done } = await reader.read()
+            if (done) break
+            if (value) accumulator.append(value)
+          }
+        } finally {
+          try { reader.releaseLock() } catch { /* already released */ }
+        }
+      }
+      if (record.response) record.response.body = accumulator.finish()
+      record.status = 'completed'
+    } catch (error) {
+      if (record.response) {
+        record.response.body = accumulator.finish()
+        record.response.captureError = safeError(error)
+      }
+      record.status = 'capture_error'
+      addCaptureWarning(record, 'response body capture failed')
+    } finally {
+      finishRecord(record)
+    }
   }
 
   private captureText(
@@ -262,19 +530,14 @@ export class LlmDebugRecorder implements LlmDebugSink {
     state.outputBytes += bytes
   }
 
-  private captureValue(
-    round: LlmDebugRound,
-    state: CaptureState,
-    field: 'usage',
-    value: UsageSnapshot
-  ): void {
-    if (round.output[field] !== undefined) return
+  private captureValue(round: LlmDebugRound, state: CaptureState, value: UsageSnapshot): void {
+    if (round.output.usage !== undefined) return
     const bytes = jsonBytes(value)
     if (bytes > this.remainingOutputBytes(state)) {
-      markTruncated(round.output, field)
+      markTruncated(round.output, 'usage')
       return
     }
-    round.output[field] = value
+    round.output.usage = value
     state.outputBytes += bytes
   }
 
@@ -300,16 +563,54 @@ export class LlmDebugRecorder implements LlmDebugSink {
   private stateFor(round: LlmDebugRound): CaptureState {
     const existing = this.states.get(round)
     if (existing) return existing
-    const created: CaptureState = {
-      requestBytes: 0,
-      outputBytes: 0,
-      text: { blocks: [], parts: [] },
-      reasoning: { blocks: [], parts: [] }
-    }
+    const created = createCaptureState()
     this.states.set(round, created)
     this.activeCaptureCountValue += 1
     return created
   }
+}
+
+function createCaptureState(
+  toolCatalog?: readonly ModelRequestTraceToolCatalogEntry[]
+): CaptureState {
+  return {
+    requestBytes: 0,
+    outputBytes: 0,
+    toolCatalog: normalizeTraceToolCatalog(toolCatalog),
+    text: { blocks: [], parts: [] },
+    reasoning: { blocks: [], parts: [] },
+    pendingCaptures: []
+  }
+}
+
+function normalizeTraceToolCatalog(
+  input: readonly ModelRequestTraceToolCatalogEntry[] | undefined
+): ModelRequestTraceToolCatalogEntry[] {
+  if (!input?.length) return []
+  const out: ModelRequestTraceToolCatalogEntry[] = []
+  for (const entry of input.slice(0, MAX_MODEL_REQUEST_TRACE_TOOL_CATALOG_ENTRIES)) {
+    const name = boundedCatalogValue(entry.name, MAX_MODEL_REQUEST_TRACE_TOOL_NAME_LENGTH)
+    if (!name) continue
+    const providerKind = boundedCatalogValue(
+      entry.providerKind,
+      MAX_MODEL_REQUEST_TRACE_PROVIDER_KIND_LENGTH
+    )
+    const providerId = boundedCatalogValue(
+      entry.providerId,
+      MAX_MODEL_REQUEST_TRACE_PROVIDER_ID_LENGTH
+    )
+    out.push({
+      name,
+      ...(providerKind ? { providerKind } : {}),
+      ...(providerId ? { providerId } : {})
+    })
+  }
+  return out
+}
+
+function boundedCatalogValue(value: string | undefined, maxLength: number): string | undefined {
+  const normalized = value?.trim()
+  return normalized ? normalized.slice(0, maxLength) : undefined
 }
 
 function appendStringBlock(accumulator: StringBlockAccumulator, value: string): void {
@@ -324,6 +625,57 @@ function joinStringBlocks(accumulator: StringBlockAccumulator): string {
   return [...accumulator.blocks, accumulator.parts.join('')].join('')
 }
 
+function cloneDecoded(output: LlmDebugOutput): ModelRequestTraceDecoded {
+  return {
+    text: output.text,
+    reasoning: output.reasoning,
+    toolCalls: output.toolCalls.map((call) => ({ ...call, arguments: { ...call.arguments } })),
+    ...(output.usage ? { usage: { ...output.usage } } : {}),
+    ...(output.stopReason ? { stopReason: output.stopReason } : {}),
+    ...(output.error ? { error: output.error } : {}),
+    ...(output.truncated ? { truncated: { ...output.truncated } } : {})
+  }
+}
+
+function cloneDecodedLive(round: LlmDebugRound, state: CaptureState | undefined): ModelRequestTraceDecoded {
+  if (!state) return cloneDecoded(round.output)
+  return cloneDecoded({
+    ...round.output,
+    text: joinStringBlocks(state.text),
+    reasoning: joinStringBlocks(state.reasoning)
+  })
+}
+
+function parseLegacyRequestBody(
+  value: string,
+  body: { truncated: boolean; originalBytes: number }
+): Record<string, unknown> | null {
+  if (body.truncated) return { __debugTruncated: true, originalBytes: body.originalBytes, jsonPrefix: value }
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : { value: parsed }
+  } catch {
+    return { __debugInvalidJson: true, raw: value }
+  }
+}
+
+function finishRecord(record: ModelRequestTraceRecord): void {
+  const finishedAt = new Date().toISOString()
+  record.finishedAt = finishedAt
+  record.durationMs = elapsedMs(record.startedAt, finishedAt)
+}
+
+function elapsedMs(start: string, end: string): number {
+  return Math.max(0, Date.parse(end) - Date.parse(start))
+}
+
+function addCaptureWarning(record: ModelRequestTraceRecord, warning: string): void {
+  const warnings = record.captureWarnings ?? (record.captureWarnings = [])
+  if (!warnings.includes(warning)) warnings.push(warning)
+}
+
 function markTruncated(output: LlmDebugOutput, field: keyof LlmDebugOutputTruncation): void {
   const truncated = output.truncated ?? (output.truncated = {})
   truncated[field] = true
@@ -333,50 +685,8 @@ function positiveInteger(value: number | undefined, fallback: number): number {
   return Number.isFinite(value) && value !== undefined && value > 0 ? Math.floor(value) : fallback
 }
 
-function serializeJson(value: unknown): { json: string; exact: boolean } {
-  try {
-    return { json: JSON.stringify(value) ?? 'null', exact: true }
-  } catch (error) {
-    return {
-      json: JSON.stringify({
-        __debugUnserializable: true,
-        error: error instanceof Error ? error.message : String(error)
-      }),
-      exact: false
-    }
-  }
-}
-
 function jsonBytes(value: unknown): number {
-  return Buffer.byteLength(serializeJson(value).json, 'utf8')
-}
-
-function truncatedRequestBody(
-  json: string,
-  originalBytes: number,
-  maxBytes: number
-): Record<string, unknown> | null {
-  const envelope = (jsonPrefix: string): Record<string, unknown> => ({
-    __debugTruncated: true,
-    originalBytes,
-    jsonPrefix
-  })
-  if (jsonBytes(envelope('')) > maxBytes) return null
-
-  let low = 0
-  let high = json.length
-  let best = ''
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2)
-    const prefix = safeStringPrefix(json, middle)
-    if (jsonBytes(envelope(prefix)) <= maxBytes) {
-      best = prefix
-      low = middle + 1
-    } else {
-      high = middle - 1
-    }
-  }
-  return envelope(best)
+  try { return Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8') } catch { return 0 }
 }
 
 function truncateJsonStringContent(value: string, maxBytes: number): string {
@@ -410,4 +720,15 @@ function safeStringPrefix(value: string, length: number): string {
     if (last >= 0xd800 && last <= 0xdbff) end -= 1
   }
   return value.slice(0, end)
+}
+
+function safeError(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 4_096)
+}
+
+function newestRecordFirst(left: ModelRequestTraceRecord, right: ModelRequestTraceRecord): number {
+  const timestamp = right.startedAt.localeCompare(left.startedAt)
+  if (timestamp !== 0) return timestamp
+  const sequence = right.sequence - left.sequence
+  return sequence === 0 ? right.id.localeCompare(left.id) : sequence
 }

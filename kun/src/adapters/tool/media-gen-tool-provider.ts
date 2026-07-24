@@ -16,6 +16,9 @@ const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
 const REFERENCE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const AUDIO_FORMATS = new Set(['mp3', 'wav', 'flac', 'pcm', 'pcm16'])
 const VIDEO_RESOLUTIONS = ['768P', '1080P'] as const
+const GROK_VIDEO_RESOLUTIONS = ['480P', '720P'] as const
+const GROK_VIDEO_DURATIONS = [6, 10] as const
+const GROK_VIDEO_ASPECT_RATIOS = ['1:1', '16:9', '9:16', '3:2', '2:3'] as const
 
 export type GeneratedMedia = { data: Buffer; mimeType: string; extension: string }
 
@@ -46,6 +49,7 @@ export type VideoGenRequest = {
   model: string
   duration: number
   resolution: string
+  aspectRatio?: string
   firstFrameImage?: { mimeType: string; data: Buffer }
   lastFrameImage?: { mimeType: string; data: Buffer }
   timeoutMs: number
@@ -312,23 +316,47 @@ export function buildVideoGenToolProviders(
 
   const client = options.videoClient ?? createVideoGenClient(config)
   const model = config.model!
+  const isGrokImagine = config.protocol === 'grok-imagine-video'
 
   const tool = LocalToolHost.defineTool({
     name: 'generate_video',
     toolKind: 'file_change',
     description: [
       'Generate a video from a text prompt using the configured video provider.',
-      'Optionally pass workspace-relative first_frame_image_path and last_frame_image_path for image-to-video guidance.',
+      isGrokImagine
+        ? 'Optionally pass a workspace-relative first_frame_image_path for Grok image-to-video guidance.'
+        : 'Optionally pass workspace-relative first_frame_image_path and last_frame_image_path for image-to-video guidance.',
       `The generated video is saved under ${GENERATED_VIDEO_DIR}/ in the workspace and returned as a generated file.`
     ].join(' '),
     inputSchema: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'Detailed video generation prompt' },
-        duration: { type: 'integer', minimum: 1, maximum: 30 },
-        resolution: { type: 'string', enum: VIDEO_RESOLUTIONS },
+        duration: isGrokImagine
+          ? { type: 'integer', enum: [...GROK_VIDEO_DURATIONS] }
+          : { type: 'integer', minimum: 1, maximum: 30 },
+        resolution: {
+          type: 'string',
+          enum: isGrokImagine ? [...GROK_VIDEO_RESOLUTIONS] : VIDEO_RESOLUTIONS
+        },
+        ...(isGrokImagine
+          ? {
+              aspect_ratio: {
+                type: 'string',
+                enum: [...GROK_VIDEO_ASPECT_RATIOS],
+                description: 'Optional aspect ratio for Grok text-to-video generation.'
+              }
+            }
+          : {}),
         first_frame_image_path: { type: 'string', description: 'Workspace-relative png/jpeg/webp first frame' },
-        last_frame_image_path: { type: 'string', description: 'Workspace-relative png/jpeg/webp last frame' }
+        ...(!isGrokImagine
+          ? {
+              last_frame_image_path: {
+                type: 'string',
+                description: 'Workspace-relative png/jpeg/webp last frame'
+              }
+            }
+          : {})
       },
       required: ['prompt'],
       additionalProperties: false
@@ -342,14 +370,20 @@ export function buildVideoGenToolProviders(
       if ('error' in firstFrame) return firstFrame.error
       const lastFrame = await collectFrameImage(args.last_frame_image_path, context, 'last_frame_image_path')
       if ('error' in lastFrame) return lastFrame.error
-      const duration = normalizeDuration(args.duration, config.defaultDuration)
-      const resolution = pickString(args.resolution) || config.defaultResolution
+      const duration = isGrokImagine
+        ? normalizeGrokVideoDuration(args.duration, config.defaultDuration)
+        : normalizeDuration(args.duration, config.defaultDuration)
+      const resolution = isGrokImagine
+        ? normalizeGrokVideoResolution(args.resolution, config.defaultResolution)
+        : pickString(args.resolution) || config.defaultResolution
+      const aspectRatio = pickString(args.aspect_ratio)
       try {
         const media = await client.generate({
           prompt,
           model,
           duration,
           resolution,
+          ...(aspectRatio ? { aspectRatio } : {}),
           ...(firstFrame.image ? { firstFrameImage: firstFrame.image } : {}),
           ...(lastFrame.image ? { lastFrameImage: lastFrame.image } : {}),
           timeoutMs: config.timeoutMs,
@@ -410,7 +444,11 @@ export function createVideoGenClient(config: {
   protocol?: string
   baseUrl?: string
   apiKey?: string
+  headers?: Record<string, string>
 }): VideoGenClient {
+  if (config.protocol === 'grok-imagine-video') {
+    return new GrokImagineVideoClient(config.baseUrl!, config.apiKey!, config.headers)
+  }
   return new MiniMaxVideoClient(config.baseUrl!, config.apiKey!)
 }
 
@@ -681,6 +719,86 @@ export class MiniMaxVideoClient implements VideoGenClient {
   }
 }
 
+export class GrokImagineVideoClient implements VideoGenClient {
+  readonly id = 'grok-imagine-video'
+  private readonly rootUrl: string
+
+  constructor(
+    baseUrl: string,
+    private readonly apiKey: string,
+    private readonly extraHeaders: Record<string, string> = {}
+  ) {
+    this.rootUrl = trimTrailingSlashes(baseUrl)
+  }
+
+  async generate(request: VideoGenRequest): Promise<GeneratedMedia> {
+    if (request.lastFrameImage) {
+      throw new Error('Grok Imagine video does not support an explicit last frame')
+    }
+    const signal = withTimeout(request.signal, request.timeoutMs)
+    const createPayload = await requestJson<GrokVideoCreatePayload>(`${this.rootUrl}/videos/generations`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({
+        model: request.model,
+        prompt: request.prompt,
+        duration: request.duration,
+        resolution: request.resolution.toLowerCase(),
+        ...(request.firstFrameImage
+          ? { image: { url: dataUri(request.firstFrameImage.mimeType, request.firstFrameImage.data) } }
+          : request.aspectRatio
+            ? { aspect_ratio: request.aspectRatio }
+            : {}),
+        reference_images: []
+      }),
+      signal
+    }, request)
+    const requestId = createPayload.request_id?.trim()
+    if (!requestId) throw new Error('Grok Imagine video provider returned no request_id')
+    await request.onUpdate?.({
+      output: { status: 'submitted', taskId: requestId, provider: this.id }
+    })
+
+    const deadline = Date.now() + request.timeoutMs
+    let lastStatus = 'submitted'
+    while (Date.now() < deadline) {
+      await delay(request.pollIntervalMs, signal)
+      const pollPayload = await requestJson<GrokVideoPollPayload>(
+        `${this.rootUrl}/videos/${encodeURIComponent(requestId)}`,
+        { method: 'GET', headers: this.headers(), signal },
+        request
+      )
+      lastStatus = pollPayload.status?.trim().toLowerCase() || lastStatus
+      await request.onUpdate?.({
+        output: { status: lastStatus, taskId: requestId, provider: this.id }
+      })
+      if (lastStatus === 'failed' || lastStatus === 'expired') {
+        throw new Error(`Grok Imagine video generation ${lastStatus} (request_id=${requestId})`)
+      }
+      if (lastStatus !== 'done') continue
+      const downloadUrl = pollPayload.video?.url?.trim()
+      if (!downloadUrl) throw new Error('Grok Imagine video provider finished without a download URL')
+      const response = await requestResponse(downloadUrl, { method: 'GET', signal }, request)
+      if (!response.ok) throw new ImageGenHttpError(response.status, await response.text())
+      const mimeType = response.headers.get('content-type')?.split(';')[0] || 'video/mp4'
+      return {
+        data: Buffer.from(await response.arrayBuffer()),
+        mimeType,
+        extension: videoExtension(mimeType)
+      }
+    }
+    throw new Error(`Grok Imagine video generation timed out after ${request.timeoutMs}ms (last status: ${lastStatus})`)
+  }
+
+  private headers(): Record<string, string> {
+    return {
+      ...this.extraHeaders,
+      Authorization: `Bearer ${this.apiKey}`,
+      'Content-Type': 'application/json'
+    }
+  }
+}
+
 type MiniMaxAudioPayload = {
   data?: { audio?: string }
   base_resp?: MiniMaxBaseResponse
@@ -705,6 +823,15 @@ type MiniMaxFileRetrievePayload = {
 type MiniMaxBaseResponse = {
   status_code?: number
   status_msg?: string
+}
+
+type GrokVideoCreatePayload = {
+  request_id?: string
+}
+
+type GrokVideoPollPayload = {
+  status?: string
+  video?: { url?: string }
 }
 
 type MimoSpeechPayload = {
@@ -916,6 +1043,16 @@ function videoExtension(mimeType: string): string {
 function normalizeDuration(value: unknown, fallback: number): number {
   const candidate = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback
   return Math.min(30, Math.max(1, candidate))
+}
+
+function normalizeGrokVideoDuration(value: unknown, fallback: number): number {
+  const candidate = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback
+  return GROK_VIDEO_DURATIONS.includes(candidate as 6 | 10) ? candidate : 6
+}
+
+function normalizeGrokVideoResolution(value: unknown, fallback: string): string {
+  const candidate = (pickString(value) || fallback).toUpperCase()
+  return GROK_VIDEO_RESOLUTIONS.includes(candidate as '480P' | '720P') ? candidate : '480P'
 }
 
 function isSuccessStatus(status: string): boolean {

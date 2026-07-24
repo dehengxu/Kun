@@ -546,8 +546,8 @@ describe('syncGuiManagedKunConfig', () => {
       maxBytes: DEFAULT_TOOL_OUTPUT_MAX_BYTES
     })
     expect(parsed.contextCompaction).toMatchObject({
-      defaultSoftThreshold: 96000,
-      defaultHardThreshold: 108800,
+      defaultSoftThreshold: 192000,
+      defaultHardThreshold: 217600,
       summaryMode: 'model'
     })
     expect(parsed.models.profiles['deepseek-v4-pro']).toMatchObject({
@@ -566,6 +566,10 @@ describe('syncGuiManagedKunConfig', () => {
       }
     })
     expect(parsed.runtime.streamIdleTimeoutMs).toBe(450000)
+    expect(parsed.runtime.turnLimits).toMatchObject({
+      maxConcurrentTurns: 256,
+      maxWallTimeMs: 86400000
+    })
     expect(parsed.runtime.toolStorm).toMatchObject({ enabled: true, windowSize: 8, threshold: 3 })
     expect(parsed.runtime.toolArgumentRepair).toMatchObject({ maxStringBytes: 524288 })
     expect(parsed.capabilities.attachments).toMatchObject({ enabled: true })
@@ -574,7 +578,12 @@ describe('syncGuiManagedKunConfig', () => {
     // Subagents have no GUI enable toggle: they default ON so delegate_task + the
     // built-in profiles are always offered. maxParallel/maxChildRuns must be >=1 or
     // DelegationRuntime can never run a child. This locks the default against regressions.
-    expect(parsed.capabilities.subagents).toMatchObject({ enabled: true, maxParallel: 3, maxChildRuns: 12 })
+    expect(parsed.capabilities.subagents).toMatchObject({
+      enabled: true,
+      useExistingAgents: true,
+      maxParallel: 256,
+      maxChildRuns: 25
+    })
     expect(parsed.capabilities.web).toMatchObject({ enabled: true, fetchEnabled: true })
     expect(parsed.capabilities.mcp.search).toMatchObject({ enabled: false, mode: 'auto' })
     expect(parsed.capabilities.imageGen).toEqual({
@@ -811,6 +820,66 @@ describe('syncGuiManagedKunConfig', () => {
     })
     expect(parsed.capabilities.imageGen.headers['User-Agent']).toContain('codex_cli_rs')
     expect(typeof parsed.capabilities.imageGen.headers.session_id).toBe('string')
+    expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
+  })
+
+  it('unwraps Grok OAuth credentials for direct Imagine image and video requests', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./kun-process')
+    const grokCredentials = JSON.stringify({
+      kind: 'grok-oauth',
+      accessToken: 'grok-access-token',
+      refreshToken: 'grok-refresh-token',
+      expiresAt: Date.now() + 3600_000,
+      email: 'grok@example.com'
+    })
+    const defaults = defaultKunRuntimeSettings()
+
+    await module.syncGuiManagedKunConfig(tempRoot, {
+      ...defaults,
+      imageGeneration: {
+        ...defaults.imageGeneration,
+        enabled: true,
+        providerId: 'grok-subscription',
+        protocol: 'grok-imagine-image',
+        baseUrl: 'https://api.x.ai/v1',
+        apiKey: grokCredentials,
+        model: 'grok-imagine-image-quality'
+      },
+      videoGeneration: {
+        ...defaults.videoGeneration,
+        enabled: true,
+        providerId: 'grok-subscription',
+        protocol: 'grok-imagine-video',
+        baseUrl: 'https://api.x.ai/v1',
+        apiKey: grokCredentials,
+        model: 'grok-imagine-video-1.5-preview',
+        defaultResolution: '480P'
+      }
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    for (const capability of [parsed.capabilities.imageGen, parsed.capabilities.videoGen]) {
+      expect(capability.apiKey).toBe('grok-access-token')
+      expect(capability.headers).toMatchObject({
+        'x-grok-client-version': expect.any(String),
+        'x-grok-client-identifier': 'kun'
+      })
+      expect(capability.headers['X-XAI-Token-Auth']).toBeUndefined()
+      expect(capability.headers['x-authenticateresponse']).toBeUndefined()
+    }
+    expect(parsed.capabilities.imageGen).toMatchObject({
+      protocol: 'grok-imagine-image',
+      baseUrl: 'https://api.x.ai/v1',
+      model: 'grok-imagine-image-quality'
+    })
+    expect(parsed.capabilities.videoGen).toMatchObject({
+      protocol: 'grok-imagine-video',
+      baseUrl: 'https://api.x.ai/v1',
+      model: 'grok-imagine-video-1.5-preview',
+      defaultResolution: '480P'
+    })
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
   })
 
@@ -1160,6 +1229,7 @@ describe('syncGuiManagedKunConfig', () => {
         }
       },
       serve: {
+        runtimeToken: 'keep-this-token',
         legacyServeFlag: true,
         tokenEconomy: {
           customTokenEconomyFlag: 'keep',
@@ -1204,6 +1274,8 @@ describe('syncGuiManagedKunConfig', () => {
           summaryInputMaxBytes: 131072
         },
         runtimeTuning: {
+          maxConcurrentTurns: 32,
+          maxWallTimeMs: 7_200_000,
           streamIdleTimeoutMs: 120000,
           toolStorm: {
             enabled: false,
@@ -1248,6 +1320,7 @@ describe('syncGuiManagedKunConfig', () => {
     expect(KunConfigSchema.safeParse(parsed).success).toBe(true)
     expect(parsed.legacyTopLevelFlag).toBeUndefined()
     expect(parsed.serve.legacyServeFlag).toBeUndefined()
+    expect(parsed.serve.runtimeToken).toBe('keep-this-token')
     expect(parsed.serve.storage).toMatchObject({
       backend: 'hybrid',
       sqlitePath: '/tmp/kun-index.sqlite3'
@@ -1304,6 +1377,10 @@ describe('syncGuiManagedKunConfig', () => {
     expect(parsed.runtime.toolStorm.customStormFlag).toBeUndefined()
     expect(parsed.runtime.customRuntimeFlag).toBeUndefined()
     expect(parsed.runtime.toolArgumentRepair).toMatchObject({ maxStringBytes: 262144 })
+    expect(parsed.runtime.turnLimits).toMatchObject({
+      maxConcurrentTurns: 32,
+      maxWallTimeMs: 7_200_000
+    })
     expect(parsed.runtime.streamIdleTimeoutMs).toBe(120000)
     expect(parsed.capabilities.attachments).toMatchObject({ enabled: true })
     expect(parsed.capabilities.mcp.servers.github.command).toBe('github-mcp')
@@ -1599,7 +1676,7 @@ describe('syncGuiManagedKunConfig', () => {
 })
 
 describe('subagentProfilesForRuntime', () => {
-  it('drops blank optional fields so the runtime config still parses', async () => {
+  it('drops blank fields and legacy partial routing so the profile inherits a coherent pair', async () => {
     const module = await import('./kun-process')
     // Built-in profiles store an empty `name` (the GUI localizes the label) and
     // the user picked a model on one of them. The runtime schema marks every
@@ -1623,7 +1700,46 @@ describe('subagentProfilesForRuntime', () => {
     expect(config.profiles.general).toBeDefined()
     expect('name' in config.profiles.general).toBe(false)
     expect('description' in config.profiles.general).toBe(false)
-    expect(config.profiles.general.model).toBe('deepseek-v4')
+    expect(config.profiles.general.model).toBeUndefined()
+    expect(config.profiles.general.providerId).toBeUndefined()
+    expect(config.useExistingAgents).toBe(true)
+  })
+
+  it('preserves the parent-generated delegation mode', async () => {
+    const module = await import('./kun-process')
+    const config = module.subagentProfilesForRuntime({
+      enabled: true,
+      useExistingAgents: false,
+      profiles: []
+    })
+
+    expect(config.useExistingAgents).toBe(false)
+  })
+
+  it('removes provider-only legacy routing without dropping the rest of the profile', async () => {
+    const module = await import('./kun-process')
+    const config = module.subagentProfilesForRuntime({
+      enabled: true,
+      profiles: [
+        {
+          id: 'custom',
+          enabled: true,
+          name: 'Safe reviewer',
+          mode: 'subagent',
+          toolPolicy: 'readOnly',
+          providerId: 'openai',
+          blockedTools: ['write']
+        }
+      ]
+    })
+
+    expect(config.profiles.custom).toMatchObject({
+      name: 'Safe reviewer',
+      toolPolicy: 'readOnly',
+      blockedTools: ['write']
+    })
+    expect(config.profiles.custom.model).toBeUndefined()
+    expect(config.profiles.custom.providerId).toBeUndefined()
   })
 
   it('keeps a non-empty name', async () => {
@@ -1658,6 +1774,21 @@ describe('subagentProfilesForRuntime', () => {
           name: 'Disabled custom',
           mode: 'subagent',
           toolPolicy: 'readOnly'
+        },
+        {
+          id: 'component-designer',
+          enabled: false,
+          name: '',
+          mode: 'subagent',
+          toolPolicy: 'inherit'
+        },
+        {
+          id: 'security-auditor',
+          enabled: false,
+          name: '',
+          mode: 'subagent',
+          toolPolicy: 'readOnly',
+          model: 'security-model'
         }
       ]
     })
@@ -1668,6 +1799,10 @@ describe('subagentProfilesForRuntime', () => {
       toolPolicy: 'readOnly',
       blockedSkills: ['unsafe-skill']
     })
+    expect(config.profiles['component-designer']).toBeDefined()
+    expect(config.profiles['security-auditor']).toMatchObject({ toolPolicy: 'readOnly' })
+    expect(config.profiles['security-auditor'].model).toBeUndefined()
+    expect(config.profiles['security-auditor'].providerId).toBeUndefined()
     expect(config.profiles['custom-disabled']).toBeUndefined()
   })
 })

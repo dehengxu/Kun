@@ -1,5 +1,6 @@
 import type { ModelEndpointFormat } from '../../contracts/model-endpoint-format.js'
 import { isDeepSeekHost, probeDeepSeekReachable } from './model-error-probe.js'
+import type { ModelFailureMetadata } from '../../contracts/model-route-pool.js'
 
 export function buildCompatRequestHeaders(input: {
   apiKey: string
@@ -29,29 +30,79 @@ export async function classifyCompatHttpError(input: {
   text: string
   baseUrl: string
   fetchImpl: typeof fetch
-}): Promise<{ message: string; code: string }> {
+  retryAfter?: string | null
+}): Promise<{ message: string; code: string; failure: ModelFailureMetadata }> {
   const body = summarizeHttpErrorBody(input.text)
+  const providerCode = providerErrorCode(input.text)
+  const retryAfterMs = parseRetryAfterMs(input.retryAfter)
+  const failure = failureForHttpStatus(input.status, providerCode, retryAfterMs)
   if (input.status === 404) {
     const prefix = body ? `${body} ` : ''
     return {
       message: `model request failed with status 404: ${prefix}Check your model provider configuration, especially Base URL and Endpoint format.`,
-      code: 'http_404'
+      code: 'http_404',
+      failure
     }
   }
   if (input.status === 429) {
-    return { message: `model request was rate limited (HTTP 429): ${body}`, code: 'rate_limited' }
+    return { message: `model request was rate limited (HTTP 429): ${body}`, code: 'rate_limited', failure }
   }
   if (input.status >= 500 && isDeepSeekHost(input.baseUrl)) {
     const probe = await probeDeepSeekReachable({ baseUrl: input.baseUrl, fetchImpl: input.fetchImpl })
     return {
       message: `model request failed with DeepSeek HTTP ${input.status}: ${body} ${probe.message}`,
-      code: probe.reachable ? `deepseek_http_${input.status}` : 'deepseek_unreachable'
+      code: probe.reachable ? `deepseek_http_${input.status}` : 'deepseek_unreachable',
+      failure
     }
   }
   return {
     message: `model request failed with status ${input.status}: ${body}`,
-    code: `http_${input.status}`
+    code: `http_${input.status}`,
+    failure
   }
+}
+
+function failureForHttpStatus(status: number, providerCode?: string, retryAfterMs?: number): ModelFailureMetadata {
+  const category = status === 401 || status === 403
+    ? 'authentication'
+    : status === 402
+      ? 'quota'
+      : status === 404
+        ? 'model_not_found'
+        : status === 408
+          ? 'timeout'
+          : status === 429
+            ? 'rate_limit'
+            : status >= 500
+              ? 'unavailable'
+              : status === 400 || status === 413 || status === 422
+                ? 'request'
+                : 'unknown'
+  return {
+    category,
+    httpStatus: status,
+    ...(providerCode ? { providerCode } : {}),
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    failoverAllowed: status === 401 || status === 402 || status === 403 || status === 404 || status === 408 || status === 425 || status === 429 || status >= 500
+  }
+}
+
+function providerErrorCode(text: string): string | undefined {
+  try {
+    const parsed = JSON.parse(text) as { error?: { code?: unknown }; code?: unknown }
+    const code = parsed?.error?.code ?? parsed?.code
+    return typeof code === 'string' || typeof code === 'number' ? String(code).slice(0, 128) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function parseRetryAfterMs(value: string | null | undefined): number | undefined {
+  if (!value) return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(3_600_000, Math.round(seconds * 1_000))
+  const date = Date.parse(value)
+  return Number.isFinite(date) ? Math.max(0, Math.min(3_600_000, date - Date.now())) : undefined
 }
 
 export function compatHttpFailureLog(input: {

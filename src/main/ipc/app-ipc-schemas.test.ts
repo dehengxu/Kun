@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { CONVERSATION_EXPORT_MAX_MARKDOWN_CHARS } from '../../shared/conversation-export'
 import {
   clawImInstallPollPayloadSchema,
   clawTaskFromTextPayloadSchema,
+  conversationExportPayloadSchema,
+  cursorSubscriptionDiscoveryPayloadSchema,
   isSafeOpenExternalUrl,
+  modelsDevCatalogPayloadSchema,
   runtimeRequestPayloadSchema,
   scheduleTaskFromTextPayloadSchema,
   settingsPatchSchema,
@@ -23,6 +27,53 @@ import {
 } from './app-ipc-schemas'
 
 describe('app-ipc-schemas', () => {
+  it('accepts only a bounded Cursor API key for subscription discovery', () => {
+    expect(cursorSubscriptionDiscoveryPayloadSchema.parse({
+      apiKey: ' cursor-key '
+    })).toEqual({ apiKey: 'cursor-key' })
+    expect(() => cursorSubscriptionDiscoveryPayloadSchema.parse({
+      apiKey: 'cursor-key',
+      endpoint: 'https://private.cursor.example'
+    })).toThrow()
+    expect(() => cursorSubscriptionDiscoveryPayloadSchema.parse({ apiKey: '' })).toThrow()
+  })
+
+  it('accepts only provider identity and refresh fields for models.dev lookup', () => {
+    expect(modelsDevCatalogPayloadSchema.parse({
+      providerId: 'xiaomi-token-plan',
+      baseUrl: ' https://token-plan-cn.xiaomimimo.com/v1 ',
+      forceRefresh: true,
+      modelHints: [{ id: 'gpt-5.5', aliases: ['gpt-latest'] }]
+    })).toEqual({
+      providerId: 'xiaomi-token-plan',
+      baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+      forceRefresh: true,
+      modelHints: [{ id: 'gpt-5.5', aliases: ['gpt-latest'] }]
+    })
+    expect(modelsDevCatalogPayloadSchema.parse({
+      providerId: 'cursor-subscription',
+      baseUrl: '',
+      modelHints: [{ id: 'gemini-3.6-flash' }]
+    })).toEqual({
+      providerId: 'cursor-subscription',
+      baseUrl: '',
+      modelHints: [{ id: 'gemini-3.6-flash' }]
+    })
+    expect(() => modelsDevCatalogPayloadSchema.parse({
+      providerId: 'xiaomi-token-plan',
+      baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+      apiKey: 'must-not-cross-this-boundary'
+    })).toThrow()
+  })
+
+  it('accepts a named local model gateway provider', () => {
+    expect(settingsPatchSchema.parse({
+      provider: {
+        localGateway: { enabled: true, name: ' Team Relay ' }
+      }
+    }).provider?.localGateway).toEqual({ enabled: true, name: 'Team Relay' })
+  })
+
   it('normalizes runtime request paths', () => {
     const payload = runtimeRequestPayloadSchema.parse({
       path: 'v1/threads?limit=1',
@@ -48,6 +99,21 @@ describe('app-ipc-schemas', () => {
     })
 
     expect(payload.path).toBe('/v1/runtime/tools')
+  })
+
+  it('accepts only the modeled Kun route diagnostics operations', () => {
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/model-routes',
+      method: 'GET'
+    }).path).toBe('/v1/model-routes')
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/model-routes/kimi%20pool/test',
+      method: 'POST'
+    }).path).toBe('/v1/model-routes/kimi%20pool/test')
+    expect(() => runtimeRequestPayloadSchema.parse({
+      path: '/v1/model-routes',
+      method: 'DELETE'
+    })).toThrow(/runtime request path is not allowed/)
   })
 
   it('accepts Kun supply-chain audit endpoints', () => {
@@ -156,12 +222,38 @@ describe('app-ipc-schemas', () => {
     }).path).toBe('/v1/threads/thr_1/goal')
   })
 
+  it('accepts the Kun delegation profiles endpoint', () => {
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/delegation/profiles',
+      method: 'GET'
+    }).path).toBe('/v1/delegation/profiles')
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/delegation/profiles?workspace=%2Ftmp%2Fproject',
+      method: 'GET'
+    }).path).toBe('/v1/delegation/profiles?workspace=%2Ftmp%2Fproject')
+    expect(() => runtimeRequestPayloadSchema.parse({
+      path: '/v1/delegation/profiles',
+      method: 'POST'
+    })).toThrow(/runtime request path is not allowed/)
+  })
+
   it('accepts the Kun thread review endpoint', () => {
     expect(runtimeRequestPayloadSchema.parse({
       path: '/v1/threads/thr_1/review',
       method: 'POST',
       body: '{"target":{"kind":"uncommittedChanges"}}'
     }).path).toBe('/v1/threads/thr_1/review')
+  })
+
+  it('accepts the read-only Kun turn status endpoint', () => {
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/threads/thr_1/turns/turn_1',
+      method: 'GET'
+    }).path).toBe('/v1/threads/thr_1/turns/turn_1')
+    expect(() => runtimeRequestPayloadSchema.parse({
+      path: '/v1/threads/thr_1/turns/turn_1',
+      method: 'DELETE'
+    })).toThrow(/runtime request path is not allowed/)
   })
 
   it('accepts the LLM debug rounds endpoint', () => {
@@ -249,7 +341,8 @@ describe('app-ipc-schemas', () => {
             maxBytes: 1048576
           },
           subagents: {
-            maxParallel: 5
+            useExistingAgents: false,
+            maxParallel: 256
           }
         }
       },
@@ -283,7 +376,10 @@ describe('app-ipc-schemas', () => {
     expect(payload.agents?.kun?.tokenEconomy?.historyHygiene?.maxToolResultTokens).toBe(4000)
     expect(payload.agents?.kun?.toolOutputLimits?.maxLines).toBe(30000)
     expect(payload.agents?.kun?.toolOutputLimits?.maxBytes).toBe(1048576)
-    expect(payload.agents?.kun?.subagents).toEqual({ maxParallel: 5 })
+    expect(payload.agents?.kun?.subagents).toEqual({
+      useExistingAgents: false,
+      maxParallel: 256
+    })
     expect(payload.write?.autoSaveEnabled).toBe(false)
     expect(payload.write?.autoSaveDelayMs).toBe(180000)
     expect(payload.write?.inlineCompletion?.model).toBe('deepseek-v4-pro')
@@ -590,6 +686,17 @@ describe('app-ipc-schemas', () => {
     expect('quickChat' in (payload.agents ?? {})).toBe(false)
   })
 
+  it.each(['en', 'zh', 'ru', 'hi', 'th', 'ja', 'ko'] as const)(
+    'accepts the %s application locale in settings patches',
+    (locale) => {
+      expect(settingsPatchSchema.parse({ locale }).locale).toBe(locale)
+    }
+  )
+
+  it('rejects unsupported application locales', () => {
+    expect(() => settingsPatchSchema.parse({ locale: 'fr' })).toThrow()
+  })
+
   it('accepts persisted claw channel welcome markers in full settings snapshots', () => {
     const payload = settingsPatchSchema.parse({
       claw: {
@@ -680,6 +787,50 @@ describe('app-ipc-schemas', () => {
     })
 
     expect(payload.agents?.kun?.runtimeTuning?.streamIdleTimeoutMs).toBe(300000)
+  })
+
+  it('accepts a configurable maximum turn duration in runtime tuning patches', () => {
+    const payload = settingsPatchSchema.parse({
+      agents: {
+        kun: {
+          runtimeTuning: {
+            maxWallTimeMs: 7_200_000
+          }
+        }
+      }
+    })
+
+    expect(payload.agents?.kun?.runtimeTuning?.maxWallTimeMs).toBe(7_200_000)
+  })
+
+  it('accepts the maximum concurrent turns cap in runtime tuning patches', () => {
+    const payload = settingsPatchSchema.parse({
+      agents: {
+        kun: {
+          runtimeTuning: {
+            maxConcurrentTurns: 256
+          }
+        }
+      }
+    })
+
+    expect(payload.agents?.kun?.runtimeTuning?.maxConcurrentTurns).toBe(256)
+  })
+
+  it('rejects an out-of-range maximum turn duration', () => {
+    expect(() =>
+      settingsPatchSchema.parse({
+        agents: { kun: { runtimeTuning: { maxWallTimeMs: 86_400_001 } } }
+      })
+    ).toThrow()
+  })
+
+  it('rejects an out-of-range maximum concurrent turns cap', () => {
+    expect(() =>
+      settingsPatchSchema.parse({
+        agents: { kun: { runtimeTuning: { maxConcurrentTurns: 257 } } }
+      })
+    ).toThrow()
   })
 
   it('rejects an out-of-range stream idle timeout', () => {
@@ -899,6 +1050,26 @@ describe('app-ipc-schemas', () => {
 
     expect(payload.title).toBe('Kun answer')
     expect(payload.format).toBe('png')
+  })
+
+  it('validates conversation export payloads and rejects oversized transcripts', () => {
+    const payload = conversationExportPayloadSchema.parse({
+      title: 'Thread',
+      format: 'pdf',
+      markdown: '# Thread',
+      defaultFileName: 'Thread-2026-07-19'
+    })
+
+    expect(payload.format).toBe('pdf')
+    expect(payload.markdown).toBe('# Thread')
+    expect(() => conversationExportPayloadSchema.parse({
+      ...payload,
+      markdown: 'x'.repeat(CONVERSATION_EXPORT_MAX_MARKDOWN_CHARS + 1)
+    })).toThrow()
+    expect(() => conversationExportPayloadSchema.parse({
+      ...payload,
+      unexpected: true
+    })).toThrow()
   })
 
   it('accepts write rich clipboard payloads', () => {

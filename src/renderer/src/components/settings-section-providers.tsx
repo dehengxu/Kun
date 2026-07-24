@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
+  type ReactNode
+} from 'react'
 import type {
   AppSettingsPatch,
   ImageGenerationProtocol,
@@ -8,6 +16,7 @@ import type {
   ModelEndpointFormat,
   ModelProviderImageCapabilityV1,
   ModelProviderModelProfileV1,
+  ModelProviderPresetMode,
   ModelProviderMusicCapabilityV1,
   ModelProviderProfileV1,
   ModelProviderSettingsV1,
@@ -27,21 +36,29 @@ import {
   DEFAULT_VIDEO_GENERATION_PROTOCOL,
   MODEL_ENDPOINT_FORMATS,
   MODEL_PROVIDER_PRESETS,
-  TOKEN_PLAN_PROVIDER_ID_SUFFIX,
   defaultMiniMaxMediaGenerationKunPatch,
   defaultModelRequestRetrySettings,
   defaultModelProviderSettings,
-  getModelProviderPreset,
+  isMultiAccountProviderPreset,
+  modelProviderPresetAccountCount,
+  modelProviderPresetAccountProfile,
   modelProviderPresetProfile,
   modelSupportsImageInput,
   modelProviderTokenPlanProfile,
   normalizeModelProviderId,
+  resolveModelProviderPresetSource,
   tokenPlanProviderId
 } from '@shared/app-settings'
 import type { ModelProviderPreset } from '@shared/model-provider-presets'
-import type { ModelProviderProbeResult } from '@shared/kun-gui-api'
+import type {
+  CursorSubscriptionModel,
+  ModelsDevCatalogResult,
+  ModelProviderProbeResult
+} from '@shared/kun-gui-api'
 import {
+  AlertCircle,
   AudioLines,
+  CheckCircle2,
   ChevronDown,
   Clapperboard,
   Download,
@@ -55,24 +72,30 @@ import {
   Music2,
   PlugZap,
   Plus,
+  Search,
+  SlidersHorizontal,
   Trash2,
   X
 } from 'lucide-react'
 import {
   InlineNoticeView,
   SecretInput,
-  SettingsCard,
-  SettingRow,
   Toggle,
   type InlineNotice
 } from './settings-controls'
 import { classifyProviderModelIds, providerModelListEntries } from './provider-model-editor'
 import { ProviderModelsManager } from './settings-section-provider-models'
+import { ModelRoutesSettings } from './settings-section-model-routes'
 import { ClaudeSubscriptionSection } from './claude-subscription-section'
 import {
   ProviderModelImportDialog,
   type ProviderModelImportResult
 } from './provider-model-import-dialog'
+import {
+  enrichCursorProviderModelProfiles,
+  enrichProviderModelProfiles,
+  mergeProviderModelIdsCaseInsensitive as mergeProviderModelIds
+} from './provider-model-import'
 
 const MODEL_ENDPOINT_FORMAT_LABEL_KEYS: Record<ModelEndpointFormat, string> = {
   chat_completions: 'modelEndpointChatCompletions',
@@ -84,7 +107,8 @@ const MODEL_ENDPOINT_FORMAT_LABEL_KEYS: Record<ModelEndpointFormat, string> = {
 const IMAGE_GENERATION_PROTOCOL_LABEL_KEYS: Record<ImageGenerationProtocol, string> = {
   'openai-images': 'imageGenProtocolOpenAi',
   'minimax-image': 'imageGenProtocolMiniMax',
-  'codex-responses-image': 'imageGenProtocolCodex'
+  'codex-responses-image': 'imageGenProtocolCodex',
+  'grok-imagine-image': 'imageGenProtocolGrok'
 }
 
 const SPEECH_TO_TEXT_PROTOCOL_LABEL_KEYS: Partial<Record<SpeechToTextProtocol, string>> = {
@@ -103,8 +127,19 @@ const MUSIC_GENERATION_PROTOCOL_LABEL_KEYS: Record<MusicGenerationProtocol, stri
 }
 
 const VIDEO_GENERATION_PROTOCOL_LABEL_KEYS: Record<VideoGenerationProtocol, string> = {
-  'minimax-video': 'videoGenerationProtocolMiniMax'
+  'minimax-video': 'videoGenerationProtocolMiniMax',
+  'grok-imagine-video': 'videoGenerationProtocolGrok'
 }
+
+type ProviderTaskTab = 'connection' | 'models' | 'capabilities' | 'advanced'
+type ProviderCapability = 'image' | 'speech' | 'tts' | 'music' | 'video'
+
+const PROVIDER_TASK_TABS: Array<{ id: ProviderTaskTab; labelKey: string }> = [
+  { id: 'connection', labelKey: 'modelProviderTabConnection' },
+  { id: 'models', labelKey: 'modelProviderTabModels' },
+  { id: 'capabilities', labelKey: 'modelProviderTabCapabilities' },
+  { id: 'advanced', labelKey: 'modelProviderTabAdvanced' }
+]
 
 export function modelProvidersSettingsPatch(input: {
   provider: ModelProviderSettingsV1
@@ -130,16 +165,19 @@ export function modelProvidersSettingsPatch(input: {
       apiKey: defaultProvider?.apiKey ?? input.provider.apiKey,
       baseUrl: defaultProvider?.baseUrl ?? input.provider.baseUrl,
       proxy: input.provider.proxy,
-      providers: input.providers
+      providers: input.providers,
+      routePools: input.provider.routePools,
+      localGateway: input.provider.localGateway
     },
     ...(Object.keys(kunPatch).length > 0 ? { agents: { kun: kunPatch } } : {})
   }
 }
 
-function tokenPlanPresetForProfileId(id: string): ModelProviderPreset | null {
-  if (!id.endsWith(TOKEN_PLAN_PROVIDER_ID_SUFFIX)) return null
-  const preset = getModelProviderPreset(id.slice(0, -TOKEN_PLAN_PROVIDER_ID_SUFFIX.length))
-  return preset?.tokenPlan ? preset : null
+function tokenPlanPresetForProfile(
+  provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>
+): ModelProviderPreset | null {
+  const source = resolveModelProviderPresetSource(provider)
+  return source?.mode === 'token-plan' ? source.preset : null
 }
 
 // 「套餐订阅」组 = Token Plan 套餐档(<id>-token-plan)或本身就是订阅制的预设(category==='subscription');
@@ -148,18 +186,38 @@ function isAgentSdkProvider(provider: ModelProviderProfileV1): boolean {
   return provider.kind === 'agent-sdk'
 }
 
-function isSubscriptionProviderId(id: string): boolean {
-  if (tokenPlanPresetForProfileId(id)) return true
-  return getModelProviderPreset(id)?.category === 'subscription'
+function isCursorSubscriptionProvider(provider: ModelProviderProfileV1): boolean {
+  return provider.kind === 'cursor-sdk'
 }
 
-function mergeProviderModelIds(primary: readonly string[], secondary: readonly string[]): string[] {
-  const ids = new Set<string>()
-  for (const model of [...primary, ...secondary]) {
-    const trimmed = model.trim()
-    if (trimmed) ids.add(trimmed)
+const CURSOR_SUBSCRIPTION_DISCOVERY_CHANNEL = 'cursor-subscription:discover'
+
+function cursorSubscriptionDiscoveryErrorMessage(
+  error: unknown,
+  bridgeUnavailableMessage: string
+): string {
+  const message = error instanceof Error ? error.message : String(error)
+  if (
+    message.includes(`No handler registered for '${CURSOR_SUBSCRIPTION_DISCOVERY_CHANNEL}'`)
+    || message.includes(`No bridge registered for '${CURSOR_SUBSCRIPTION_DISCOVERY_CHANNEL}'`)
+    || /cursorSubscriptionDiscover.*not a function/i.test(message)
+  ) {
+    return bridgeUnavailableMessage
   }
-  return [...ids]
+  return message
+}
+
+function isDelegatedEndpointProvider(provider: ModelProviderProfileV1): boolean {
+  return isAgentSdkProvider(provider)
+    || isGeminiSubscriptionProvider(provider)
+    || isCursorSubscriptionProvider(provider)
+}
+
+function isSubscriptionProvider(
+  provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>
+): boolean {
+  const source = resolveModelProviderPresetSource(provider)
+  return source?.mode === 'token-plan' || source?.preset.category === 'subscription'
 }
 
 function addedModelCount(current: readonly string[], next: readonly string[]): number {
@@ -223,67 +281,44 @@ function profileForModel(
   return provider.modelProfiles[trimmed.toLowerCase()] ?? provider.modelProfiles[trimmed]
 }
 
-function presetImageCapability(providerId: string): ModelProviderImageCapabilityV1 | null {
-  const preset = getModelProviderPreset(providerId)
-  if (!preset?.image) return null
-  return { protocol: preset.image.protocol, baseUrl: preset.image.baseUrl, models: [...preset.image.models] }
+function cursorProviderNeedsMetadataRepair(provider: ModelProviderProfileV1): boolean {
+  if (!isCursorSubscriptionProvider(provider)) return false
+  return provider.models.some((model) => {
+    if (model.trim().toLowerCase() === 'auto') return false
+    const profile = profileForModel(provider, model)
+    return !profile || (
+      profile.contextWindowTokens === undefined
+      && profile.maxOutputTokens === undefined
+    ) || !profile.reasoning
+  })
+}
+
+function presetProfileForProvider(provider: ModelProviderProfileV1): ModelProviderProfileV1 | null {
+  const source = resolveModelProviderPresetSource(provider)
+  if (!source) return null
+  return source.mode === 'token-plan'
+    ? modelProviderTokenPlanProfile(source.preset, '', provider.baseUrl)
+    : modelProviderPresetProfile(source.preset)
+}
+
+function presetImageCapability(provider: ModelProviderProfileV1): ModelProviderImageCapabilityV1 | null {
+  return presetProfileForProvider(provider)?.image ?? null
 }
 
 function presetSpeechCapability(provider: ModelProviderProfileV1): ModelProviderSpeechCapabilityV1 | null {
-  const direct = getModelProviderPreset(provider.id)
-  if (direct?.speech) {
-    return { protocol: direct.speech.protocol, baseUrl: direct.speech.baseUrl, models: [...direct.speech.models] }
-  }
-  const tokenPlanSpeech = tokenPlanPresetForProfileId(provider.id)?.tokenPlan?.speech
-  if (tokenPlanSpeech) {
-    // 套餐端点自己提供 ASR,语音地址跟随该 profile 的服务地址。
-    return { protocol: tokenPlanSpeech.protocol, baseUrl: provider.baseUrl, models: [...tokenPlanSpeech.models] }
-  }
-  return null
+  return presetProfileForProvider(provider)?.speech ?? null
 }
 
 function presetTextToSpeechCapability(provider: ModelProviderProfileV1): ModelProviderTextToSpeechCapabilityV1 | null {
-  const direct = getModelProviderPreset(provider.id)
-  if (direct?.textToSpeech) {
-    return {
-      protocol: direct.textToSpeech.protocol,
-      baseUrl: direct.textToSpeech.baseUrl,
-      models: [...direct.textToSpeech.models]
-    }
-  }
-  const tokenPlanTextToSpeech = tokenPlanPresetForProfileId(provider.id)?.tokenPlan?.textToSpeech
-  if (tokenPlanTextToSpeech) {
-    return {
-      protocol: tokenPlanTextToSpeech.protocol,
-      baseUrl: tokenPlanTextToSpeech.baseUrl ?? provider.baseUrl,
-      models: [...tokenPlanTextToSpeech.models]
-    }
-  }
-  return null
+  return presetProfileForProvider(provider)?.textToSpeech ?? null
 }
 
 function presetMusicCapability(provider: ModelProviderProfileV1): ModelProviderMusicCapabilityV1 | null {
-  const direct = getModelProviderPreset(provider.id)
-  if (direct?.music) {
-    return { protocol: direct.music.protocol, baseUrl: direct.music.baseUrl, models: [...direct.music.models] }
-  }
-  const tokenPlanMusic = tokenPlanPresetForProfileId(provider.id)?.tokenPlan?.music
-  if (tokenPlanMusic) {
-    return { protocol: tokenPlanMusic.protocol, baseUrl: tokenPlanMusic.baseUrl, models: [...tokenPlanMusic.models] }
-  }
-  return null
+  return presetProfileForProvider(provider)?.music ?? null
 }
 
 function presetVideoCapability(provider: ModelProviderProfileV1): ModelProviderVideoCapabilityV1 | null {
-  const direct = getModelProviderPreset(provider.id)
-  if (direct?.video) {
-    return { protocol: direct.video.protocol, baseUrl: direct.video.baseUrl, models: [...direct.video.models] }
-  }
-  const tokenPlanVideo = tokenPlanPresetForProfileId(provider.id)?.tokenPlan?.video
-  if (tokenPlanVideo) {
-    return { protocol: tokenPlanVideo.protocol, baseUrl: tokenPlanVideo.baseUrl, models: [...tokenPlanVideo.models] }
-  }
-  return null
+  return presetProfileForProvider(provider)?.video ?? null
 }
 
 function isAcceptableHttpUrl(value: string): boolean {
@@ -312,13 +347,32 @@ type ProbeState = {
 }
 
 function providerPresetRequiresApiKey(provider: ModelProviderProfileV1): boolean {
-  if (provider.id === 'litellm') return false
-  if (isCodexProvider(provider.id)) return false
-  return Boolean(getModelProviderPreset(provider.id) || tokenPlanPresetForProfileId(provider.id))
+  const source = resolveModelProviderPresetSource(provider)
+  if (source?.preset.id === 'litellm') return false
+  if (isOAuthSubscriptionProvider(provider)) return false
+  return Boolean(source)
 }
 
-function isCodexProvider(id: string): boolean {
-  return id === 'codex'
+function isCodexProvider(provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>): boolean {
+  return resolveModelProviderPresetSource(provider)?.preset.id === 'codex'
+}
+
+function isGrokSubscriptionProvider(provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>): boolean {
+  return resolveModelProviderPresetSource(provider)?.preset.id === 'grok-subscription'
+}
+
+function isGeminiSubscriptionProvider(provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>): boolean {
+  return resolveModelProviderPresetSource(provider)?.preset.id === 'gemini-subscription'
+}
+
+function isOAuthSubscriptionProvider(provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>): boolean {
+  return isCodexProvider(provider) || isGrokSubscriptionProvider(provider) || isGeminiSubscriptionProvider(provider)
+}
+
+function providerRequiresApiKey(provider: ModelProviderProfileV1): boolean {
+  if (isAgentSdkProvider(provider) || isGeminiSubscriptionProvider(provider)) return false
+  if (provider.id === DEFAULT_MODEL_PROVIDER_ID || isOAuthSubscriptionProvider(provider)) return true
+  return providerPresetRequiresApiKey(provider)
 }
 
 function parseCodexEmail(apiKey: string): string | undefined {
@@ -327,6 +381,17 @@ function parseCodexEmail(apiKey: string): string | undefined {
     const parsed = JSON.parse(apiKey) as Record<string, unknown>
     if (parsed.kind === 'codex-oauth' && typeof parsed.email === 'string') return parsed.email
     if (parsed.kind === 'codex-oauth') return parsed.accountId as string
+  } catch { /* ignore */ }
+  return undefined
+}
+
+function parseGrokIdentity(apiKey: string): string | undefined {
+  if (!apiKey.startsWith('{')) return undefined
+  try {
+    const parsed = JSON.parse(apiKey) as Record<string, unknown>
+    if (parsed.kind !== 'grok-oauth') return undefined
+    if (typeof parsed.email === 'string' && parsed.email) return parsed.email
+    if (typeof parsed.userId === 'string' && parsed.userId) return parsed.userId
   } catch { /* ignore */ }
   return undefined
 }
@@ -621,6 +686,345 @@ function CodexLoginSection({
   )
 }
 
+type GrokLoginPhase = 'idle' | 'browser' | 'error'
+
+function GrokLoginSection({
+  provider,
+  onCredentialChange,
+  t
+}: {
+  provider: ModelProviderProfileV1
+  onCredentialChange: (apiKey: string) => void
+  t: (key: string, params?: Record<string, unknown>) => string
+}): ReactElement {
+  const [phase, setPhase] = useState<GrokLoginPhase>('idle')
+  const [error, setError] = useState('')
+  const [pasteCode, setPasteCode] = useState('')
+  const [pasteBusy, setPasteBusy] = useState(false)
+  const loginRunRef = useRef(0)
+  const identity = parseGrokIdentity(provider.apiKey)
+  const connected = Boolean(identity)
+
+  const beginLoginRun = (): number => {
+    loginRunRef.current += 1
+    return loginRunRef.current
+  }
+
+  const isCurrentLoginRun = (runId: number): boolean => loginRunRef.current === runId
+
+  useEffect(() => {
+    return () => {
+      loginRunRef.current += 1
+      void window.kunGui?.cancelGrokBrowserAuth?.()
+    }
+  }, [])
+
+  const startBrowserLogin = async (): Promise<void> => {
+    const runId = beginLoginRun()
+    if (typeof window.kunGui?.startGrokBrowserAuth !== 'function') {
+      setPhase('error')
+      setError('Grok 订阅浏览器登录不可用，请重启应用')
+      return
+    }
+    setPhase('browser')
+    setError('')
+    setPasteCode('')
+    setPasteBusy(false)
+    try {
+      // Blocks until loopback callback OR paste completion (Path A + B race).
+      const result = await window.kunGui.startGrokBrowserAuth()
+      if (!isCurrentLoginRun(runId)) return
+      if (result.ok) {
+        setPasteCode('')
+        onCredentialChange(JSON.stringify(result.credentials))
+        setPhase('idle')
+      } else if (result.message === '已取消登录') {
+        setPhase('idle')
+        setError('')
+      } else {
+        setPhase('error')
+        setError(result.message)
+      }
+    } catch (err) {
+      if (!isCurrentLoginRun(runId)) return
+      setPhase('error')
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPasteBusy(false)
+    }
+  }
+
+  const submitPastedCode = async (): Promise<void> => {
+    const code = pasteCode.trim()
+    if (!code || pasteBusy) return
+    if (typeof window.kunGui?.submitGrokBrowserAuthCode !== 'function') {
+      setError('Grok 粘贴登录不可用，请重启应用')
+      return
+    }
+    setPasteBusy(true)
+    setError('')
+    try {
+      const result = await window.kunGui.submitGrokBrowserAuthCode(code)
+      // On success, startGrokBrowserAuth's promise also resolves and the browser
+      // phase handler will store credentials. On failure keep the paste form open.
+      if (!result.ok) {
+        setError(result.message)
+        setPasteBusy(false)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setPasteBusy(false)
+    }
+  }
+
+  const cancelLogin = (): void => {
+    loginRunRef.current += 1
+    void window.kunGui?.cancelGrokBrowserAuth?.()
+    setPhase('idle')
+    setError('')
+    setPasteCode('')
+    setPasteBusy(false)
+  }
+
+  const disconnect = (): void => {
+    loginRunRef.current += 1
+    void window.kunGui?.cancelGrokBrowserAuth?.()
+    onCredentialChange('')
+    setPhase('idle')
+    setPasteCode('')
+  }
+
+  if (connected) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+        <span className="text-[13px] text-ds-ink">{identity}</span>
+        <button
+          type="button"
+          className="ml-auto rounded-lg px-3 py-1.5 text-[12px] font-medium text-ds-muted hover:bg-ds-hover"
+          onClick={disconnect}
+        >
+          {t('grokDisconnect')}
+        </button>
+      </div>
+    )
+  }
+
+  if (phase === 'browser') {
+    return (
+      <div className="grid gap-2">
+        <p className="text-[13px] text-ds-muted">{t('grokBrowserOpened')}</p>
+        <div className="flex items-center gap-1.5 text-[12px] text-ds-muted">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {t('grokWaitingAuth')}
+        </div>
+        <div className="grid gap-1.5 rounded-xl border border-ds-border bg-ds-card p-3">
+          <p className="text-[12px] leading-5 text-ds-muted">{t('grokPasteCodeHint')}</p>
+          <textarea
+            className="min-h-[72px] w-full resize-y rounded-lg border border-ds-border bg-ds-main px-3 py-2 font-mono text-[12px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+            value={pasteCode}
+            spellCheck={false}
+            placeholder={t('grokPasteCodePlaceholder')}
+            onChange={(e) => setPasteCode(e.target.value)}
+            disabled={pasteBusy}
+          />
+          <button
+            type="button"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 py-2 text-[13px] font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={() => void submitPastedCode()}
+            disabled={pasteBusy || !pasteCode.trim()}
+          >
+            {pasteBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            {t('grokPasteCodeSubmit')}
+          </button>
+        </div>
+        {error ? <InlineNoticeView notice={{ tone: 'error', message: error }} /> : null}
+        <button
+          type="button"
+          className="w-fit text-[12px] font-medium text-ds-muted hover:text-ds-ink"
+          onClick={cancelLogin}
+        >
+          {t('grokCancel')}
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid gap-2">
+      <button
+        type="button"
+        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-[14px] font-semibold text-white shadow-sm transition hover:bg-accent/90"
+        onClick={startBrowserLogin}
+      >
+        <LogIn className="h-4 w-4" strokeWidth={1.9} />
+        {t('grokLoginButton')}
+      </button>
+      {phase === 'error' && error ? (
+        <InlineNoticeView notice={{ tone: 'error', message: error }} />
+      ) : null}
+    </div>
+  )
+}
+
+type GeminiCliState = 'checking' | 'missing' | 'downloading' | 'ready' | 'syncing'
+
+function GeminiSubscriptionSection({
+  onModelsChange,
+  t
+}: {
+  onModelsChange: (models: string[]) => void
+  t: (key: string, params?: Record<string, unknown>) => string
+}): ReactElement {
+  const [state, setState] = useState<GeminiCliState>('checking')
+  const [progress, setProgress] = useState<{ received: number; total: number } | null>(null)
+  const [notice, setNotice] = useState<InlineNotice | null>(null)
+
+  const applyDownload = useCallback((
+    download: { status: string; receivedBytes: number; totalBytes: number; message?: string } | null | undefined
+  ): boolean => {
+    if (!download) return false
+    if (download.status === 'downloading') {
+      setState('downloading')
+      setProgress({ received: download.receivedBytes, total: download.totalBytes })
+      return true
+    }
+    if (download.status === 'done') {
+      setState('ready')
+      setProgress(null)
+      return true
+    }
+    if (download.status === 'error') {
+      setState('missing')
+      setProgress(null)
+      setNotice({ tone: 'error', message: download.message ?? t('geminiCliInstallFailed') })
+      return true
+    }
+    return false
+  }, [t])
+
+  const refreshStatus = useCallback(async (): Promise<void> => {
+    try {
+      const status = await window.kunGui.geminiSubscriptionCliStatus()
+      if (status.installed) {
+        setState('ready')
+        setProgress(null)
+      } else if (!applyDownload(status.download)) {
+        setState('missing')
+      }
+    } catch (error) {
+      setState('missing')
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : t('geminiCliInstallFailed')
+      })
+    }
+  }, [applyDownload, t])
+
+  useEffect(() => {
+    void refreshStatus()
+    return window.kunGui.onGeminiSubscriptionCliProgress((download) => {
+      applyDownload(download)
+      if (download.status === 'done') void refreshStatus()
+    })
+  }, [applyDownload, refreshStatus])
+
+  const install = async (): Promise<void> => {
+    setNotice(null)
+    setState('downloading')
+    setProgress({ received: 0, total: 0 })
+    try {
+      applyDownload(await window.kunGui.geminiSubscriptionCliInstall())
+    } catch (error) {
+      setState('missing')
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : t('geminiCliInstallFailed')
+      })
+    }
+  }
+
+  const syncModels = async (): Promise<void> => {
+    setState('syncing')
+    setNotice(null)
+    try {
+      const models = await window.kunGui.geminiSubscriptionModels()
+      onModelsChange(models)
+      setNotice({
+        tone: 'success',
+        message: t('geminiModelsSynced', { count: models.length })
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : t('geminiModelsSyncFailed')
+      })
+    } finally {
+      setState('ready')
+    }
+  }
+
+  const percent = progress && progress.total > 0
+    ? Math.min(100, Math.round((progress.received / progress.total) * 100))
+    : 0
+  const busy = state === 'checking' || state === 'downloading' || state === 'syncing'
+
+  return (
+    <div className="grid gap-3">
+      <p className="rounded-lg border border-ds-border bg-ds-main/30 px-3 py-2 text-[12px] leading-5 text-ds-muted">
+        {t('geminiSubscriptionNote')}
+      </p>
+      <div className="flex items-center gap-2 text-[13px] text-ds-ink">
+        {busy ? (
+          <Loader2 className="h-4 w-4 animate-spin text-ds-muted" strokeWidth={1.9} />
+        ) : state === 'ready' ? (
+          <CheckCircle2 className="h-4 w-4 text-emerald-500" strokeWidth={1.9} />
+        ) : (
+          <AlertCircle className="h-4 w-4 text-amber-500" strokeWidth={1.9} />
+        )}
+        <span>{state === 'ready' || state === 'syncing'
+          ? t('geminiCliReady')
+          : state === 'downloading'
+            ? t('geminiCliDownloading')
+            : state === 'checking'
+              ? t('geminiCliChecking')
+              : t('geminiCliMissing')}</span>
+      </div>
+      {state === 'downloading' ? (
+        <div className="grid gap-1">
+          <div className="h-1.5 overflow-hidden rounded-full bg-ds-hover">
+            <div className="h-full bg-accent transition-all" style={{ width: `${percent}%` }} />
+          </div>
+          <span className="text-[11px] text-ds-faint">
+            {progress?.total ? `${percent}%` : t('geminiCliDownloading')}
+          </span>
+        </div>
+      ) : null}
+      {state === 'missing' ? (
+        <button
+          type="button"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-[14px] font-semibold text-white shadow-sm transition hover:bg-accent/90"
+          onClick={() => void install()}
+        >
+          <Download className="h-4 w-4" strokeWidth={1.9} />
+          {t('geminiCliInstall')}
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-ds-border bg-ds-card px-4 py-2 text-[13px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:opacity-60"
+          onClick={() => void syncModels()}
+          disabled={busy}
+        >
+          {state === 'syncing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          {t('geminiSyncModels')}
+        </button>
+      )}
+      {notice ? <InlineNoticeView notice={notice} /> : null}
+    </div>
+  )
+}
+
 const fieldLabelClass = 'grid gap-1.5 text-[12px] font-semibold text-ds-muted'
 const textInputClass =
   'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
@@ -661,6 +1065,120 @@ function DetailSection({
         {action}
       </div>
       {children}
+    </section>
+  )
+}
+
+function StatusPill({
+  tone,
+  icon,
+  children,
+  title
+}: {
+  tone: 'success' | 'warning' | 'error' | 'muted'
+  icon?: ReactNode
+  children: ReactNode
+  title?: string
+}): ReactElement {
+  const toneClass =
+    tone === 'success'
+      ? 'border-emerald-300/70 bg-emerald-50 text-emerald-700 dark:border-emerald-800/70 dark:bg-emerald-950/30 dark:text-emerald-300'
+      : tone === 'warning'
+        ? 'border-amber-300/70 bg-amber-50 text-amber-700 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-300'
+        : tone === 'error'
+          ? 'border-red-300/70 bg-red-50 text-red-700 dark:border-red-800/70 dark:bg-red-950/30 dark:text-red-300'
+          : 'border-ds-border-muted bg-ds-main/50 text-ds-muted'
+  return (
+    <span
+      title={title}
+      className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-[11px] font-medium ${toneClass}`}
+    >
+      {icon}
+      {children}
+    </span>
+  )
+}
+
+function CapabilitySection({
+  capabilityId,
+  icon,
+  title,
+  description,
+  enabled,
+  invalid,
+  expanded,
+  modelCountLabel,
+  configureLabel,
+  collapseLabel,
+  enabledLabel,
+  disabledLabel,
+  needsConfigurationLabel,
+  onToggle,
+  onExpandedChange,
+  children
+}: {
+  capabilityId: ProviderCapability
+  icon: ReactNode
+  title: string
+  description: string
+  enabled: boolean
+  invalid?: boolean
+  expanded: boolean
+  modelCountLabel?: string
+  configureLabel: string
+  collapseLabel: string
+  enabledLabel: string
+  disabledLabel: string
+  needsConfigurationLabel: string
+  onToggle: (enabled: boolean) => void
+  onExpandedChange: (expanded: boolean) => void
+  children: ReactNode
+}): ReactElement {
+  return (
+    <section className={`rounded-2xl border bg-ds-card transition ${
+      enabled ? 'border-ds-border shadow-sm' : 'border-ds-border-muted'
+    }`}>
+      <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3.5">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <span className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl ${
+            enabled ? 'bg-accent/10 text-accent' : 'bg-ds-main text-ds-faint'
+          }`}>
+            {icon}
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-[13px] font-semibold text-ds-ink">{title}</h3>
+              <StatusPill tone={invalid ? 'warning' : enabled ? 'success' : 'muted'}>
+                {invalid ? needsConfigurationLabel : enabled ? enabledLabel : disabledLabel}
+              </StatusPill>
+              {modelCountLabel ? (
+                <span className="text-[11.5px] text-ds-faint">{modelCountLabel}</span>
+              ) : null}
+            </div>
+            <p className="mt-1 text-[12px] leading-5 text-ds-faint">{description}</p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            disabled={!enabled}
+            aria-expanded={enabled && expanded}
+            aria-controls={`provider-capability-${capabilityId}`}
+            aria-label={`${expanded ? collapseLabel : configureLabel}: ${title}`}
+            onClick={() => onExpandedChange(!expanded)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-3 text-[12px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" strokeWidth={1.9} />
+            {expanded ? collapseLabel : configureLabel}
+          </button>
+          <Toggle checked={enabled} onChange={onToggle} ariaLabel={title} />
+        </div>
+      </div>
+      {enabled && expanded ? (
+        <div id={`provider-capability-${capabilityId}`} className="border-t border-ds-border-muted px-4 py-4">
+          {children}
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -794,7 +1312,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     update,
     showApiKey,
     setShowApiKey,
-    selectControlClass
+    selectControlClass,
+    saveStatus,
+    saveError,
+    retrySave
   } = ctx
   const provider = providerFromContext ?? defaultModelProviderSettings()
   const modelProviders = provider.providers as ModelProviderProfileV1[]
@@ -802,34 +1323,51 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     kun.providerId?.trim() || modelProviders[0]?.id || DEFAULT_MODEL_PROVIDER_ID
   )
   const [addMenuOpen, setAddMenuOpen] = useState(false)
-  const addMenuRef = useRef<HTMLDivElement>(null)
-  // 点击菜单外部或按 Esc 关闭「添加供应商」下拉。用监听器代替全屏遮罩:全屏 fixed 遮罩会吞掉滚轮事件,
-  // 导致下拉打开时整个设置页无法滚动(用户反馈的 bug)。
+  const [addProviderQuery, setAddProviderQuery] = useState('')
+  const [providerListQuery, setProviderListQuery] = useState('')
+  const [activeTab, setActiveTab] = useState<ProviderTaskTab>('connection')
+  const [workspaceMode, setWorkspaceMode] = useState<'providers' | 'routes'>('providers')
+  const [expandedCapabilities, setExpandedCapabilities] = useState<Set<ProviderCapability>>(new Set())
+  const addProviderButtonRef = useRef<HTMLButtonElement>(null)
+  const addProviderDialogRef = useRef<HTMLElement>(null)
+  const previousProviderSelectionRef = useRef<string | null>(null)
   useEffect(() => {
     if (!addMenuOpen) return
-    const onPointerDown = (event: PointerEvent): void => {
-      const target = event.target
-      if (target instanceof Node && addMenuRef.current?.contains(target)) return
-      setAddMenuOpen(false)
-    }
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setAddMenuOpen(false)
+      if (event.key === 'Escape') {
+        setAddMenuOpen(false)
+        addProviderButtonRef.current?.focus()
+      }
     }
-    window.addEventListener('pointerdown', onPointerDown)
     window.addEventListener('keydown', onKeyDown)
     return () => {
-      window.removeEventListener('pointerdown', onPointerDown)
+      document.body.style.overflow = previousOverflow
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [addMenuOpen])
   const [probeStates, setProbeStates] = useState<Record<string, ProbeState>>({})
+  const [cursorAccounts, setCursorAccounts] = useState<Record<string, {
+    fingerprint: string
+    label: string
+    apiKeyName: string
+  }>>({})
   // Pending import dialog: when /v1/models returns hundreds of entries we want
   // the user to choose which ones to keep instead of dropping the whole list
   // into settings and forcing them to delete unwanted models one-by-one (#397).
   const [pendingImport, setPendingImport] = useState<
-    | { providerId: string; modelIds: string[]; latencyMs?: number }
+    | {
+        providerId: string
+        providerModelIds: string[]
+        modelAliases?: Record<string, string[]>
+        catalogResult: ModelsDevCatalogResult
+        providerError?: string
+        authoritative?: boolean
+      }
     | null
   >(null)
+  const cursorMetadataRepairAttempts = useRef(new Set<string>())
   // 新增供应商先停留在本地草稿,点「添加」才写入设置,避免半配置状态被持久化。
   const [draftProvider, setDraftProvider] = useState<ModelProviderProfileV1 | null>(null)
   const displayProviders = draftProvider ? [...modelProviders, draftProvider] : modelProviders
@@ -841,8 +1379,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const canEditActiveProviderId = Boolean(
     activeProvider &&
     activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID &&
-    !getModelProviderPreset(activeProvider.id) &&
-    !tokenPlanPresetForProfileId(activeProvider.id)
+    !resolveModelProviderPresetSource(activeProvider)
   )
   const activeKunProviderId: string = kun.providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
   const providerProxy = provider.proxy ?? { enabled: false, url: '' }
@@ -856,6 +1393,63 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         }
       }
     })
+  }
+
+  const setCapabilityExpanded = (capability: ProviderCapability, expanded: boolean): void => {
+    setExpandedCapabilities((current) => {
+      const next = new Set(current)
+      if (expanded) next.add(capability)
+      else next.delete(capability)
+      return next
+    })
+  }
+
+  const openAddProviderDialog = (): void => {
+    setAddProviderQuery('')
+    setAddMenuOpen(true)
+  }
+
+  const closeAddProviderDialog = (): void => {
+    setAddMenuOpen(false)
+    window.setTimeout(() => addProviderButtonRef.current?.focus(), 0)
+  }
+
+  const handleAddProviderDialogKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
+    if (event.key !== 'Tab' || !addProviderDialogRef.current) return
+    const focusable = Array.from(addProviderDialogRef.current.querySelectorAll<HTMLElement>([
+      'button:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'a[href]'
+    ].join(','))).filter((element) => element.getClientRects().length > 0)
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
+  const handleProviderTabKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    currentTab: ProviderTaskTab
+  ): void => {
+    const currentIndex = PROVIDER_TASK_TABS.findIndex((tab) => tab.id === currentTab)
+    let nextIndex = currentIndex
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % PROVIDER_TASK_TABS.length
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + PROVIDER_TASK_TABS.length) % PROVIDER_TASK_TABS.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = PROVIDER_TASK_TABS.length - 1
+    else return
+
+    event.preventDefault()
+    setActiveTab(PROVIDER_TASK_TABS[nextIndex].id)
+    const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+    tabs?.[nextIndex]?.focus()
   }
 
   const confirmAction = async (options: {
@@ -1027,8 +1621,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   }
 
   const startProviderDraft = (profile: ModelProviderProfileV1): void => {
+    previousProviderSelectionRef.current = selectedProviderId
     setDraftProvider(profile)
     setSelectedProviderId(profile.id)
+    setActiveTab('connection')
   }
 
   const commitProviderDraft = (): void => {
@@ -1040,14 +1636,24 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         ? { providerId: draftProvider.id, model: draftProvider.models[0] ?? kun.model }
         : undefined
     )
+    previousProviderSelectionRef.current = null
     setDraftProvider(null)
     setSelectedProviderId(draftProvider.id)
   }
 
   const cancelProviderDraft = (): void => {
     if (!draftProvider) return
+    const previousProviderId = previousProviderSelectionRef.current
+    const fallbackProviderId = modelProviders.some((item) => item.id === activeKunProviderId)
+      ? activeKunProviderId
+      : modelProviders[0]?.id ?? DEFAULT_MODEL_PROVIDER_ID
     setDraftProvider(null)
-    setSelectedProviderId(activeKunProviderId)
+    setSelectedProviderId(
+      previousProviderId && modelProviders.some((item) => item.id === previousProviderId)
+        ? previousProviderId
+        : fallbackProviderId
+    )
+    previousProviderSelectionRef.current = null
   }
 
   const addModelProvider = (): void => {
@@ -1073,8 +1679,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
 
   const addPresetModelProvider = async (
     preset: ModelProviderPreset,
-    mode: 'api' | 'token-plan' = 'api'
+    mode: ModelProviderPresetMode = 'api'
   ): Promise<void> => {
+    if (isMultiAccountProviderPreset(preset, mode)) {
+      const accountProvider = modelProviderPresetAccountProfile(preset, mode, displayProviders)
+      if (accountProvider) startProviderDraft(accountProvider)
+      return
+    }
     const presetProvider = mode === 'token-plan'
       ? modelProviderTokenPlanProfile(preset)
       : modelProviderPresetProfile(preset)
@@ -1176,34 +1787,285 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     update(patch)
   }
 
+  const fetchModelsDevCatalogFor = async (
+    target: ModelProviderProfileV1,
+    modelHints?: CursorSubscriptionModel[],
+    forceRefresh = true
+  ): Promise<ModelsDevCatalogResult> => {
+    if (typeof window.kunGui?.fetchModelsDevCatalog !== 'function') {
+      return { status: 'error', message: 'models.dev catalog bridge is unavailable.', models: [] }
+    }
+    try {
+      const source = resolveModelProviderPresetSource(target)
+      return await window.kunGui.fetchModelsDevCatalog({
+        // Multi-account profiles keep a unique runtime id, while catalog
+        // matching must use the canonical preset id understood by models.dev.
+        providerId: source
+          ? source.mode === 'token-plan'
+            ? tokenPlanProviderId(source.preset.id)
+            : source.preset.id
+          : target.id,
+        baseUrl: target.baseUrl,
+        forceRefresh,
+        ...(modelHints?.length
+          ? {
+              modelHints: modelHints.map((model) => ({
+                id: model.id,
+                ...(model.aliases?.length ? { aliases: model.aliases } : {})
+              }))
+            }
+          : {})
+      })
+    } catch (error) {
+      return {
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+        models: []
+      }
+    }
+  }
+
+  const patchProviderProfileRef = useRef(patchProviderProfile)
+  patchProviderProfileRef.current = patchProviderProfile
+  const fetchModelsDevCatalogForRef = useRef(fetchModelsDevCatalogFor)
+  fetchModelsDevCatalogForRef.current = fetchModelsDevCatalogFor
+
+  useEffect(() => {
+    if (
+      activeTab !== 'models'
+      || !activeProvider
+      || !cursorProviderNeedsMetadataRepair(activeProvider)
+    ) return
+
+    const repairKey = [
+      activeProvider.id,
+      ...activeProvider.models.map((model) => model.trim().toLowerCase()).filter(Boolean)
+    ].join('\u0001')
+    if (cursorMetadataRepairAttempts.current.has(repairKey)) return
+    cursorMetadataRepairAttempts.current.add(repairKey)
+
+    void fetchModelsDevCatalogForRef.current(
+      activeProvider,
+      activeProvider.models.map((model) => ({
+        id: model,
+        displayName: model
+      })),
+      false
+    ).then((catalogResult) => {
+      if (catalogResult.status !== 'ok' || catalogResult.models.length === 0) return
+      patchProviderProfileRef.current(activeProvider, (item) => {
+        const modelProfiles = enrichCursorProviderModelProfiles(
+          item,
+          item.models,
+          catalogResult.models
+        )
+        return modelProfiles === item.modelProfiles
+          ? item
+          : { ...item, modelProfiles }
+      })
+    })
+  }, [activeProvider, activeTab])
+
+  const openModelImport = (input: {
+    target: ModelProviderProfileV1
+    fingerprint: string
+    providerModelIds: string[]
+    modelAliases?: Record<string, string[]>
+    catalogResult: ModelsDevCatalogResult
+    providerError?: string
+    latencyMs?: number
+    authoritative?: boolean
+  }): void => {
+    const catalogOnlyIds = input.catalogResult.status === 'ok' && input.catalogResult.matchMode === 'catalog'
+      ? input.catalogResult.models.map((model) => model.id)
+      : []
+    const total = mergeProviderModelIds(input.providerModelIds, catalogOnlyIds).length
+    const hasUsableEntries = input.providerModelIds.length > 0 || catalogOnlyIds.length > 0
+    if (!hasUsableEntries) {
+      const catalogMessage = input.catalogResult.status === 'error'
+        ? input.catalogResult.message
+        : input.catalogResult.status === 'unmapped'
+          ? t('providerModelImportCatalogUnmapped')
+          : t('modelProviderFetchEmpty')
+      const message = [input.providerError, catalogMessage].filter(Boolean).join(' · ')
+      setProbeStates((previous) => ({
+        ...previous,
+        [input.target.id]: {
+          fingerprint: input.fingerprint,
+          mode: 'fetch',
+          status: 'error',
+          message: message || t('modelProviderFetchEmpty')
+        }
+      }))
+      return
+    }
+
+    setProbeStates((previous) => ({
+      ...previous,
+      [input.target.id]: {
+        fingerprint: input.fingerprint,
+        mode: 'fetch',
+        status: 'ok',
+        latencyMs: input.latencyMs ?? 0,
+        total
+      }
+    }))
+    setPendingImport({
+      providerId: input.target.id,
+      providerModelIds: input.providerModelIds,
+      ...(input.modelAliases ? { modelAliases: input.modelAliases } : {}),
+      catalogResult: input.catalogResult,
+      ...(input.providerError ? { providerError: input.providerError } : {}),
+      ...(input.authoritative ? { authoritative: true } : {})
+    })
+  }
+
   const runProbe = async (target: ModelProviderProfileV1, mode: 'test' | 'fetch'): Promise<void> => {
-    if (typeof window.kunGui?.probeModelProvider !== 'function') return
     const fingerprint = providerConnectionFingerprint(target)
+    if (isCursorSubscriptionProvider(target)) {
+      if (!target.apiKey.trim()) {
+        setProbeStates((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            mode,
+            status: 'error',
+            message: t('modelProviderPresetMissingKeyForProbe')
+          }
+        }))
+        return
+      }
+      setProbeStates((previous) => ({
+        ...previous,
+        [target.id]: { fingerprint, mode, status: 'busy' }
+      }))
+      try {
+        const discover = window.kunGui?.cursorSubscriptionDiscover
+        if (typeof discover !== 'function') {
+          throw new Error(`No bridge registered for '${CURSOR_SUBSCRIPTION_DISCOVERY_CHANNEL}'`)
+        }
+        const discovery = await discover(target.apiKey)
+        const accountName = [
+          discovery.account.userFirstName,
+          discovery.account.userLastName
+        ].filter(Boolean).join(' ')
+        setCursorAccounts((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            label: discovery.account.userEmail || accountName || discovery.account.apiKeyName,
+            apiKeyName: discovery.account.apiKeyName
+          }
+        }))
+        if (mode === 'fetch') {
+          const modelIds = discovery.models.map((model) => model.id)
+          const modelAliases = Object.fromEntries(
+            discovery.models
+              .filter((model) => model.aliases?.length)
+              .map((model) => [model.id, [...(model.aliases ?? [])]])
+          )
+          openModelImport({
+            target,
+            fingerprint,
+            providerModelIds: modelIds,
+            modelAliases,
+            catalogResult: await fetchModelsDevCatalogFor(target, discovery.models),
+            providerError: modelIds.length === 0
+              ? t('providerModelImportProviderReturnedEmpty')
+              : undefined,
+            latencyMs: 0,
+            authoritative: true
+          })
+          return
+        }
+        setProbeStates((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            mode,
+            status: 'ok',
+            latencyMs: 0,
+            total: discovery.models.length
+          }
+        }))
+      } catch (error) {
+        setProbeStates((previous) => ({
+          ...previous,
+          [target.id]: {
+            fingerprint,
+            mode,
+            status: 'error',
+            message: cursorSubscriptionDiscoveryErrorMessage(
+              error,
+              t('cursorSubscriptionRestartRequired')
+            )
+          }
+        }))
+      }
+      return
+    }
+    // The official Antigravity CLI owns subscription auth and model discovery.
+    if (isGeminiSubscriptionProvider(target)) {
+      setProbeStates((previous) => ({
+        ...previous,
+        [target.id]: { fingerprint, mode, status: 'busy' }
+      }))
+      const [providerResult, catalogResult] = await Promise.all([
+        window.kunGui.geminiSubscriptionModels()
+          .then((modelIds) => ({ modelIds, error: undefined as string | undefined }))
+          .catch((error: unknown) => ({
+            modelIds: [] as string[],
+            error: error instanceof Error ? error.message : String(error)
+          })),
+        fetchModelsDevCatalogFor(target)
+      ])
+      if (mode === 'fetch') {
+        openModelImport({
+          target,
+          fingerprint,
+          providerModelIds: providerResult.modelIds,
+          catalogResult,
+          providerError: providerResult.error,
+          latencyMs: 0,
+          authoritative: true
+        })
+        return
+      }
+      setProbeStates((previous) => ({
+        ...previous,
+        [target.id]: providerResult.error
+          ? { fingerprint, mode, status: 'error', message: providerResult.error }
+          : { fingerprint, mode, status: 'ok', latencyMs: 0, total: providerResult.modelIds.length }
+      }))
+      return
+    }
     // Subscription (agent-sdk) providers have no HTTP /models endpoint — the turn
     // is delegated to the Claude Agent SDK. "Test" reports login readiness instead
     // of probing api.anthropic.com, which would 401 on the x-api-key header.
     if (isAgentSdkProvider(target)) {
-      setProbeStates((prev) => ({ ...prev, [target.id]: { fingerprint, mode, status: 'busy' } }))
+      setProbeStates((previous) => ({
+        ...previous,
+        [target.id]: { fingerprint, mode, status: 'busy' }
+      }))
       if (mode === 'fetch') {
-        // No HTTP /models endpoint — list the subscription's models via the SDK.
-        let modelIds: string[] = []
-        try {
-          modelIds = await window.kunGui.claudeSubscriptionModels(target.apiKey.trim() || undefined)
-        } catch {
-          modelIds = []
-        }
-        if (modelIds.length > 0) {
-          setProbeStates((prev) => ({
-            ...prev,
-            [target.id]: { fingerprint, mode, status: 'ok', latencyMs: 0, total: modelIds.length }
-          }))
-          setPendingImport({ providerId: target.id, modelIds: [...modelIds], latencyMs: 0 })
-        } else {
-          setProbeStates((prev) => ({
-            ...prev,
-            [target.id]: { fingerprint, mode, status: 'error', message: t('claudeSubProbeNotReady') }
-          }))
-        }
+        const [providerResult, catalogResult] = await Promise.all([
+          window.kunGui.claudeSubscriptionModels(target.apiKey.trim() || undefined)
+            .then((modelIds) => ({ modelIds, error: undefined as string | undefined }))
+            .catch((error: unknown) => ({
+              modelIds: [] as string[],
+              error: error instanceof Error ? error.message : String(error)
+            })),
+          fetchModelsDevCatalogFor(target)
+        ])
+        openModelImport({
+          target,
+          fingerprint,
+          providerModelIds: [...providerResult.modelIds],
+          catalogResult,
+          providerError: providerResult.error
+            ?? (providerResult.modelIds.length === 0 ? t('claudeSubProbeNotReady') : undefined),
+          latencyMs: 0
+        })
         return
       }
       // mode === 'test': report login/token readiness instead of an HTTP probe.
@@ -1215,17 +2077,17 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
           ready = false
         }
       }
-      setProbeStates((prev) => ({
-        ...prev,
+      setProbeStates((previous) => ({
+        ...previous,
         [target.id]: ready
           ? { fingerprint, mode, status: 'ok', latencyMs: 0, total: target.models.length }
           : { fingerprint, mode, status: 'error', message: t('claudeSubProbeNotReady') }
       }))
       return
     }
-    if (providerPresetRequiresApiKey(target) && !target.apiKey.trim()) {
-      setProbeStates((prev) => ({
-        ...prev,
+    if (providerRequiresApiKey(target) && !target.apiKey.trim()) {
+      setProbeStates((previous) => ({
+        ...previous,
         [target.id]: {
           fingerprint,
           mode,
@@ -1235,44 +2097,52 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       }))
       return
     }
-    setProbeStates((prev) => ({ ...prev, [target.id]: { fingerprint, mode, status: 'busy' } }))
-    let result: ModelProviderProbeResult
-    try {
-      result = await window.kunGui.probeModelProvider({
-        baseUrl: target.baseUrl,
-        apiKey: target.apiKey,
-        endpointFormat: target.endpointFormat
-      })
-    } catch (error) {
-      result = { ok: false, message: error instanceof Error ? error.message : String(error) }
+    if (typeof window.kunGui?.probeModelProvider !== 'function') return
+    setProbeStates((previous) => ({
+      ...previous,
+      [target.id]: { fingerprint, mode, status: 'busy' }
+    }))
+
+    const probe = async (): Promise<ModelProviderProbeResult> => {
+      try {
+        return await window.kunGui.probeModelProvider({
+          baseUrl: target.baseUrl,
+          apiKey: target.apiKey,
+          endpointFormat: target.endpointFormat
+        })
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : String(error) }
+      }
     }
+
+    if (mode === 'fetch') {
+      const [result, catalogResult] = await Promise.all([
+        probe(),
+        fetchModelsDevCatalogFor(target)
+      ])
+      openModelImport({
+        target,
+        fingerprint,
+        providerModelIds: result.ok ? [...result.modelIds] : [],
+        catalogResult,
+        providerError: result.ok
+          ? (result.modelIds.length === 0 ? t('providerModelImportProviderReturnedEmpty') : undefined)
+          : result.message,
+        latencyMs: result.ok ? result.latencyMs : 0
+      })
+      return
+    }
+
+    const result = await probe()
     if (!result.ok) {
-      setProbeStates((prev) => ({
-        ...prev,
+      setProbeStates((previous) => ({
+        ...previous,
         [target.id]: { fingerprint, mode, status: 'error', message: result.message }
       }))
       return
     }
-    if (mode === 'fetch') {
-      setProbeStates((prev) => ({
-        ...prev,
-        [target.id]: {
-          fingerprint,
-          mode,
-          status: 'ok',
-          latencyMs: result.latencyMs,
-          total: result.modelIds.length
-        }
-      }))
-      setPendingImport({
-        providerId: target.id,
-        modelIds: [...result.modelIds],
-        latencyMs: result.latencyMs
-      })
-      return
-    }
-    setProbeStates((prev) => ({
-      ...prev,
+    setProbeStates((previous) => ({
+      ...previous,
       [target.id]: {
         fingerprint,
         mode,
@@ -1283,8 +2153,15 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     }))
   }
 
-  const importPickedModels = (target: ModelProviderProfileV1, picked: ProviderModelImportResult): void => {
-    const nextChatModels = mergeProviderModelIds(target.models, picked.chat)
+  const importPickedModels = (
+    target: ModelProviderProfileV1,
+    picked: ProviderModelImportResult,
+    authoritative = false,
+    modelAliases: Readonly<Record<string, readonly string[]>> = {}
+  ): void => {
+    const nextChatModels = authoritative
+      ? [...picked.chat]
+      : mergeProviderModelIds(target.models, picked.chat)
     const nextImageModels = target.image
       ? mergeProviderModelIds(target.image.models, picked.image)
       : picked.image
@@ -1300,6 +2177,19 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     const nextVideoModels = target.video
       ? mergeProviderModelIds(target.video.models, picked.video)
       : picked.video
+    const nextModelProfiles = isCursorSubscriptionProvider(target)
+      ? enrichCursorProviderModelProfiles(
+          target,
+          nextChatModels,
+          picked.catalogModels,
+          modelAliases
+        )
+      : enrichProviderModelProfiles(
+          target,
+          nextChatModels,
+          picked.catalogModels,
+          modelAliases
+        )
     const added =
       addedModelCount(target.models, nextChatModels)
       + addedModelCount(target.image?.models ?? [], nextImageModels)
@@ -1307,12 +2197,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
       + addedModelCount(target.textToSpeech?.models ?? [], nextTextToSpeechModels)
       + addedModelCount(target.music?.models ?? [], nextMusicModels)
       + addedModelCount(target.video?.models ?? [], nextVideoModels)
-    if (added > 0) {
+    if (authoritative || added > 0 || nextModelProfiles !== target.modelProfiles) {
       patchProviderProfile(target, (item) => ({
         ...item,
         models: nextChatModels,
+        modelProfiles: nextModelProfiles,
         ...(nextImageModels.length > 0
-          ? { image: { ...(item.image ?? presetImageCapability(item.id) ?? defaultImageCapability(item.baseUrl)), models: nextImageModels } }
+          ? { image: { ...(item.image ?? presetImageCapability(item) ?? defaultImageCapability(item.baseUrl)), models: nextImageModels } }
           : {}),
         ...(nextSpeechModels.length > 0
           ? { speech: { ...(item.speech ?? presetSpeechCapability(item) ?? defaultSpeechCapability(item.baseUrl)), models: nextSpeechModels } }
@@ -1340,10 +2231,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
 
   const providerKindLabel = (item: ModelProviderProfileV1): string => {
     if (item.id === DEFAULT_MODEL_PROVIDER_ID) return t('modelProviderDefaultBadge')
-    if (tokenPlanPresetForProfileId(item.id)) return t('modelProviderTokenPlanBadge')
-    const preset = getModelProviderPreset(item.id)
-    if (preset?.category === 'subscription') return t('modelProviderPlanBadge')
-    if (preset) return t('modelProviderPresetBadge')
+    const source = resolveModelProviderPresetSource(item)
+    if (source?.mode === 'token-plan') return t('modelProviderTokenPlanBadge')
+    if (source?.preset.category === 'subscription') return t('modelProviderPlanBadge')
+    if (source) return t('modelProviderPresetBadge')
     return t('modelProviderCustomBadge')
   }
 
@@ -1385,41 +2276,64 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const activeVideoBaseUrlInvalid = Boolean(
     activeProvider?.video && !isAcceptableHttpUrl(activeProvider.video.baseUrl)
   )
+  const activeMissingCredential = Boolean(
+    activeProvider &&
+    providerRequiresApiKey(activeProvider) &&
+    !activeProvider.apiKey.trim()
+  )
+  const activeProbeBlocked = activeBaseUrlInvalid || activeMissingCredential
+  const activeCursorAccount = activeProvider
+    ? cursorAccounts[activeProvider.id]
+    : undefined
+  const activeCursorAccountFresh = Boolean(
+    activeProvider
+    && activeCursorAccount
+    && activeCursorAccount.fingerprint === providerConnectionFingerprint(activeProvider)
+  )
+  const activeCursorApiKeyUrl = activeProvider && isCursorSubscriptionProvider(activeProvider)
+    ? resolveModelProviderPresetSource(activeProvider)?.preset.apiKeyUrl
+    : undefined
   const activeTokenPlanRegions = activeProvider
-    ? tokenPlanPresetForProfileId(activeProvider.id)?.tokenPlan?.regions ?? []
+    ? tokenPlanPresetForProfile(activeProvider)?.tokenPlan?.regions ?? []
     : []
 
-  const planProviders = displayProviders.filter((item) => isSubscriptionProviderId(item.id))
-  const apiProviders = displayProviders.filter((item) => !isSubscriptionProviderId(item.id))
+  const normalizedProviderListQuery = providerListQuery.trim().toLowerCase()
+  const filteredProviders = normalizedProviderListQuery
+    ? displayProviders.filter((item) =>
+        `${item.name} ${item.id}`.toLowerCase().includes(normalizedProviderListQuery)
+      )
+    : displayProviders
+  const planProviders = filteredProviders.filter((item) => isSubscriptionProvider(item))
+  const apiProviders = filteredProviders.filter((item) => !isSubscriptionProvider(item))
   // 只要存在任一套餐类供应商就分组展示;否则(通常只有默认 DeepSeek)保持单一平铺列表。
-  const grouped = planProviders.length > 0
+  const grouped = displayProviders.some((item) => isSubscriptionProvider(item))
 
   const renderProviderButton = (item: ModelProviderProfileV1): ReactElement => {
     const selected = activeProvider?.id === item.id
     const isDraft = draftProvider?.id === item.id
     const inUse = !isDraft && activeKunProviderId === item.id
-    const missingKey = !item.apiKey.trim()
+    const missingKey = providerRequiresApiKey(item) && !item.apiKey.trim()
     return (
       <button
         key={item.id}
         type="button"
         aria-pressed={selected}
         onClick={() => setSelectedProviderId(item.id)}
-        className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${
+        className={`w-full min-w-0 overflow-hidden rounded-xl border px-3 py-2.5 text-left transition ${
           selected
             ? 'border-accent/60 bg-ds-main/45 ring-1 ring-accent/30'
             : 'border-ds-border bg-ds-card hover:bg-ds-hover'
         }`}
       >
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="min-w-0 truncate text-[13.5px] font-semibold text-ds-ink">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-ds-ink">
             {item.name.trim() || item.id}
           </span>
           {isDraft ? <ProviderBadge tone="warning">{t('modelProviderDraftBadge')}</ProviderBadge> : null}
           {inUse ? <ProviderBadge tone="accent">{t('modelProviderInUse')}</ProviderBadge> : null}
           {!isDraft && missingKey ? <ProviderBadge tone="warning">{t('modelProviderMissingKey')}</ProviderBadge> : null}
         </div>
-        <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px] text-ds-faint">
+        <div className="mt-1 flex min-w-0 items-center gap-x-1.5 overflow-hidden whitespace-nowrap text-[12px] text-ds-faint">
           <span>{t('modelProviderModelCount', { total: providerModelCount(item) })}</span>
           <span aria-hidden="true">·</span>
           <span>{providerKindLabel(item)}</span>
@@ -1440,7 +2354,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const addMenuEntries = MODEL_PROVIDER_PRESETS.flatMap((preset) => {
     const entries: {
       preset: ModelProviderPreset
-      mode: 'api' | 'token-plan'
+      mode: ModelProviderPresetMode
       profileId: string
       label: string
       group: 'subscription' | 'api'
@@ -1464,28 +2378,44 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     }
     return entries
   })
-  const planAddEntries = addMenuEntries.filter((entry) => entry.group === 'subscription')
-  const apiAddEntries = addMenuEntries.filter((entry) => entry.group === 'api')
+  const normalizedAddProviderQuery = addProviderQuery.trim().toLowerCase()
+  const visibleAddEntries = normalizedAddProviderQuery
+    ? addMenuEntries.filter((entry) =>
+        `${entry.label} ${entry.profileId}`.toLowerCase().includes(normalizedAddProviderQuery)
+      )
+    : addMenuEntries
+  const planAddEntries = visibleAddEntries.filter((entry) => entry.group === 'subscription')
+  const apiAddEntries = visibleAddEntries.filter((entry) => entry.group === 'api')
   const renderAddEntry = (entry: (typeof addMenuEntries)[number]): ReactElement => {
-    const exists = modelProviders.some((item) => item.id === entry.profileId)
+    const multiAccount = isMultiAccountProviderPreset(entry.preset, entry.mode)
+    const accountCount = multiAccount
+      ? modelProviderPresetAccountCount(entry.preset, entry.mode, modelProviders)
+      : 0
+    const exists = !multiAccount && modelProviders.some((item) => item.id === entry.profileId)
     return (
       <button
         key={entry.profileId}
         type="button"
-        role="menuitem"
         onClick={() => {
-          setAddMenuOpen(false)
+          closeAddProviderDialog()
           void addPresetModelProvider(entry.preset, entry.mode)
         }}
-        className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-ds-ink transition hover:bg-ds-hover"
+        className="group grid min-h-20 w-full gap-2 rounded-xl border border-ds-border bg-ds-card px-3.5 py-3 text-left transition hover:border-accent/45 hover:bg-ds-hover"
       >
-        <span>{entry.label}</span>
-        <span className="text-[11px] text-ds-faint">
-          {exists
-            ? t('modelProviderPresetUpdateTag')
-            : entry.group === 'subscription'
-              ? t('modelProviderPlanBadge')
-              : t('modelProviderPresetBadge')}
+        <span className="flex min-w-0 items-start justify-between gap-2">
+          <span className="truncate text-[13.5px] font-semibold text-ds-ink">{entry.label}</span>
+          <StatusPill tone={exists ? 'warning' : accountCount > 0 ? 'success' : 'muted'}>
+            {accountCount > 0
+              ? t('modelProviderAccountCount', { count: accountCount })
+              : exists
+              ? t('modelProviderPresetUpdateTag')
+              : entry.group === 'subscription'
+                ? t('modelProviderPlanBadge')
+                : t('modelProviderPresetBadge')}
+          </StatusPill>
+        </span>
+        <span className="truncate font-mono text-[11.5px] text-ds-faint">
+          {entry.profileId}{multiAccount ? ` · ${t('modelProviderAddAccountHint')}` : ''}
         </span>
       </button>
     )
@@ -1497,85 +2427,139 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
 
   return (
     <>
-    <SettingsCard title={t('providers')}>
-      <SettingRow
-        title={t('providers')}
-        description={t('providersDesc')}
-        wideControl
-        control={
-          <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-            <div className="flex flex-col gap-3">
+      <section className="overflow-hidden rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25">
+        <header className="flex flex-wrap items-start justify-between gap-4 border-b border-ds-border-muted px-5 py-4">
+          <div className="min-w-0">
+            <h2 className="text-[16px] font-semibold text-ds-ink">{t('providers')}</h2>
+            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-ds-muted">{t('providersDesc')}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-xl border border-ds-border bg-ds-main p-1 text-[12px]">
+              <button type="button" onClick={() => setWorkspaceMode('providers')} className={`rounded-lg px-3 py-1.5 ${workspaceMode === 'providers' ? 'bg-ds-card font-semibold text-ds-ink shadow-sm' : 'text-ds-muted'}`}>模型供应商</button>
+              <button type="button" onClick={() => setWorkspaceMode('routes')} className={`rounded-lg px-3 py-1.5 ${workspaceMode === 'routes' ? 'bg-ds-card font-semibold text-accent shadow-sm' : 'text-ds-muted'}`}>高级本地中转站</button>
+            </div>
+          {workspaceMode === 'providers' ? <button
+            ref={addProviderButtonRef}
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={addMenuOpen}
+            onClick={openAddProviderDialog}
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-accent px-4 text-[12.5px] font-semibold text-white shadow-sm transition hover:opacity-90"
+          >
+            <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+            {t('modelProviderAdd')}
+          </button> : null}
+          </div>
+        </header>
+        {workspaceMode === 'routes' ? (
+          <ModelRoutesSettings
+            settings={provider}
+            onChange={(next) => update({ provider: { routePools: next.routePools, localGateway: next.localGateway } })}
+            saveStatus={saveStatus}
+            saveError={saveError}
+            onRetrySave={retrySave}
+            publicBaseUrl={`http://127.0.0.1:${kun.port}`}
+          />
+        ) : <div className="grid gap-4 p-4">
+          <label className="grid gap-1.5 lg:hidden">
+            <span className="text-[12px] font-semibold text-ds-muted">{t('modelProviderCompactSelect')}</span>
+            <select
+              className={selectControlClass}
+              value={activeProvider?.id ?? ''}
+              onChange={(event) => setSelectedProviderId(event.target.value)}
+            >
+              {displayProviders.map((item) => (
+                <option key={item.id} value={item.id}>{item.name.trim() || item.id}</option>
+              ))}
+            </select>
+          </label>
+          <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+            <aside className="hidden min-w-0 content-start gap-3 lg:grid">
+              {displayProviders.length > 5 ? (
+                <label className="relative block">
+                  <Search
+                    className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ds-faint"
+                    strokeWidth={1.9}
+                  />
+                  <input
+                    value={providerListQuery}
+                    onChange={(event) => setProviderListQuery(event.target.value)}
+                    placeholder={t('modelProviderSearchPlaceholder')}
+                    aria-label={t('modelProviderSearchPlaceholder')}
+                    className="w-full rounded-xl border border-ds-border bg-ds-card py-2 pl-9 pr-3 text-[12.5px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                  />
+                </label>
+              ) : null}
               {grouped ? (
                 <>
-                  <ProviderListGroup label={t('modelProviderGroupPlans')} count={planProviders.length}>
-                    {planProviders.map(renderProviderButton)}
-                  </ProviderListGroup>
-                  <ProviderListGroup label={t('modelProviderGroupApi')} count={apiProviders.length}>
-                    {apiProviders.map(renderProviderButton)}
-                  </ProviderListGroup>
+                  {planProviders.length > 0 ? (
+                    <ProviderListGroup label={t('modelProviderGroupPlans')} count={planProviders.length}>
+                      {planProviders.map(renderProviderButton)}
+                    </ProviderListGroup>
+                  ) : null}
+                  {apiProviders.length > 0 ? (
+                    <ProviderListGroup label={t('modelProviderGroupApi')} count={apiProviders.length}>
+                      {apiProviders.map(renderProviderButton)}
+                    </ProviderListGroup>
+                  ) : null}
                 </>
               ) : (
-                <div className="grid gap-2">{displayProviders.map(renderProviderButton)}</div>
+                <div className="grid gap-2">{apiProviders.map(renderProviderButton)}</div>
               )}
-              <div ref={addMenuRef} className="relative">
-                <button
-                  type="button"
-                  aria-haspopup="menu"
-                  aria-expanded={addMenuOpen}
-                  onClick={() => setAddMenuOpen((value) => !value)}
-                  className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-full border border-ds-border bg-ds-card px-3 text-[12.5px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink"
-                >
-                  <Plus className="h-3.5 w-3.5" strokeWidth={1.9} />
-                  {t('modelProviderAdd')}
-                  <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.9} />
-                </button>
-                {addMenuOpen ? (
-                  <div
-                    role="menu"
-                    className="absolute left-0 right-0 z-20 mt-1 max-h-[min(60vh,420px)] overflow-y-auto rounded-xl border border-ds-border bg-ds-card p-1 shadow-lg"
-                  >
-                    <div className="px-2.5 pb-1 pt-1 text-[11px] font-semibold text-ds-faint">
-                      {t('modelProviderGroupPlans')}
-                    </div>
-                    {planAddEntries.map(renderAddEntry)}
-                    <div className="my-1 border-t border-ds-border-muted" />
-                    <div className="px-2.5 pb-1 text-[11px] font-semibold text-ds-faint">
-                      {t('modelProviderGroupApi')}
-                    </div>
-                    {apiAddEntries.map(renderAddEntry)}
-                    <div className="my-1 border-t border-ds-border-muted" />
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setAddMenuOpen(false)
-                        addModelProvider()
-                      }}
-                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-ds-ink transition hover:bg-ds-hover"
-                    >
-                      {t('modelProviderAddMenuCustom')}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            </div>
+              {filteredProviders.length === 0 ? (
+                <p className="rounded-xl border border-dashed border-ds-border-muted px-3 py-6 text-center text-[12px] text-ds-faint">
+                  {t('modelProviderSearchEmpty', { query: providerListQuery.trim() })}
+                </p>
+              ) : null}
+            </aside>
             {activeProvider ? (
-              <div className="grid content-start gap-3 rounded-xl border border-ds-border-muted bg-ds-main/35 p-4">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="min-w-0 truncate text-[14px] font-semibold text-ds-ink">
-                      {activeProvider.name.trim() || activeProvider.id}
-                    </span>
-                    <span className="font-mono text-[12px] text-ds-faint">{activeProvider.id}</span>
-                    {!canEditActiveProviderId ? (
-                      <span title={t('modelProviderIdLocked')} className="text-ds-faint">
-                        <Lock className="h-3.5 w-3.5" strokeWidth={1.9} />
+              <div className="grid min-w-0 content-start gap-4 rounded-2xl border border-ds-border-muted bg-ds-main/30 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="min-w-0 truncate text-[15px] font-semibold text-ds-ink">
+                        {activeProvider.name.trim() || activeProvider.id}
                       </span>
-                    ) : null}
+                      <span className="truncate font-mono text-[11.5px] text-ds-faint">{activeProvider.id}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      {isDraftActive ? (
+                        <StatusPill tone="warning">{t('modelProviderDraftBadge')}</StatusPill>
+                      ) : activeKunProviderId === activeProvider.id ? (
+                        <StatusPill tone="success" icon={<CheckCircle2 className="h-3 w-3" strokeWidth={2} />}>
+                          {t('modelProviderInUse')}
+                        </StatusPill>
+                      ) : null}
+                      <StatusPill
+                        tone={activeProbeBlocked ? 'warning' : 'success'}
+                        icon={activeProbeBlocked ? <AlertCircle className="h-3 w-3" /> : undefined}
+                      >
+                        {activeProbeBlocked ? t('modelProviderNeedsConfiguration') : t('modelProviderReady')}
+                      </StatusPill>
+                      {!isDraftActive ? (
+                        <StatusPill
+                          tone={saveStatus === 'error' ? 'error' : saveStatus === 'saved' ? 'success' : 'muted'}
+                          title={saveStatus === 'error' ? saveError : undefined}
+                        >
+                          {saveStatus === 'saving'
+                            ? t('applying')
+                            : saveStatus === 'error'
+                              ? t('applyFailed')
+                              : saveStatus === 'saved'
+                                ? t('applied')
+                                : t('autoApplyHint')}
+                        </StatusPill>
+                      ) : null}
+                    </div>
                   </div>
                   <button
                     type="button"
-                    disabled={probeBusy}
+                    disabled={probeBusy || activeProbeBlocked}
+                    title={activeMissingCredential
+                      ? t('modelProviderPresetMissingKeyForProbe')
+                      : activeBaseUrlInvalid
+                        ? t('modelProviderInvalidUrl')
+                        : undefined}
                     onClick={() => void runProbe(activeProvider, 'test')}
                     className="inline-flex h-8 items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-3 text-[12px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-60"
                   >
@@ -1585,9 +2569,45 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     {t('modelProviderTestConnection')}
                   </button>
                 </div>
+                <div
+                  role="tablist"
+                  aria-label={t('modelProviderWorkspaceTabs')}
+                  className="flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-ds-border-muted bg-ds-card/70 p-1"
+                >
+                  {PROVIDER_TASK_TABS.map((tab) => {
+                    const selected = activeTab === tab.id
+                    return (
+                      <button
+                        key={tab.id}
+                        id={`provider-settings-tab-${tab.id}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={selected}
+                        aria-controls={`provider-settings-panel-${tab.id}`}
+                        tabIndex={selected ? 0 : -1}
+                        onClick={() => setActiveTab(tab.id)}
+                        onKeyDown={(event) => handleProviderTabKeyDown(event, tab.id)}
+                        className={`h-8 min-w-fit flex-1 rounded-lg px-3 text-[12.5px] font-medium transition ${
+                          selected
+                            ? 'bg-ds-card text-ds-ink shadow-sm ring-1 ring-ds-border-muted'
+                            : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+                        }`}
+                      >
+                        {t(tab.labelKey)}
+                      </button>
+                    )
+                  })}
+                </div>
                 {probeNotice ? <InlineNoticeView notice={probeNotice} /> : null}
+                {activeTab === 'connection' ? (
+                  <div
+                    id="provider-settings-panel-connection"
+                    role="tabpanel"
+                    aria-labelledby="provider-settings-tab-connection"
+                    className="grid gap-4"
+                  >
                 <DetailSection title={t('modelProviderSectionBasics')}>
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3">
                     <label className={fieldLabelClass}>
                       {t('modelProviderName')}
                       <input
@@ -1596,35 +2616,62 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                         onChange={(e) => updateModelProvider(activeProvider.id, { name: e.target.value })}
                       />
                     </label>
-                    <label className={fieldLabelClass}>
-                      {t('modelProviderId')}
-                      <span className="relative block">
-                        <input
-                          className={`w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 font-mono text-[13px] font-normal shadow-sm ${
-                            canEditActiveProviderId
-                              ? 'text-ds-ink focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
-                              : 'pr-9 text-ds-faint'
-                          }`}
-                          value={activeProvider.id}
-                          readOnly={!canEditActiveProviderId}
-                          spellCheck={false}
-                          onChange={(e) => updateModelProviderId(activeProvider.id, e.target.value)}
-                        />
-                        {!canEditActiveProviderId ? (
-                          <span
-                            title={t('modelProviderIdLocked')}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-ds-faint"
-                          >
-                            <Lock className="h-3.5 w-3.5" strokeWidth={1.9} />
-                          </span>
-                        ) : null}
-                      </span>
-                    </label>
                   </div>
                 </DetailSection>
                 <DetailSection title={t('modelProviderSectionConnection')}>
-                  {isCodexProvider(activeProvider.id) ? (
+                  {isCodexProvider(activeProvider) ? (
                     <CodexLoginSection
+                      provider={activeProvider}
+                      onCredentialChange={(apiKey) => updateModelProvider(activeProvider.id, { apiKey })}
+                      t={t}
+                    />
+                  ) : isGeminiSubscriptionProvider(activeProvider) ? (
+                    <GeminiSubscriptionSection
+                      onModelsChange={(models) => updateModelProvider(activeProvider.id, { models })}
+                      t={t}
+                    />
+                  ) : isCursorSubscriptionProvider(activeProvider) ? (
+                    <div className="grid gap-3">
+                      <div className="grid gap-2 rounded-lg border border-ds-border bg-ds-main/30 px-3 py-2 text-[12px] leading-5 text-ds-muted sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                        <p>{t('cursorSubscriptionNote')}</p>
+                        {activeCursorApiKeyUrl ? (
+                          <button
+                            type="button"
+                            className="inline-flex w-fit shrink-0 items-center gap-1.5 rounded-lg border border-accent/20 bg-accent/5 px-3 py-1.5 font-medium text-accent transition hover:bg-accent/10"
+                            onClick={() => {
+                              if (typeof window.kunGui?.openExternal !== 'function') return
+                              void window.kunGui.openExternal(activeCursorApiKeyUrl).catch(() => undefined)
+                            }}
+                          >
+                            {t('cursorSubscriptionGetApiKey')}
+                            <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.9} />
+                          </button>
+                        ) : null}
+                      </div>
+                      <label className={fieldLabelClass}>
+                        {t('modelProviderApiKey')}
+                        <SecretInput
+                          value={activeProvider.apiKey}
+                          onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
+                          visible={showApiKey}
+                          onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
+                          placeholder={t('modelProviderApiKeyPlaceholder')}
+                          autoComplete="off"
+                          showLabel={t('showSecret')}
+                          hideLabel={t('hideSecret')}
+                        />
+                      </label>
+                      {activeCursorAccountFresh && activeCursorAccount ? (
+                        <p className="text-[12px] leading-5 text-ds-muted">
+                          {t('cursorSubscriptionAccount', {
+                            account: activeCursorAccount.label,
+                            keyName: activeCursorAccount.apiKeyName
+                          })}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : isGrokSubscriptionProvider(activeProvider) ? (
+                    <GrokLoginSection
                       provider={activeProvider}
                       onCredentialChange={(apiKey) => updateModelProvider(activeProvider.id, { apiKey })}
                       t={t}
@@ -1711,7 +2758,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     <select
                       className={selectControlClass}
                       value={activeProvider.endpointFormat}
-                      disabled={isCodexProvider(activeProvider.id) || isAgentSdkProvider(activeProvider)}
+                      disabled={isOAuthSubscriptionProvider(activeProvider) || isDelegatedEndpointProvider(activeProvider)}
                       onChange={(e) => updateModelProvider(activeProvider.id, {
                         endpointFormat: e.target.value as ModelEndpointFormat
                       })}
@@ -1723,9 +2770,21 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       ))}
                     </select>
                   </label>
-                  {isCodexProvider(activeProvider.id) ? (
+                  {isCodexProvider(activeProvider) ? (
                     <p className="text-[12px] leading-5 text-ds-muted">
                       {t('codexEndpointLocked')}
+                    </p>
+                  ) : isGeminiSubscriptionProvider(activeProvider) ? (
+                    <p className="text-[12px] leading-5 text-ds-muted">
+                      {t('geminiEndpointLocked')}
+                    </p>
+                  ) : isCursorSubscriptionProvider(activeProvider) ? (
+                    <p className="text-[12px] leading-5 text-ds-muted">
+                      {t('cursorEndpointLocked')}
+                    </p>
+                  ) : isGrokSubscriptionProvider(activeProvider) ? (
+                    <p className="text-[12px] leading-5 text-ds-muted">
+                      {t('grokEndpointLocked')}
                     </p>
                   ) : isAgentSdkProvider(activeProvider) ? (
                     <p className="text-[12px] leading-5 text-ds-muted">
@@ -1737,10 +2796,49 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     </p>
                   ) : null}
                 </DetailSection>
+                  </div>
+                ) : null}
+                {activeTab === 'advanced' ? (
+                  <div
+                    id="provider-settings-panel-advanced"
+                    role="tabpanel"
+                    aria-labelledby="provider-settings-tab-advanced"
+                    className="grid gap-4"
+                  >
+                    <DetailSection title={t('modelProviderIdentitySection')}>
+                      <label className={fieldLabelClass}>
+                        {t('modelProviderId')}
+                        <span className="relative block">
+                          <input
+                            className={`w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 font-mono text-[13px] font-normal shadow-sm ${
+                              canEditActiveProviderId
+                                ? 'text-ds-ink focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
+                                : 'pr-9 text-ds-faint'
+                            }`}
+                            value={activeProvider.id}
+                            readOnly={!canEditActiveProviderId}
+                            spellCheck={false}
+                            onChange={(e) => updateModelProviderId(activeProvider.id, e.target.value)}
+                          />
+                          {!canEditActiveProviderId ? (
+                            <span
+                              title={t('modelProviderIdLocked')}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-ds-faint"
+                            >
+                              <Lock className="h-3.5 w-3.5" strokeWidth={1.9} />
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="text-[12px] font-normal leading-5 text-ds-faint">
+                          {t('modelProviderIdentityHint')}
+                        </span>
+                      </label>
+                    </DetailSection>
                 <DetailSection
                   title={t('modelProviderRetrySection')}
                   action={
                     <Toggle
+                      ariaLabel={t('modelProviderRetrySection')}
                       checked={activeRetry.maxAttempts > 0}
                       onChange={(enabled) => updateModelProvider(activeProvider.id, {
                         retry: {
@@ -1808,12 +2906,21 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     </div>
                   ) : null}
                 </DetailSection>
+                  </div>
+                ) : null}
+                {activeTab === 'models' ? (
+                  <div
+                    id="provider-settings-panel-models"
+                    role="tabpanel"
+                    aria-labelledby="provider-settings-tab-models"
+                    className="grid gap-4"
+                  >
                 <DetailSection
                   title={`${t('modelProviderModels')} · ${providerModelCount(activeProvider)}`}
                   action={
                     <button
                       type="button"
-                      disabled={probeBusy}
+                      disabled={probeBusy || activeProbeBlocked}
                       onClick={() => void runProbe(activeProvider, 'fetch')}
                       className="inline-flex h-7 items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-2.5 text-[12px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-60"
                     >
@@ -1832,24 +2939,44 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     onChange={(next) => patchProviderProfile(activeProvider, () => next)}
                   />
                 </DetailSection>
-                <DetailSection
+                  </div>
+                ) : null}
+                {activeTab === 'capabilities' ? (
+                  <div
+                    id="provider-settings-panel-capabilities"
+                    role="tabpanel"
+                    aria-labelledby="provider-settings-tab-capabilities"
+                    className="grid gap-3"
+                  >
+                <CapabilitySection
+                  capabilityId="image"
+                  icon={<ImageIcon className="h-4 w-4" strokeWidth={1.9} />}
                   title={t('modelProviderImageCapability')}
-                  action={
-                    <Toggle
-                      checked={Boolean(activeProvider.image)}
-                      onChange={(value) => {
-                        if (value) {
-                          updateModelProvider(activeProvider.id, {
-                            image: presetImageCapability(activeProvider.id) ?? defaultImageCapability(activeProvider.baseUrl)
-                          })
-                        } else {
-                          removeModelProviderImage(activeProvider.id)
-                        }
-                      }}
-                    />
-                  }
+                  description={t('modelProviderImageCapabilityDesc')}
+                  enabled={Boolean(activeProvider.image)}
+                  invalid={activeImageBaseUrlInvalid}
+                  expanded={expandedCapabilities.has('image')}
+                  modelCountLabel={activeProvider.image?.models.length
+                    ? t('modelProviderModelCount', { total: activeProvider.image.models.length })
+                    : undefined}
+                  configureLabel={t('modelProviderCapabilityConfigure')}
+                  collapseLabel={t('modelProviderCapabilityCollapse')}
+                  enabledLabel={t('modelProviderCapabilityEnabled')}
+                  disabledLabel={t('modelProviderCapabilityDisabled')}
+                  needsConfigurationLabel={t('modelProviderNeedsConfiguration')}
+                  onExpandedChange={(expanded) => setCapabilityExpanded('image', expanded)}
+                  onToggle={(value) => {
+                    if (value) {
+                      updateModelProvider(activeProvider.id, {
+                        image: presetImageCapability(activeProvider) ?? defaultImageCapability(activeProvider.baseUrl)
+                      })
+                      setCapabilityExpanded('image', true)
+                    } else {
+                      removeModelProviderImage(activeProvider.id)
+                      setCapabilityExpanded('image', false)
+                    }
+                  }}
                 >
-                  <p className="text-[12px] leading-5 text-ds-faint">{t('modelProviderImageCapabilityDesc')}</p>
                   {activeProvider.image ? (
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className={fieldLabelClass}>
@@ -1894,25 +3021,36 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       </label>
                     </div>
                   ) : null}
-                </DetailSection>
-                <DetailSection
+                </CapabilitySection>
+                <CapabilitySection
+                  capabilityId="speech"
+                  icon={<Mic className="h-4 w-4" strokeWidth={1.9} />}
                   title={t('modelProviderSpeechCapability')}
-                  action={
-                    <Toggle
-                      checked={Boolean(activeProvider.speech)}
-                      onChange={(value) => {
-                        if (value) {
-                          updateModelProvider(activeProvider.id, {
-                            speech: presetSpeechCapability(activeProvider) ?? defaultSpeechCapability(activeProvider.baseUrl)
-                          })
-                        } else {
-                          removeModelProviderSpeech(activeProvider.id)
-                        }
-                      }}
-                    />
-                  }
+                  description={t('modelProviderSpeechCapabilityDesc')}
+                  enabled={Boolean(activeProvider.speech)}
+                  invalid={activeSpeechBaseUrlInvalid}
+                  expanded={expandedCapabilities.has('speech')}
+                  modelCountLabel={activeProvider.speech?.models.length
+                    ? t('modelProviderModelCount', { total: activeProvider.speech.models.length })
+                    : undefined}
+                  configureLabel={t('modelProviderCapabilityConfigure')}
+                  collapseLabel={t('modelProviderCapabilityCollapse')}
+                  enabledLabel={t('modelProviderCapabilityEnabled')}
+                  disabledLabel={t('modelProviderCapabilityDisabled')}
+                  needsConfigurationLabel={t('modelProviderNeedsConfiguration')}
+                  onExpandedChange={(expanded) => setCapabilityExpanded('speech', expanded)}
+                  onToggle={(value) => {
+                    if (value) {
+                      updateModelProvider(activeProvider.id, {
+                        speech: presetSpeechCapability(activeProvider) ?? defaultSpeechCapability(activeProvider.baseUrl)
+                      })
+                      setCapabilityExpanded('speech', true)
+                    } else {
+                      removeModelProviderSpeech(activeProvider.id)
+                      setCapabilityExpanded('speech', false)
+                    }
+                  }}
                 >
-                  <p className="text-[12px] leading-5 text-ds-faint">{t('modelProviderSpeechCapabilityDesc')}</p>
                   {activeProvider.speech ? (
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className={fieldLabelClass}>
@@ -1957,26 +3095,37 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       </label>
                     </div>
                   ) : null}
-                </DetailSection>
-                <DetailSection
+                </CapabilitySection>
+                <CapabilitySection
+                  capabilityId="tts"
+                  icon={<AudioLines className="h-4 w-4" strokeWidth={1.9} />}
                   title={t('modelProviderTextToSpeechCapability')}
-                  action={
-                    <Toggle
-                      checked={Boolean(activeProvider.textToSpeech)}
-                      onChange={(value) => {
-                        if (value) {
-                          updateModelProvider(activeProvider.id, {
-                            textToSpeech: presetTextToSpeechCapability(activeProvider) ??
-                              defaultTextToSpeechCapability(activeProvider.baseUrl)
-                          })
-                        } else {
-                          removeModelProviderTextToSpeech(activeProvider.id)
-                        }
-                      }}
-                    />
-                  }
+                  description={t('modelProviderTextToSpeechCapabilityDesc')}
+                  enabled={Boolean(activeProvider.textToSpeech)}
+                  invalid={activeTextToSpeechBaseUrlInvalid}
+                  expanded={expandedCapabilities.has('tts')}
+                  modelCountLabel={activeProvider.textToSpeech?.models.length
+                    ? t('modelProviderModelCount', { total: activeProvider.textToSpeech.models.length })
+                    : undefined}
+                  configureLabel={t('modelProviderCapabilityConfigure')}
+                  collapseLabel={t('modelProviderCapabilityCollapse')}
+                  enabledLabel={t('modelProviderCapabilityEnabled')}
+                  disabledLabel={t('modelProviderCapabilityDisabled')}
+                  needsConfigurationLabel={t('modelProviderNeedsConfiguration')}
+                  onExpandedChange={(expanded) => setCapabilityExpanded('tts', expanded)}
+                  onToggle={(value) => {
+                    if (value) {
+                      updateModelProvider(activeProvider.id, {
+                        textToSpeech: presetTextToSpeechCapability(activeProvider) ??
+                          defaultTextToSpeechCapability(activeProvider.baseUrl)
+                      })
+                      setCapabilityExpanded('tts', true)
+                    } else {
+                      removeModelProviderTextToSpeech(activeProvider.id)
+                      setCapabilityExpanded('tts', false)
+                    }
+                  }}
                 >
-                  <p className="text-[12px] leading-5 text-ds-faint">{t('modelProviderTextToSpeechCapabilityDesc')}</p>
                   {activeProvider.textToSpeech ? (
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className={fieldLabelClass}>
@@ -2021,25 +3170,36 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       </label>
                     </div>
                   ) : null}
-                </DetailSection>
-                <DetailSection
+                </CapabilitySection>
+                <CapabilitySection
+                  capabilityId="music"
+                  icon={<Music2 className="h-4 w-4" strokeWidth={1.9} />}
                   title={t('modelProviderMusicCapability')}
-                  action={
-                    <Toggle
-                      checked={Boolean(activeProvider.music)}
-                      onChange={(value) => {
-                        if (value) {
-                          updateModelProvider(activeProvider.id, {
-                            music: presetMusicCapability(activeProvider) ?? defaultMusicCapability(activeProvider.baseUrl)
-                          })
-                        } else {
-                          removeModelProviderMusic(activeProvider.id)
-                        }
-                      }}
-                    />
-                  }
+                  description={t('modelProviderMusicCapabilityDesc')}
+                  enabled={Boolean(activeProvider.music)}
+                  invalid={activeMusicBaseUrlInvalid}
+                  expanded={expandedCapabilities.has('music')}
+                  modelCountLabel={activeProvider.music?.models.length
+                    ? t('modelProviderModelCount', { total: activeProvider.music.models.length })
+                    : undefined}
+                  configureLabel={t('modelProviderCapabilityConfigure')}
+                  collapseLabel={t('modelProviderCapabilityCollapse')}
+                  enabledLabel={t('modelProviderCapabilityEnabled')}
+                  disabledLabel={t('modelProviderCapabilityDisabled')}
+                  needsConfigurationLabel={t('modelProviderNeedsConfiguration')}
+                  onExpandedChange={(expanded) => setCapabilityExpanded('music', expanded)}
+                  onToggle={(value) => {
+                    if (value) {
+                      updateModelProvider(activeProvider.id, {
+                        music: presetMusicCapability(activeProvider) ?? defaultMusicCapability(activeProvider.baseUrl)
+                      })
+                      setCapabilityExpanded('music', true)
+                    } else {
+                      removeModelProviderMusic(activeProvider.id)
+                      setCapabilityExpanded('music', false)
+                    }
+                  }}
                 >
-                  <p className="text-[12px] leading-5 text-ds-faint">{t('modelProviderMusicCapabilityDesc')}</p>
                   {activeProvider.music ? (
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className={fieldLabelClass}>
@@ -2084,25 +3244,36 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       </label>
                     </div>
                   ) : null}
-                </DetailSection>
-                <DetailSection
+                </CapabilitySection>
+                <CapabilitySection
+                  capabilityId="video"
+                  icon={<Clapperboard className="h-4 w-4" strokeWidth={1.9} />}
                   title={t('modelProviderVideoCapability')}
-                  action={
-                    <Toggle
-                      checked={Boolean(activeProvider.video)}
-                      onChange={(value) => {
-                        if (value) {
-                          updateModelProvider(activeProvider.id, {
-                            video: presetVideoCapability(activeProvider) ?? defaultVideoCapability(activeProvider.baseUrl)
-                          })
-                        } else {
-                          removeModelProviderVideo(activeProvider.id)
-                        }
-                      }}
-                    />
-                  }
+                  description={t('modelProviderVideoCapabilityDesc')}
+                  enabled={Boolean(activeProvider.video)}
+                  invalid={activeVideoBaseUrlInvalid}
+                  expanded={expandedCapabilities.has('video')}
+                  modelCountLabel={activeProvider.video?.models.length
+                    ? t('modelProviderModelCount', { total: activeProvider.video.models.length })
+                    : undefined}
+                  configureLabel={t('modelProviderCapabilityConfigure')}
+                  collapseLabel={t('modelProviderCapabilityCollapse')}
+                  enabledLabel={t('modelProviderCapabilityEnabled')}
+                  disabledLabel={t('modelProviderCapabilityDisabled')}
+                  needsConfigurationLabel={t('modelProviderNeedsConfiguration')}
+                  onExpandedChange={(expanded) => setCapabilityExpanded('video', expanded)}
+                  onToggle={(value) => {
+                    if (value) {
+                      updateModelProvider(activeProvider.id, {
+                        video: presetVideoCapability(activeProvider) ?? defaultVideoCapability(activeProvider.baseUrl)
+                      })
+                      setCapabilityExpanded('video', true)
+                    } else {
+                      removeModelProviderVideo(activeProvider.id)
+                      setCapabilityExpanded('video', false)
+                    }
+                  }}
                 >
-                  <p className="text-[12px] leading-5 text-ds-faint">{t('modelProviderVideoCapabilityDesc')}</p>
                   {activeProvider.video ? (
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className={fieldLabelClass}>
@@ -2147,33 +3318,10 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       </label>
                     </div>
                   ) : null}
-                </DetailSection>
-                {isDraftActive ? (
-                  <DetailSection title={t('modelProviderDraftSection')}>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={commitProviderDraft}
-                        className="inline-flex h-9 w-fit items-center gap-2 rounded-full bg-accent px-4 text-[12.5px] font-semibold text-white shadow-sm transition hover:opacity-90"
-                      >
-                        <Plus className="h-3.5 w-3.5" strokeWidth={2} />
-                        {t('modelProviderDraftConfirm')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={cancelProviderDraft}
-                        className="inline-flex h-9 w-fit items-center gap-2 rounded-full border border-ds-border bg-ds-card px-3 text-[12.5px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink"
-                      >
-                        {t('modelProviderDraftDiscard')}
-                      </button>
-                      <span className="text-[12px] text-ds-faint">
-                        {activeProvider.apiKey.trim()
-                          ? t('modelProviderDraftHintReady')
-                          : t('modelProviderDraftHintNoKey')}
-                      </span>
-                    </div>
-                  </DetailSection>
-                ) : activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID ? (
+                </CapabilitySection>
+                  </div>
+                ) : null}
+                {!isDraftActive && activeTab === 'advanced' && activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID ? (
                   <DetailSection title={t('modelProviderSectionDanger')}>
                     <div className="flex flex-wrap items-center gap-3">
                       <button
@@ -2188,19 +3336,58 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     </div>
                   </DetailSection>
                 ) : null}
+                {isDraftActive ? (
+                  <div className="sticky bottom-0 z-10 -mx-1 mt-2 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-accent/30 bg-ds-card/95 px-4 py-3 shadow-lg backdrop-blur">
+                    <div className="min-w-0">
+                      <div className="text-[12.5px] font-semibold text-ds-ink">{t('modelProviderDraftSection')}</div>
+                      <p className="mt-0.5 text-[12px] text-ds-faint">
+                        {activeProvider.apiKey.trim()
+                          ? t('modelProviderDraftHintReady')
+                          : t('modelProviderDraftHintNoKey')}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={cancelProviderDraft}
+                        className="inline-flex h-9 items-center rounded-full border border-ds-border bg-ds-card px-3 text-[12.5px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink"
+                      >
+                        {t('modelProviderDraftDiscard')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={commitProviderDraft}
+                        className="inline-flex h-9 items-center gap-2 rounded-full bg-accent px-4 text-[12.5px] font-semibold text-white shadow-sm transition hover:opacity-90"
+                      >
+                        <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+                        {t('modelProviderDraftConfirm')}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
-        }
-      />
-      <SettingRow
-        title={t('proxyUrl')}
-        description={t('proxyUrlDesc')}
-        control={
-          <div className="flex w-full min-w-0 flex-col gap-2 md:max-w-md">
+        </div>}
+      </section>
+      <details className="group rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-[14px] font-semibold text-ds-ink">{t('modelProviderGlobalNetwork')}</h2>
+              <StatusPill tone={providerProxy.enabled ? 'success' : 'muted'}>
+                {providerProxy.enabled ? t('proxyEnabled') : t('modelProviderCapabilityDisabled')}
+              </StatusPill>
+            </div>
+            <p className="mt-1 text-[12.5px] leading-5 text-ds-muted">{t('proxyUrlDesc')}</p>
+          </div>
+          <ChevronDown className="h-4 w-4 shrink-0 text-ds-faint transition group-open:rotate-180" strokeWidth={1.9} />
+        </summary>
+        <div className="grid gap-3 border-t border-ds-border-muted px-5 py-4 md:grid-cols-[220px_minmax(0,1fr)]">
             <label className="flex items-center justify-between gap-3 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-muted shadow-sm">
               <span>{t('proxyEnabled')}</span>
               <Toggle
+                ariaLabel={t('proxyEnabled')}
                 checked={providerProxy.enabled === true}
                 onChange={(enabled) => updateProviderProxy({ enabled })}
               />
@@ -2212,18 +3399,113 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
               spellCheck={false}
               onChange={(e) => updateProviderProxy({ url: e.target.value })}
             />
-          </div>
-        }
-      />
-    </SettingsCard>
-    {pendingImport && pendingImportProvider ? (
+        </div>
+      </details>
+      {addMenuOpen ? (
+        <div
+          className="ds-no-drag fixed inset-0 z-50 grid place-items-center overscroll-none bg-slate-950/40 p-4 backdrop-blur-md dark:bg-black/65"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-provider-dialog-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeAddProviderDialog()
+          }}
+        >
+          <section
+            ref={addProviderDialogRef}
+            onKeyDown={handleAddProviderDialogKeyDown}
+            className="flex max-h-[min(720px,calc(100dvh-2rem))] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-ds-border bg-ds-card shadow-panel"
+          >
+            <header className="flex shrink-0 items-start justify-between gap-3 border-b border-ds-border px-5 py-4">
+              <div>
+                <h2 id="add-provider-dialog-title" className="text-[15px] font-semibold text-ds-ink">
+                  {t('modelProviderAddDialogTitle')}
+                </h2>
+                <p className="mt-1 text-[12.5px] text-ds-faint">{t('modelProviderAddDialogDesc')}</p>
+              </div>
+              <button
+                type="button"
+                aria-label={t('modelProviderAddDialogCancel')}
+                onClick={closeAddProviderDialog}
+                className="rounded-full p-1.5 text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+              >
+                <X className="h-4 w-4" strokeWidth={1.9} />
+              </button>
+            </header>
+            <div className="shrink-0 border-b border-ds-border px-5 py-3">
+              <label className="relative block">
+                <Search
+                  className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ds-faint"
+                  strokeWidth={1.9}
+                />
+                <input
+                  autoFocus
+                  value={addProviderQuery}
+                  onChange={(event) => setAddProviderQuery(event.target.value)}
+                  placeholder={t('modelProviderAddDialogSearch')}
+                  aria-label={t('modelProviderAddDialogSearch')}
+                  className="w-full rounded-xl border border-ds-border bg-ds-card py-2 pl-9 pr-3 text-[13px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                />
+              </label>
+            </div>
+            <div className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-5 py-4">
+              <button
+                type="button"
+                onClick={() => {
+                  closeAddProviderDialog()
+                  addModelProvider()
+                }}
+                className="mb-4 flex w-full items-center justify-between gap-3 rounded-xl border border-dashed border-accent/45 bg-accent/5 px-4 py-3 text-left transition hover:bg-accent/10"
+              >
+                <span>
+                  <span className="block text-[13.5px] font-semibold text-ds-ink">{t('modelProviderAddMenuCustom')}</span>
+                  <span className="mt-0.5 block text-[12px] text-ds-faint">{t('modelProviderAddCustomDesc')}</span>
+                </span>
+                <Plus className="h-4 w-4 shrink-0 text-accent" strokeWidth={2} />
+              </button>
+              {planAddEntries.length > 0 ? (
+                <div className="mb-5 grid gap-2">
+                  <div className="flex items-center gap-2 px-1">
+                    <h3 className="text-[12px] font-semibold text-ds-muted">{t('modelProviderGroupPlans')}</h3>
+                    <span className="text-[11px] text-ds-faint">{planAddEntries.length}</span>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">{planAddEntries.map(renderAddEntry)}</div>
+                </div>
+              ) : null}
+              {apiAddEntries.length > 0 ? (
+                <div className="grid gap-2">
+                  <div className="flex items-center gap-2 px-1">
+                    <h3 className="text-[12px] font-semibold text-ds-muted">{t('modelProviderGroupApi')}</h3>
+                    <span className="text-[11px] text-ds-faint">{apiAddEntries.length}</span>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">{apiAddEntries.map(renderAddEntry)}</div>
+                </div>
+              ) : null}
+              {planAddEntries.length === 0 && apiAddEntries.length === 0 ? (
+                <p className="rounded-xl border border-dashed border-ds-border-muted px-4 py-8 text-center text-[12.5px] text-ds-faint">
+                  {t('modelProviderAddDialogEmpty', { query: addProviderQuery.trim() })}
+                </p>
+              ) : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {pendingImport && pendingImportProvider ? (
       <ProviderModelImportDialog
         provider={pendingImportProvider}
-        fetchedModelIds={pendingImport.modelIds}
+        providerModelIds={pendingImport.providerModelIds}
+        catalogResult={pendingImport.catalogResult}
+        providerError={pendingImport.providerError}
+        authoritative={pendingImport.authoritative}
         t={t}
         onCancel={() => setPendingImport(null)}
         onConfirm={(picked) => {
-          importPickedModels(pendingImportProvider, picked)
+          importPickedModels(
+            pendingImportProvider,
+            picked,
+            pendingImport.authoritative,
+            pendingImport.modelAliases
+          )
           setPendingImport(null)
         }}
       />

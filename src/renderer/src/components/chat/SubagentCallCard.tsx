@@ -1,10 +1,12 @@
 import type { ReactElement } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { Check, ChevronDown, ChevronRight, ExternalLink, Hourglass, Loader2, TriangleAlert } from 'lucide-react'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { AgentKun } from '../subagents/AgentKun'
+import { BUILTIN_AGENT_CATALOG_BY_ID } from '../../../../../kun/src/delegation/builtin-agent-catalog'
 
 /**
  * "Kun Crew" — the subagent (`delegate_task`) visualization for the chat
@@ -25,6 +27,10 @@ const KNOWN_POSE_IDS = new Set([
   'explore',
   'design-reviewer',
   'over-engineering-reviewer',
+  'code-reviewer',
+  'test-engineer',
+  'security-auditor',
+  'web-performance-auditor',
   'code-review',
   'compaction',
   'title',
@@ -41,15 +47,19 @@ type DelegateDetail = {
   summary?: string
   error?: string
   profile?: string
+  profileName?: string
+  model?: string
   toolPolicy?: string
   toolInvocations?: number
   durationMs?: number
   queuedMs?: number
   totalTokens?: number
   detached?: boolean
+  generated?: boolean
+  generatedAgentName?: string
 }
 
-function parseDelegateDetail(detail: string | undefined): DelegateDetail {
+export function parseDelegateDetail(detail: string | undefined): DelegateDetail {
   if (!detail || !detail.trim()) return {}
   let raw: unknown
   try {
@@ -60,6 +70,13 @@ function parseDelegateDetail(detail: string | undefined): DelegateDetail {
   if (!raw || typeof raw !== 'object') return {}
   const obj = raw as Record<string, unknown>
   const usage = obj.usage && typeof obj.usage === 'object' ? (obj.usage as Record<string, unknown>) : undefined
+  const routing = obj.routing && typeof obj.routing === 'object' ? (obj.routing as Record<string, unknown>) : undefined
+  const generatedAgent = obj.generatedAgent && typeof obj.generatedAgent === 'object'
+    ? (obj.generatedAgent as Record<string, unknown>)
+    : undefined
+  const routingAgent = routing?.agent && typeof routing.agent === 'object'
+    ? (routing.agent as Record<string, unknown>)
+    : undefined
   const str = (v: unknown): string | undefined =>
     typeof v === 'string' && v.trim() ? v.trim() : undefined
   const status = (v: unknown): DelegateDetail['status'] =>
@@ -74,12 +91,16 @@ function parseDelegateDetail(detail: string | undefined): DelegateDetail {
     summary: str(obj.summary),
     error: str(obj.error),
     profile: str(obj.profile),
+    profileName: str(obj.profileName),
+    model: str(obj.model),
     toolPolicy: str(obj.toolPolicy),
     toolInvocations: num(obj.toolInvocations),
     durationMs: num(obj.durationMs),
     queuedMs: num(obj.queuedMs),
     totalTokens: usage ? num(usage.totalTokens) : undefined,
-    detached: obj.detached === true
+    detached: obj.detached === true,
+    generated: routing?.selectedKind === 'generated' || str(obj.profile)?.startsWith('generated:') === true,
+    generatedAgentName: str(generatedAgent?.name) ?? str(routingAgent?.name)
   }
 }
 
@@ -87,6 +108,8 @@ type ChildMeta = {
   childId?: string
   childLabel?: string
   childProfile?: string
+  childProfileName?: string
+  childModel?: string
   childStatus?: string
   childSeq?: number
   parentTurnId?: string
@@ -110,6 +133,8 @@ function readChildMeta(block: ChatBlock): ChildMeta {
     childId: str(child.childId),
     childLabel: str(child.childLabel),
     childProfile: str(child.childProfile),
+    childProfileName: str(child.childProfileName),
+    childModel: str(child.childModel),
     childStatus: str(child.childStatus),
     childSeq: typeof child.childSeq === 'number' ? child.childSeq : undefined,
     parentTurnId: str(child.parentTurnId),
@@ -300,6 +325,14 @@ function BackgroundPill({ t }: { t: (k: string) => string }): ReactElement {
   )
 }
 
+function GeneratedPill({ t }: { t: TFunction<'common'> }): ReactElement {
+  return (
+    <span className="whitespace-nowrap rounded-full bg-violet-500/10 px-2 py-[2px] text-[10.5px] font-semibold text-violet-600 dark:text-violet-300">
+      {t('subagentGeneratedBadge', { defaultValue: 'Generated' })}
+    </span>
+  )
+}
+
 /** 2.5px liveness lane directly under the trigger row. */
 function LaneHairline({ status, animate }: { status: CardStatus; animate: boolean }): ReactElement | null {
   if (status === 'queued') return null
@@ -391,6 +424,47 @@ function MetaChip({ children, title }: { children: React.ReactNode; title?: stri
   )
 }
 
+function AgentModelMetadata({
+  agentIdentity,
+  profileId,
+  model,
+  compact,
+  t
+}: {
+  agentIdentity: string
+  profileId?: string
+  model: string
+  compact: boolean
+  t: TFunction<'common'>
+}): ReactElement {
+  const labelClass = 'shrink-0 rounded-[5px] bg-ds-card-muted/70 px-1.5 py-0.5 font-semibold text-ds-faint'
+  const valueClass = 'min-w-0 truncate rounded-[5px] bg-ds-card-muted/45 px-1.5 py-0.5 text-ds-muted'
+  return (
+    <div
+      data-testid="subagent-route-metadata"
+      data-agent-id={profileId ?? ''}
+      data-model={model}
+      className="mt-1 flex min-w-0 items-center gap-1 overflow-hidden text-[10.5px] leading-4"
+    >
+      <span className={labelClass}>{t('subagentAgentLabel', { defaultValue: 'Agent' })}</span>
+      <span
+        className={`${valueClass} ${compact ? 'max-w-[180px]' : 'max-w-[240px]'}`}
+        title={agentIdentity}
+      >
+        {agentIdentity}
+      </span>
+      <span className="shrink-0 text-ds-faint">·</span>
+      <span className={labelClass}>{t('subagentModelLabel', { defaultValue: 'Model' })}</span>
+      <span
+        className={`${valueClass} ${compact ? 'max-w-[130px]' : 'max-w-[180px]'} font-mono`}
+        title={model}
+      >
+        {model}
+      </span>
+    </div>
+  )
+}
+
 export function SubagentCallCard({
   block,
   compact = false,
@@ -420,6 +494,7 @@ export function SubagentCallCard({
   )
   const status = resolveStatus(block, child, detail)
   const detached = child.detached === true || detail.detached === true
+  const generated = detail.generated === true || (child.childProfile?.startsWith('generated:') ?? false)
   const animate = !reducedMotion && onScreen && status === 'running'
 
   // Profile id: prefer the live `childProfile` from the runtime metadata (set on
@@ -431,20 +506,33 @@ export function SubagentCallCard({
   const isKnownPose = KNOWN_POSE_IDS.has(poseId)
   const hue = isKnownPose ? null : hashHue(poseId)
 
-  // Name priority: localized name for a known built-in role → the model's label
-  // → a custom profile's own name → a short name derived from the task → default.
+  // Keep the task label and the selected agent identity separate. The runtime
+  // snapshot is authoritative for custom/generated roles; built-ins may use a
+  // localized catalog label without consulting mutable profile settings.
   const taskText = block.kind === 'tool' ? splitTaskLine(block as ToolBlock) : undefined
-  const roleName =
+  const recordedAgentName = child.childProfileName || detail.profileName || detail.generatedAgentName
+  const localizedBuiltinName =
+    profileId && BUILTIN_AGENT_CATALOG_BY_ID[profileId]
+      ? t(`subagentsPanel.role.${profileId}.name`, BUILTIN_AGENT_CATALOG_BY_ID[profileId]!.name)
+      : undefined
+  const agentName =
+    localizedBuiltinName ||
+    recordedAgentName ||
     (profileId && KNOWN_POSE_IDS.has(profileId)
       ? t(`subagentsPanel.role.${profileId}.name`, profileId)
       : undefined) ||
-    child.childLabel?.trim() ||
     profileId?.trim() ||
+    t('subagentNotRecorded', { defaultValue: 'Not recorded' })
+  const agentIdentity = profileId && agentName !== profileId
+    ? `${agentName} (${profileId})`
+    : agentName
+  const model = child.childModel || detail.model || t('subagentNotRecorded', { defaultValue: 'Not recorded' })
+  const taskTitle =
+    child.childLabel?.trim() ||
     taskText?.trim().split(/\s+/).slice(0, 6).join(' ').slice(0, 28) ||
+    agentName ||
     t('subagentDefaultName')
-  const taskParts = [child.childLabel, detail.summary || (block.kind === 'tool' ? splitTaskLine(block as ToolBlock) : undefined)]
-    .filter((p): p is string => Boolean(p && p.trim()))
-  const taskLine = taskParts.join(' · ')
+  const taskLine = detail.summary?.trim() || (taskText?.trim() !== taskTitle ? taskText?.trim() : '')
 
   const elapsed = useElapsed(status, block.createdAt, child.durationMs ?? detail.durationMs, tickNow)
   const steps = child.toolInvocations ?? detail.toolInvocations
@@ -481,7 +569,7 @@ export function SubagentCallCard({
       ref={ref as React.RefObject<HTMLElement>}
       className={`${shellClass}${failBorder}`}
       style={{ ['--ds-subagent-stagger' as string]: staggerDelay }}
-      aria-label={`${roleName} · ${pillText(status, t)}`}
+      aria-label={`${taskTitle} · ${agentIdentity} · ${model} · ${pillText(status, t)}`}
     >
       <div
         role={hasBody ? 'button' : undefined}
@@ -502,16 +590,24 @@ export function SubagentCallCard({
         }`}
       >
         <AvatarDisc poseId={poseId} status={status} hue={hue} compact={compact} animate={animate} />
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-2">
-            <span className="truncate text-[14px] font-semibold text-ds-ink">{roleName}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-[14px] font-semibold text-ds-ink" title={taskTitle}>{taskTitle}</span>
+            {generated ? <GeneratedPill t={t} /> : null}
             {detached ? <BackgroundPill t={t} /> : null}
             {!compact || !inGroup ? <StatusPill status={status} t={t} /> : null}
-          </span>
+          </div>
+          <AgentModelMetadata
+            agentIdentity={agentIdentity}
+            profileId={profileId}
+            model={model}
+            compact={compact}
+            t={t}
+          />
           {taskLine ? (
-            <span className="mt-0.5 block truncate text-[12.5px] text-ds-muted">{taskLine}</span>
+            <span className="mt-0.5 block truncate text-[12.5px] text-ds-muted" title={taskLine}>{taskLine}</span>
           ) : null}
-        </span>
+        </div>
         <span className="shrink-0 text-right tabular-nums">
           <span className="block text-[13px] font-semibold text-ds-ink">{elapsed}</span>
           <span className="mt-px block text-[10.5px] text-ds-faint">

@@ -1,30 +1,47 @@
 import { describe, expect, it } from 'vitest'
-import { imagePreviewSizingStyle } from './ImagePreviewLightbox'
+import { imagePreviewDisplaySize } from './ImagePreviewLightbox'
 
 describe('ImagePreviewLightbox', () => {
-  it('scales portrait images against the same fitted box at every zoom level', () => {
-    expect(imagePreviewSizingStyle(0.75)).toEqual({
-      maxWidth: '75%',
-      maxHeight: '75%'
+  const portrait = { width: 1_000, height: 2_000 }
+  const viewport = { width: 816, height: 616 }
+
+  it('fits the complete portrait image inside the viewport at 100%', () => {
+    expect(imagePreviewDisplaySize(portrait, viewport, 1)).toEqual({
+      width: 300,
+      height: 600
     })
-    expect(imagePreviewSizingStyle(1)).toEqual({
-      maxWidth: '100%',
-      maxHeight: '100%'
+  })
+
+  it('makes zoom controls resize the fitted image in both directions', () => {
+    expect(imagePreviewDisplaySize(portrait, viewport, 0.75)).toEqual({
+      width: 225,
+      height: 450
     })
-    expect(imagePreviewSizingStyle(1.25)).toEqual({
-      maxWidth: '125%',
-      maxHeight: '125%'
+    expect(imagePreviewDisplaySize(portrait, viewport, 1.25)).toEqual({
+      width: 375,
+      height: 750
     })
   })
 
   it('clamps zoom sizing to the supported min and max bounds', () => {
-    expect(imagePreviewSizingStyle(0.1)).toEqual({
-      maxWidth: '50%',
-      maxHeight: '50%'
+    expect(imagePreviewDisplaySize(portrait, viewport, 0.1)).toEqual({
+      width: 75,
+      height: 150
     })
-    expect(imagePreviewSizingStyle(9)).toEqual({
-      maxWidth: '300%',
-      maxHeight: '300%'
+    expect(imagePreviewDisplaySize(portrait, viewport, 9)).toEqual({
+      width: 900,
+      height: 1_800
+    })
+  })
+
+  it('keeps small images at their natural size until the user zooms in', () => {
+    expect(imagePreviewDisplaySize({ width: 200, height: 100 }, viewport, 1)).toEqual({
+      width: 200,
+      height: 100
+    })
+    expect(imagePreviewDisplaySize({ width: 200, height: 100 }, viewport, 2)).toEqual({
+      width: 400,
+      height: 200
     })
   })
 })

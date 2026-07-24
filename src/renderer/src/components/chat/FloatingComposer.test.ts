@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { act, create as createRenderer } from 'react-test-renderer'
 import {
   FloatingComposer,
   buildResearchPrompt,
@@ -15,6 +16,7 @@ import {
   parseNewCommand,
   parseResearchCommand,
   parseReviewCommand,
+  returnQueuedMessageToComposer,
   shouldCaptureFileMentionCommitKey,
   shouldShowGoalFloater,
   shouldSurfaceComposerUserInput
@@ -34,7 +36,6 @@ import {
   composerMenuSupportsModel,
   composerReasoningEffortRequestValue,
   buildComposerModelOptions,
-  canSwitchComposerModelFromCurrent,
   filterComposerModelIds,
   normalizeComposerReasoningEffort,
   orderComposerReasoningRailEfforts
@@ -43,6 +44,11 @@ import {
   FloatingComposerExecutionPicker,
   calculateExecutionMenuPlacement
 } from './FloatingComposerExecutionPicker'
+import {
+  FloatingComposerQueuedMessages,
+  calculateQueuedMessageMenuPlacement,
+  canEditQueuedComposerMessage
+} from './FloatingComposerQueuedMessages'
 import { getGoalPanelDraftObjective } from './floating-composer-commands'
 import { useChatStore } from '../../store/chat-store'
 import i18n from '../../i18n'
@@ -64,6 +70,261 @@ const DEEPSEEK_PROVIDER_GROUP = {
   label: 'DeepSeek',
   modelIds: ['deepseek-v4-pro', 'deepseek-v4-flash']
 }
+
+describe('FloatingComposer queued guidance', () => {
+  it('renders compact Guide rows and disables structured payload guidance', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    try {
+      const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
+        messages: [
+          {
+            id: 'q-text',
+            text: 'use compact logo',
+            displayText: 'Use compact logo',
+            guidanceEligible: true
+          },
+          {
+            id: 'q-file',
+            text: 'inspect the attached file',
+            guidanceEligible: false
+          }
+        ],
+        onGuide: () => undefined,
+        onRemove: () => undefined
+      }))
+
+      expect(html).toContain('Use compact logo')
+      expect(html.match(/>Guide</g)).toHaveLength(2)
+      expect(html).toContain('Add this input to the agent&#x27;s next model interaction')
+      expect(html).toContain('Only plain-text follow-ups can guide')
+      expect(html).toContain('disabled=""')
+      expect(html).not.toContain('These messages will send automatically')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
+  it('returns a plain-text queued message through the edit action', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    const message = {
+      id: 'q-edit',
+      text: 'use compact logo',
+      displayText: 'Use compact logo',
+      guidanceEligible: true
+    }
+    const onRemove = vi.fn()
+    const setInput = vi.fn()
+    const onEdit = (queuedMessage: Parameters<typeof returnQueuedMessageToComposer>[0]): void => {
+      returnQueuedMessageToComposer(queuedMessage, onRemove, setInput)
+    }
+    let renderer: ReturnType<typeof createRenderer>
+
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(FloatingComposerQueuedMessages, {
+          messages: [message],
+          onEdit,
+          onRemove
+        }))
+      })
+
+      const moreButton = renderer!.root.findAllByType('button').find(
+        (button) => button.props['aria-label'] === 'More queued message actions'
+      )
+      expect(moreButton).toBeDefined()
+
+      await act(async () => {
+        moreButton!.props.onClick()
+      })
+      const menu = renderer!.root.findByProps({ role: 'menu' })
+      expect(menu.props['data-queued-message-menu']).toBe(true)
+      expect(menu.props.className).toContain('fixed z-[1000]')
+      const editButton = renderer!.root.findByProps({ role: 'menuitem' })
+      expect(editButton.findByType('span').children).toContain('Edit message')
+
+      await act(async () => {
+        editButton.props.onClick()
+      })
+      expect(onRemove).toHaveBeenCalledWith(message.id)
+      expect(setInput).toHaveBeenCalledWith(message.displayText)
+      expect(renderer!.root.findAllByProps({ role: 'menu' })).toHaveLength(0)
+    } finally {
+      renderer!.unmount()
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
+  it('places the queued message menu in the viewport and flips above near the bottom', () => {
+    expect(calculateQueuedMessageMenuPlacement({
+      anchorRect: { bottom: 152, right: 1900, top: 120 },
+      viewportHeight: 900,
+      viewportWidth: 1960
+    })).toEqual({ left: 1724, top: 158, width: 176 })
+
+    expect(calculateQueuedMessageMenuPlacement({
+      anchorRect: { bottom: 1764, right: 3800, top: 1700 },
+      viewportHeight: 1800,
+      viewportWidth: 3920,
+      coordinateScale: 2
+    })).toEqual({ left: 1724, top: 796, width: 176 })
+  })
+
+  it('reorders multiple queued messages by drag handle or keyboard', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    const onReorder = vi.fn()
+    let renderer: ReturnType<typeof createRenderer>
+
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(FloatingComposerQueuedMessages, {
+          messages: [
+            { id: 'q-first', text: 'first' },
+            { id: 'q-second', text: 'second' }
+          ],
+          onRemove: () => undefined,
+          onReorder
+        }))
+      })
+
+      const handles = renderer!.root.findAllByProps({
+        'data-queued-message-drag-handle': true
+      })
+      expect(handles).toHaveLength(2)
+      expect(handles[0]!.props.draggable).toBe(true)
+      expect(handles[0]!.props['aria-label']).toBe('Drag to reorder queued message')
+
+      const dataTransfer = {
+        dropEffect: 'none',
+        effectAllowed: 'none',
+        setData: vi.fn()
+      }
+      await act(async () => {
+        handles[0]!.props.onDragStart({ dataTransfer })
+      })
+      const secondRow = renderer!.root.findByProps({
+        'data-queued-message-id': 'q-second'
+      })
+      await act(async () => {
+        secondRow.props.onDragOver({
+          clientY: 90,
+          currentTarget: {
+            getBoundingClientRect: () => ({ height: 48, top: 50 })
+          },
+          dataTransfer,
+          preventDefault: vi.fn()
+        })
+      })
+      expect(renderer!.root.findByProps({
+        'data-queued-message-drop-indicator': 'after'
+      })).toBeDefined()
+
+      await act(async () => {
+        secondRow.props.onDrop({ dataTransfer, preventDefault: vi.fn() })
+      })
+      expect(onReorder).toHaveBeenCalledWith('q-first', 'q-second', 'after')
+
+      onReorder.mockClear()
+      await act(async () => {
+        handles[1]!.props.onKeyDown({ key: 'ArrowUp', preventDefault: vi.fn() })
+      })
+      expect(onReorder).toHaveBeenCalledWith('q-second', 'q-first', 'before')
+    } finally {
+      renderer!.unmount()
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
+  it('does not dequeue structured queued payloads into a text-only editor', () => {
+    expect(canEditQueuedComposerMessage({
+      id: 'q-text',
+      text: 'continue',
+      guidanceEligible: true
+    })).toBe(true)
+    expect(canEditQueuedComposerMessage({
+      id: 'q-file',
+      text: 'inspect this',
+      attachments: [{}]
+    })).toBe(false)
+    expect(canEditQueuedComposerMessage({
+      id: 'q-plan',
+      text: 'build the plan',
+      mode: 'plan'
+    })).toBe(false)
+  })
+
+  it('hides a durable in-flight item while keeping later pending items visible', () => {
+    const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
+      messages: [
+        {
+          id: 'q-running',
+          text: 'already running',
+          deliveryState: 'in_flight',
+          deliveryTurnId: 'turn-running'
+        },
+        {
+          id: 'q-pending',
+          text: 'send this next',
+          deliveryState: 'pending'
+        }
+      ],
+      onRemove: () => undefined
+    }))
+
+    expect(html).not.toContain('already running')
+    expect(html).toContain('send this next')
+  })
+
+  it('anchors todo progress above the queue instead of over it', () => {
+    useChatStore.setState({
+      activeThreadId: 'thread-layout',
+      activeThreadGoal: null,
+      activeThreadTodos: {
+        threadId: 'thread-layout',
+        items: [{
+          id: 'todo-layout',
+          content: 'Keep the queue readable',
+          status: 'in_progress',
+          createdAt: '2026-07-19T00:00:00.000Z',
+          updatedAt: '2026-07-19T00:00:00.000Z'
+        }],
+        updatedAt: '2026-07-19T00:00:00.000Z'
+      },
+      route: 'chat',
+      workspaceRoot: '/workspace/deepseek-gui',
+      threads: []
+    })
+
+    const html = renderToStaticMarkup(createElement(FloatingComposer, {
+      input: '',
+      setInput: () => undefined,
+      mode: 'agent',
+      setMode: () => undefined,
+      busy: true,
+      runtimeReady: false,
+      hasActiveThread: true,
+      composerModel: '',
+      composerPickList: [],
+      onComposerModelChange: () => undefined,
+      queuedMessages: [{ id: 'q-layout', text: 'Continue with the layout' }],
+      onRemoveQueuedMessage: () => undefined,
+      onSend: () => undefined,
+      onInterrupt: () => undefined
+    }))
+
+    const stackIndex = html.indexOf('data-composer-stack')
+    const floatersIndex = html.indexOf('data-composer-floaters')
+    const queueIndex = html.indexOf('data-composer-queue')
+    const composerIndex = html.indexOf('ds-composer-shell')
+    expect(stackIndex).toBeGreaterThanOrEqual(0)
+    expect(floatersIndex).toBeGreaterThan(stackIndex)
+    expect(queueIndex).toBeGreaterThan(floatersIndex)
+    expect(composerIndex).toBeGreaterThan(queueIndex)
+    expect(html.slice(floatersIndex, queueIndex)).toContain('bottom-full')
+  })
+})
 
 describe('FloatingComposer slash commands', () => {
   it('parses compact command aliases', () => {
@@ -668,25 +929,6 @@ describe('FloatingComposer model controls', () => {
     expect(filterComposerModelIds(modelIds, '128K')).toEqual(['moonshot-v1-128k'])
   })
 
-  it('prevents switching from a vision model to a text-only model', () => {
-    const visionProfile: Parameters<typeof canSwitchComposerModelFromCurrent>[0] = {
-      inputModalities: ['text', 'image'],
-      outputModalities: ['text'],
-      supportsToolCalling: true,
-      messageParts: ['text', 'image_url']
-    }
-    const textProfile: Parameters<typeof canSwitchComposerModelFromCurrent>[1] = {
-      inputModalities: ['text'],
-      outputModalities: ['text'],
-      supportsToolCalling: true,
-      messageParts: ['text']
-    }
-
-    expect(canSwitchComposerModelFromCurrent(visionProfile, textProfile)).toBe(false)
-    expect(canSwitchComposerModelFromCurrent(visionProfile, visionProfile)).toBe(true)
-    expect(canSwitchComposerModelFromCurrent(textProfile, visionProfile)).toBe(true)
-  })
-
   it('keeps the reasoning strength visible in the model control', () => {
     const html = renderToStaticMarkup(
       createElement(FloatingComposerModelPicker, {
@@ -990,6 +1232,7 @@ describe('FloatingComposer capability controls', () => {
       expect(html).not.toContain('>审批<')
       expect(html).not.toContain('>权限<')
       expect(html).toContain('aria-label="工具权限"')
+      expect(html).toContain('data-permission-mode="bypass"')
       expect(html).toContain('lucide-lock-keyhole-open')
       expect(html).not.toContain('Full access')
       expect(html).not.toContain('Auto')
@@ -1013,6 +1256,7 @@ describe('FloatingComposer capability controls', () => {
     expect(html).toContain('Ask in workspace')
     expect(html).toContain('Asks before workspace file changes')
     expect(html).toContain('aria-label="Tool permission"')
+    expect(html).toContain('data-permission-mode="workspace-write"')
     expect(html).toContain('lucide-folder-pen')
   })
 
@@ -1030,6 +1274,7 @@ describe('FloatingComposer capability controls', () => {
     expect(html).toContain('Trusted workspace')
     expect(html).toContain('Workspace file changes run without prompts')
     expect(html).toContain('aria-label="Tool permission"')
+    expect(html).toContain('data-permission-mode="trusted-workspace"')
     expect(html).toContain('lucide-shield-check')
   })
 
@@ -1047,7 +1292,23 @@ describe('FloatingComposer capability controls', () => {
     expect(html).toContain('Sensitive ask')
     expect(html).toContain('Ordinary reads can run automatically')
     expect(html).toContain('aria-label="Tool permission"')
+    expect(html).toContain('data-permission-mode="sensitive-ask"')
     expect(html).toContain('lucide-shield-question')
+  })
+
+  it('marks the read-only permission mode for theme-specific presentation', () => {
+    const html = renderToStaticMarkup(
+      createElement(FloatingComposerExecutionPicker, {
+        value: {
+          approvalPolicy: 'on-request',
+          sandboxMode: 'danger-full-access'
+        },
+        onChange: () => undefined
+      })
+    )
+
+    expect(html).toContain('data-permission-mode="read-only"')
+    expect(html).toContain('lucide-eye')
   })
 
   it('renders the always-ask permission label in Chinese as 永远询问', async () => {
@@ -1067,6 +1328,7 @@ describe('FloatingComposer capability controls', () => {
 
       expect(html).toContain('永远询问')
       expect(html).toContain('每次工具调用都要你确认')
+      expect(html).toContain('data-permission-mode="always-ask"')
       expect(html).toContain('lucide-hand')
       expect(html).not.toContain('永远咨询')
     } finally {
@@ -1390,7 +1652,7 @@ describe('FloatingComposer capability controls', () => {
     expect(html).toContain('shot.png')
   })
 
-  it('keeps the busy composer toolbar focused on stop and model text', () => {
+  it('keeps busy Code model and reasoning controls enabled for the next input', () => {
     const html = renderToStaticMarkup(
       createElement(FloatingComposer, {
         input: 'hello',
@@ -1403,7 +1665,10 @@ describe('FloatingComposer capability controls', () => {
         composerModel: 'deepseek-v4-pro',
         composerPickList: ['deepseek-v4-pro'],
         composerModelGroups: [DEEPSEEK_PROVIDER_GROUP],
+        composerReasoningEffort: 'high',
+        modelControlVariant: 'split',
         onComposerModelChange: () => undefined,
+        onComposerReasoningEffortChange: () => undefined,
         queuedMessages: [],
         onRemoveQueuedMessage: () => undefined,
         onSend: () => undefined,
@@ -1415,6 +1680,12 @@ describe('FloatingComposer capability controls', () => {
 
     expect(html).toContain('deepseek-v4-pro')
     expect(html).toContain('Stop')
+    const modelTrigger = html.match(/<button[^>]*aria-label="Model"[^>]*>/)?.[0]
+    const reasoningTrigger = html.match(/<button[^>]*aria-label="Reasoning: High"[^>]*>/)?.[0]
+    expect(modelTrigger).toBeDefined()
+    expect(modelTrigger).not.toContain('disabled=""')
+    expect(reasoningTrigger).toBeDefined()
+    expect(reasoningTrigger).not.toContain('disabled=""')
     expect(html).not.toContain('Stop and discard')
     expect(html).not.toContain('lucide-trash-2')
     expect(html).not.toContain('lucide-zap')
@@ -1639,7 +1910,7 @@ describe('FloatingComposer capability controls', () => {
     expect(html).toContain('aria-label="Tool permission"')
   })
 
-  it('renders a changed-file review card above the input', () => {
+  it('keeps historical file-change summaries out of the input', () => {
     useChatStore.setState({
       activeThreadId: 'thr_1',
       activeThreadGoal: null,
@@ -1664,23 +1935,12 @@ describe('FloatingComposer capability controls', () => {
         onSend: () => undefined,
         onInterrupt: () => undefined,
         attachmentUploadEnabled: false,
-        webAccessAvailable: false,
-        changedFiles: [
-          { path: 'src/a.ts', added: 3, removed: 1 },
-          { path: 'src/b.ts', added: 2, removed: 4 }
-        ],
-        changedFileStats: { added: 5, removed: 5 },
-        onOpenChanges: () => undefined,
-        onReviewChanges: () => undefined
+        webAccessAvailable: false
       })
     )
 
-    expect(html).toContain('2 files changed')
-    expect(html).toContain('src/a.ts')
-    expect(html).toContain('+5')
-    expect(html).toContain('-5')
-    expect(html).toContain('Preview')
-    expect(html).toContain('Review')
+    expect(html).not.toContain('files changed')
+    expect(html).not.toContain('data-turn-change-summary')
   })
 
   it('keeps the empty-session composer interactive in the Electron drag shell', () => {

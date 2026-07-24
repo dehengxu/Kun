@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  APP_LOCALES,
   applyKunRuntimePatch,
   kunSettingsEnvelope,
   kunSettingsPatch,
@@ -82,6 +83,17 @@ function settings(): AppSettingsV1 {
     disabledSkillIds: []
   }
 }
+
+describe('application locale settings', () => {
+  it.each(APP_LOCALES)('preserves the supported %s locale', (locale) => {
+    expect(normalizeAppSettings({ ...settings(), locale }).locale).toBe(locale)
+  })
+
+  it('falls back to English for an unsupported persisted locale', () => {
+    const input = { ...settings(), locale: 'fr' } as unknown as AppSettingsV1
+    expect(normalizeAppSettings(input).locale).toBe('en')
+  })
+})
 
 describe('chat content max width', () => {
   it('defaults invalid values to 896px', () => {
@@ -303,14 +315,16 @@ describe('kun defaults', () => {
         sqlitePath: ''
       },
       contextCompaction: {
-        defaultSoftThreshold: 96000,
-        defaultHardThreshold: 108800,
+        defaultSoftThreshold: 192000,
+        defaultHardThreshold: 217600,
         summaryMode: 'model',
         summaryTimeoutMs: 15000,
         summaryMaxTokens: 2048,
         summaryInputMaxBytes: 98304
       },
       runtimeTuning: {
+        maxConcurrentTurns: 256,
+        maxWallTimeMs: 86400000,
         streamIdleTimeoutMs: 450000,
         toolStorm: {
           enabled: true,
@@ -648,6 +662,42 @@ describe('isKunRuntimeInsecure', () => {
 })
 
 describe('mergeKunRuntimeSettings', () => {
+  it('normalizes bounded digest-bound project config grants and replaces the grant roster', () => {
+    const digestA = 'a'.repeat(64)
+    const digestB = 'B'.repeat(64)
+    const current = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      projectConfig: {
+        grants: [
+          { workspaceRoot: ' /workspace/a ', configDigest: digestA },
+          { workspaceRoot: '/workspace/b', configDigest: 'not-a-digest' }
+        ]
+      }
+    })
+
+    expect(current.projectConfig.grants).toEqual([
+      { workspaceRoot: '/workspace/a', configDigest: digestA }
+    ])
+
+    const next = mergeKunRuntimeSettings(current, {
+      projectConfig: {
+        grants: [{ workspaceRoot: '/workspace/b', configDigest: digestB }]
+      }
+    })
+
+    expect(next.projectConfig.grants).toEqual([
+      { workspaceRoot: '/workspace/b', configDigest: 'b'.repeat(64) }
+    ])
+  })
+
+  it('adds an empty project config grant list to legacy settings', () => {
+    const raw = settings() as AppSettingsV1 & {
+      agents: { kun: Omit<AppSettingsV1['agents']['kun'], 'projectConfig'> }
+    }
+    delete (raw.agents.kun as Partial<AppSettingsV1['agents']['kun']>).projectConfig
+
+    expect(normalizeAppSettings(raw as AppSettingsV1).agents.kun.projectConfig).toEqual({ grants: [] })
+  })
+
   it('merges a direct kun patch without the envelope wrapper', () => {
     const current = defaultKunRuntimeSettings()
     const next = mergeKunRuntimeSettings(current, {
@@ -667,6 +717,7 @@ describe('mergeKunRuntimeSettings', () => {
       ...defaultKunRuntimeSettings(),
       subagents: {
         enabled: true,
+        useExistingAgents: true,
         maxParallel: 3,
         maxChildRuns: 12,
         defaultToolPolicy: 'inherit' as const,
@@ -704,11 +755,19 @@ describe('mergeKunRuntimeSettings', () => {
       subagents: { enabled: false }
     })
 
-    expect(next.subagents).toEqual({ enabled: false, profiles: [] })
+    expect(next.subagents).toEqual({
+      enabled: false,
+      useExistingAgents: true,
+      profiles: []
+    })
     expect(normalizeAppSettings({
       ...settings(),
       agents: { kun: next }
-    }).agents.kun.subagents).toEqual({ enabled: false, profiles: [] })
+    }).agents.kun.subagents).toEqual({
+      enabled: false,
+      useExistingAgents: true,
+      profiles: []
+    })
   })
 
   it('deep-merges token economy settings and keeps the legacy switch synced', () => {
@@ -843,7 +902,47 @@ describe('mergeKunRuntimeSettings', () => {
     expect(next.runtimeTuning.toolStorm.windowSize).toBe(current.runtimeTuning.toolStorm.windowSize)
     expect(next.runtimeTuning.toolStorm.threshold).toBe(5)
     expect(next.runtimeTuning.toolArgumentRepair).toEqual(current.runtimeTuning.toolArgumentRepair)
+    expect(next.runtimeTuning.maxConcurrentTurns).toBe(current.runtimeTuning.maxConcurrentTurns)
+    expect(next.runtimeTuning.maxWallTimeMs).toBe(current.runtimeTuning.maxWallTimeMs)
     expect(next.runtimeTuning.streamIdleTimeoutMs).toBe(current.runtimeTuning.streamIdleTimeoutMs)
+  })
+
+  it('normalizes the maximum turn duration', () => {
+    const current = defaultKunRuntimeSettings()
+    expect(current.runtimeTuning.maxWallTimeMs).toBe(86_400_000)
+
+    const set = mergeKunRuntimeSettings(current, {
+      runtimeTuning: { maxWallTimeMs: 7_200_000 }
+    })
+    expect(set.runtimeTuning.maxWallTimeMs).toBe(7_200_000)
+    expect(set.runtimeTuning.toolStorm).toEqual(current.runtimeTuning.toolStorm)
+
+    expect(
+      mergeKunRuntimeSettings(current, { runtimeTuning: { maxWallTimeMs: 0 } })
+        .runtimeTuning.maxWallTimeMs
+    ).toBe(86_400_000)
+    expect(
+      mergeKunRuntimeSettings(current, { runtimeTuning: { maxWallTimeMs: 999_999_999 } })
+        .runtimeTuning.maxWallTimeMs
+    ).toBe(86_400_000)
+  })
+
+  it('normalizes maximum concurrent turns to the supported range', () => {
+    const current = defaultKunRuntimeSettings()
+    expect(current.runtimeTuning.maxConcurrentTurns).toBe(256)
+
+    expect(
+      mergeKunRuntimeSettings(current, { runtimeTuning: { maxConcurrentTurns: 32 } })
+        .runtimeTuning.maxConcurrentTurns
+    ).toBe(32)
+    expect(
+      mergeKunRuntimeSettings(current, { runtimeTuning: { maxConcurrentTurns: 0 } })
+        .runtimeTuning.maxConcurrentTurns
+    ).toBe(256)
+    expect(
+      mergeKunRuntimeSettings(current, { runtimeTuning: { maxConcurrentTurns: 257 } })
+        .runtimeTuning.maxConcurrentTurns
+    ).toBe(256)
   })
 
   it('normalizes the stream idle timeout (0 disables, out-of-range clamps)', () => {

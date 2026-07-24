@@ -52,11 +52,12 @@ async function seedLongHistory(sessionStore: InMemorySessionStore, prefix: strin
 function modelCompactionService(
   sessionStore: InMemorySessionStore,
   model: ModelClient,
-  contextCompaction: ContextCompactionConfig
+  contextCompaction: ContextCompactionConfig,
+  compactor = new ContextCompactor({ softThreshold: 1, hardThreshold: 2 })
 ): HistoryCompactionService {
   return new HistoryCompactionService({
     sessionStore,
-    compactor: new ContextCompactor({ softThreshold: 1, hardThreshold: 2 }),
+    compactor,
     prefix: createImmutablePrefix({ systemPrompt: 'stable prefix' }),
     model,
     usage: new UsageService(),
@@ -150,6 +151,45 @@ describe('HistoryCompactionService', () => {
     ])
   })
 
+  it('does not emit another automatic marker when only the prior summary is foldable', async () => {
+    const sessionStore = new InMemorySessionStore()
+    await seedLongHistory(sessionStore, 'repeat_guard')
+    const rewriteThreadItemsFromSession = vi.fn(async () => undefined)
+    const service = new HistoryCompactionService({
+      sessionStore,
+      compactor: new ContextCompactor({ softThreshold: 1, hardThreshold: 2 }),
+      prefix: createImmutablePrefix({ systemPrompt: 'stable prefix' }),
+      model: silentModel(),
+      usage: new UsageService(),
+      events: createEvents(sessionStore),
+      ids: new SequentialIdGenerator(),
+      telemetry: {
+        hydratePromptPressureIfCold: async () => undefined,
+        consumePromptPressure: () => undefined
+      },
+      recordGoalUsage: async () => undefined,
+      rewriteThreadItemsFromSession
+    })
+    const request = {
+      model: 'test-model',
+      signal: new AbortController().signal,
+      threadId,
+      turnId
+    }
+
+    const compacted = await service.compactIfNeeded({
+      ...request,
+      items: await sessionStore.loadItems(threadId)
+    })
+    const unchanged = await service.compactIfNeeded({ ...request, items: compacted })
+
+    expect(unchanged).toEqual(compacted)
+    expect(rewriteThreadItemsFromSession).toHaveBeenCalledTimes(1)
+    const events = await sessionStore.loadEventsSince(threadId, 0)
+    expect(events.filter((event) => event.kind === 'compaction_completed')).toHaveLength(1)
+    expect((await sessionStore.loadItems(threadId)).filter((item) => item.kind === 'compaction')).toHaveLength(1)
+  })
+
   it('only consumes the pending prompt-pressure signal when no compaction is needed', async () => {
     const sessionStore = new InMemorySessionStore()
     const item = makeUserItem({ id: 'item_only', threadId, turnId, text: 'short' })
@@ -195,7 +235,9 @@ describe('HistoryCompactionService', () => {
         id: `live_item_${index}`,
         threadId,
         turnId,
-        text: `live runtime config ${index} ${'x'.repeat(120)}`
+        text: index === 4
+          ? `Active Skill: retained-auto-tail-only\nlive runtime config ${index} ${'x'.repeat(120)}`
+          : `live runtime config ${index} ${'x'.repeat(120)}`
       }))
     }
     const requests: ModelRequest[] = []
@@ -242,7 +284,62 @@ describe('HistoryCompactionService', () => {
     expect(seenPreCompact).toHaveBeenCalledWith(expect.objectContaining({ phase: 'PreCompact' }))
     expect(requests).toHaveLength(1)
     expect(requests[0]).toMatchObject({ model: 'live-summary-model' })
+    const summaryUserMessages = requests[0]?.history
+      .filter((item) => item.kind === 'user_message')
+      .map((item) => item.text) ?? []
+    expect(summaryUserMessages.some((text) => text.includes('live runtime config 0'))).toBe(true)
+    expect(summaryUserMessages.some((text) => text.includes('live runtime config 4'))).toBe(false)
+    const continuation = summaryUserMessages.at(-1) ?? ''
+    expect(continuation).toContain('Provide a detailed summary of our conversation above')
+    expect(continuation).not.toContain('Active Skill: retained-auto-tail-only')
     expect(history[0]).toMatchObject({ kind: 'compaction', summary: expect.stringContaining('summary from live config') })
+  })
+
+  it('uses the heuristic summary when folded source ids are unavailable instead of sending the retained tail', async () => {
+    const sessionStore = new InMemorySessionStore()
+    await seedLongHistory(sessionStore, 'missing_source')
+    const requests: ModelRequest[] = []
+    const model: ModelClient = {
+      provider: 'test',
+      model: 'summary-model',
+      async *stream(request) {
+        requests.push(request)
+        yield { kind: 'assistant_text_delta' as const, text: 'this must not be used' }
+        yield { kind: 'completed' as const, stopReason: 'stop' as const }
+      }
+    }
+    const compactor = new ContextCompactor({ softThreshold: 1, hardThreshold: 2 })
+    const compact = compactor.compact.bind(compactor)
+    vi.spyOn(compactor, 'compact').mockImplementation((input) => {
+      const result = compact(input)
+      if (result.summaryItem.kind !== 'compaction') return result
+      return {
+        ...result,
+        summaryItem: { ...result.summaryItem, sourceItemIds: undefined }
+      }
+    })
+    const service = modelCompactionService(
+      sessionStore,
+      model,
+      { summaryMode: 'model' },
+      compactor
+    )
+
+    await service.compactIfNeeded({
+      items: await sessionStore.loadItems(threadId),
+      model: 'summary-model',
+      signal: new AbortController().signal,
+      threadId,
+      turnId
+    })
+
+    expect(requests).toHaveLength(0)
+    const events = await sessionStore.loadEventsSince(threadId, 0)
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'error',
+      code: 'compaction_summary_fallback',
+      message: expect.stringContaining('no folded source items')
+    }))
   })
 
   it('charges model-summary usage to the active Goal before the main-model budget recheck', async () => {

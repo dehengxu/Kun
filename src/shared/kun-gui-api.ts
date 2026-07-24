@@ -66,6 +66,20 @@ import type {
   WorkspaceFileWritePayload,
   WorkspaceFileWriteResult
 } from './workspace-file'
+
+export type ExtensionArtifactActionPayload = {
+  artifactId: string
+  ownerExtensionId: string
+  ownerExtensionVersion: string
+  workspaceId: string
+  workspaceRoot: string
+  action: 'open' | 'reveal'
+}
+
+export type ExtensionArtifactActionResult = {
+  ok: boolean
+  message?: string
+}
 import type { ProjectDesignMdOfficialLintResult } from './project-design-md'
 import type {
   WriteInlineCompletionDebugEntry,
@@ -92,7 +106,9 @@ import type {
 import type {
   UiPluginListItem,
   UiPluginManifestV1,
-  UiPluginRuntimeFigures
+  UiPluginRuntimeBackgrounds,
+  UiPluginRuntimeFigures,
+  UiPluginRuntimeSceneAssets
 } from './ui-plugin'
 import type {
   WriteRetrievalRequest,
@@ -104,6 +120,10 @@ import type {
   WriteRichClipboardPayload,
   WriteRichClipboardResult
 } from './write-export'
+import type {
+  ConversationExportPayload,
+  ConversationExportResult
+} from './conversation-export'
 import type { PptMasterEnsureResult } from './ppt-master'
 import type { DesignExportPayload, DesignExportResult } from './design-export'
 import type {
@@ -119,6 +139,24 @@ import type {
   TerminalWritePayload
 } from './terminal'
 import type { ExtensionIpcApi } from './extension-ipc'
+import type {
+  DataMigrationEstimate,
+  DataMigrationExportOptions,
+  DataMigrationImportOptions,
+  DataMigrationImportPlan,
+  DataMigrationInspectionSummary,
+  DataMigrationOperationStatus,
+  DataMigrationPathPickResult,
+  DataMigrationProgress,
+  DataMigrationRendererRequest,
+  DataMigrationRendererResponse,
+  DataMigrationReport,
+  DataMigrationWorkspaceConflictStrategy
+} from './data-migration'
+import type {
+  RuntimeImageAttachmentUploadRequest,
+  RuntimeImageAttachmentUploadResult
+} from './runtime-image-attachment'
 
 export type KunRuntimeStatusPayload = {
   state: 'starting' | 'running' | 'restarting' | 'crashed' | 'failed' | 'stopped'
@@ -128,6 +166,13 @@ export type KunRuntimeStatusPayload = {
   attempt?: number
   maxAttempts?: number
   rolledBack?: boolean
+  at: string
+}
+
+export type KunRuntimeSettingsSyncStatusPayload = {
+  state: 'idle' | 'syncing' | 'synced' | 'unavailable' | 'failed'
+  generation: number
+  message?: string
   at: string
 }
 
@@ -191,10 +236,46 @@ export type UiPluginInstallIpcResult =
   | { canceled: false; ok: true; plugin: UiPluginListItem }
   | { canceled: false; ok: false; errors: string[] }
 export type UiPluginLoadIpcResult =
-  | { ok: true; manifest: UiPluginManifestV1; figures: UiPluginRuntimeFigures }
+  | {
+      ok: true
+      manifest: UiPluginManifestV1
+      figures: UiPluginRuntimeFigures
+      backgrounds: UiPluginRuntimeBackgrounds
+      sceneAssets: UiPluginRuntimeSceneAssets
+    }
+  | { ok: false; error: string }
+export type UiPluginThemeActivateIpcResult =
+  | {
+      ok: true
+      manifest: UiPluginManifestV1
+      figures: UiPluginRuntimeFigures
+      sceneAssets: UiPluginRuntimeSceneAssets
+    }
+  | { ok: false; error: string }
+export type UiPluginThemeDeactivateIpcResult =
+  | { ok: true }
   | { ok: false; error: string }
 export type DeepseekConfigFileResult = { path: string; content: string; exists: boolean }
 export type DeepseekConfigSaveResult = { ok: true; path: string }
+export type KunProjectConfigServerSummary = {
+  id: string
+  transport: 'stdio' | 'streamable-http' | 'sse'
+  target: string
+  enabled: boolean
+}
+export type KunProjectConfigFileResult = {
+  workspaceRoot: string
+  path: string
+  content: string
+  exists: boolean
+  status: 'missing' | 'invalid' | 'valid'
+  trust: 'untrusted' | 'trusted' | 'stale'
+  message?: string
+  digest?: string
+  serverSummaries: KunProjectConfigServerSummary[]
+  skillRootCount: number
+  disabledSkillCount: number
+}
 export type TurnCompleteNotificationPayload = {
   threadId?: string
   title: string
@@ -234,6 +315,65 @@ export type ModelProviderProbeRequest = {
 export type ModelProviderProbeResult =
   | { ok: true; latencyMs: number; modelIds: string[] }
   | { ok: false; message: string }
+export type ProviderModelCatalogSource = 'provider-api' | 'models-dev'
+export type ModelsDevCatalogModality = 'text' | 'audio' | 'image' | 'video' | 'pdf'
+export type CursorSubscriptionModelParameterValue = {
+  value: string
+  displayName?: string
+}
+export type CursorSubscriptionModelParameter = {
+  id: string
+  displayName?: string
+  values: CursorSubscriptionModelParameterValue[]
+}
+export type CursorSubscriptionModelVariant = {
+  displayName: string
+  description?: string
+  isDefault?: boolean
+  params: Array<{ id: string; value: string }>
+}
+export type CursorSubscriptionModel = {
+  id: string
+  displayName: string
+  description?: string
+  aliases?: string[]
+  parameters?: CursorSubscriptionModelParameter[]
+  variants?: CursorSubscriptionModelVariant[]
+}
+export type ModelsDevCatalogModelHint = {
+  id: string
+  aliases?: string[]
+}
+export type ModelsDevCatalogModel = {
+  id: string
+  providerKey?: string
+  name?: string
+  description?: string
+  inputModalities: ModelsDevCatalogModality[]
+  outputModalities: ModelsDevCatalogModality[]
+  reasoning?: boolean
+  toolCalling?: boolean
+  contextWindowTokens?: number
+  maxOutputTokens?: number
+}
+export type ModelsDevCatalogRequest = {
+  providerId: string
+  baseUrl: string
+  forceRefresh?: boolean
+  modelHints?: ModelsDevCatalogModelHint[]
+}
+export type ModelsDevCatalogMatchMode = 'catalog' | 'enrichment-only'
+export type ModelsDevCatalogResult =
+  | {
+      status: 'ok'
+      providerKey: string
+      providerName: string
+      matchMode: ModelsDevCatalogMatchMode
+      stale: boolean
+      models: ModelsDevCatalogModel[]
+    }
+  | { status: 'unmapped'; models: [] }
+  | { status: 'error'; message: string; models: [] }
 export type PromptOptimizationRequest = {
   text: string
 }
@@ -265,6 +405,21 @@ export type CodexBrowserAuthErrorCode = 'port_in_use'
 export type CodexBrowserAuthResult =
   | { ok: true; credentials: CodexOAuthCredentials }
   | { ok: false; message: string; code?: CodexBrowserAuthErrorCode }
+export type GrokOAuthCredentials = {
+  kind: 'grok-oauth'
+  accessToken: string
+  refreshToken: string
+  expiresAt: number
+  email?: string
+  userId?: string
+  issuer?: string
+  clientId?: string
+}
+export type GrokBrowserAuthErrorCode = 'port_in_use'
+export type GrokBrowserAuthResult =
+  | { ok: true; credentials: GrokOAuthCredentials }
+  | { ok: false; message: string; code?: GrokBrowserAuthErrorCode }
+export type GrokBrowserAuthCancelResult = { ok: true }
 export type ClawImTelegramConnectErrorCode = 'invalid_format' | 'rejected' | 'network' | 'unknown'
 export type ClawImTelegramConnectResult =
   | { ok: true; botId: number; botUsername: string; botFirstName: string }
@@ -274,6 +429,11 @@ export type ConfirmDialogOptions = {
   detail?: string
   confirmLabel?: string
   cancelLabel?: string
+}
+export type AlertDialogOptions = {
+  message: string
+  detail?: string
+  buttonLabel?: string
 }
 /** Which legacy install a set of importable conversations came from. */
 export type LegacySessionSourceKind = 'kun' | 'coreagent' | 'custom'
@@ -349,6 +509,34 @@ export type SdkDownloadState = {
 export type KunGuiApi = ExtensionIpcApi & {
   platform: string
   homeDir: string
+  dataMigration: {
+    pickExportPackage: (defaultPath?: string) => Promise<DataMigrationPathPickResult>
+    pickImportPackage: (defaultPath?: string) => Promise<DataMigrationPathPickResult>
+    pickDestinationDirectory: (defaultPath?: string) => Promise<DataMigrationPathPickResult>
+    estimateExport: (input: Pick<DataMigrationExportOptions,
+      'operationId' | 'selectedWorkspaceIds' | 'preset' | 'sensitiveContentAcknowledged'
+    >) => Promise<DataMigrationEstimate>
+    inspectPackage: (input: { packagePath: string; passphrase?: string }) => Promise<DataMigrationInspectionSummary>
+    planImport: (input: {
+      operationId: string
+      inspectionId: string
+      destinationBaseRoot: string
+      destinationRoots?: Record<string, string>
+      strategies?: Record<string, DataMigrationWorkspaceConflictStrategy>
+      skippedWorkspaceIds?: string[]
+    }) => Promise<DataMigrationImportPlan>
+    startExport: (input: DataMigrationExportOptions) => Promise<{ packagePath: string; report: DataMigrationReport }>
+    startImport: (input: DataMigrationImportOptions) => Promise<{ report: DataMigrationReport; refreshRequired: boolean }>
+    cancel: (operationId: string) => Promise<DataMigrationOperationStatus>
+    recover: (operationId: string, action: 'resume' | 'rollback') => Promise<DataMigrationOperationStatus>
+    getStatus: () => Promise<DataMigrationOperationStatus>
+    listReports: () => Promise<DataMigrationReport[]>
+    getReport: (operationId: string) => Promise<DataMigrationReport>
+    deleteReport: (operationId: string) => Promise<void>
+    onProgress: (handler: (progress: DataMigrationProgress) => void) => () => void
+    onRendererRequest: (handler: (request: DataMigrationRendererRequest) => void) => () => void
+    respondRendererRequest: (response: DataMigrationRendererResponse) => Promise<void>
+  }
   getSettings: () => Promise<AppSettingsV1>
   /** Detect an existing local Claude Code login (subscription auth). */
   claudeSubscriptionStatus: () => Promise<ClaudeSubscriptionStatus>
@@ -366,13 +554,40 @@ export type KunGuiApi = ExtensionIpcApi & {
   claudeSubscriptionSdkInstall: () => Promise<SdkDownloadState>
   /** Subscribe to background-download progress; returns an unsubscribe fn. */
   onClaudeSubscriptionSdkProgress: (handler: (state: SdkDownloadState) => void) => () => void
+  /** Whether Google's official Antigravity CLI is available to Kun. */
+  geminiSubscriptionCliStatus: () => Promise<{
+    installed: boolean
+    path?: string
+    download?: SdkDownloadState | null
+  }>
+  /** Download the pinned official Antigravity CLI release on demand. */
+  geminiSubscriptionCliInstall: () => Promise<SdkDownloadState>
+  /** Subscribe to Antigravity CLI download progress. */
+  onGeminiSubscriptionCliProgress: (handler: (state: SdkDownloadState) => void) => () => void
+  /** Gemini models exposed by the user's current `agy` subscription login. */
+  geminiSubscriptionModels: () => Promise<string[]>
+  /** Validate a Cursor API key and list models visible to that Cursor account. */
+  cursorSubscriptionDiscover: (apiKey: string) => Promise<{
+    account: {
+      apiKeyName: string
+      userEmail?: string
+      userFirstName?: string
+      userLastName?: string
+    }
+    models: CursorSubscriptionModel[]
+  }>
   setSettings: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   saveSettingsSilent: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   runtimeRequest: (path: string, method?: string, body?: string) => Promise<RuntimeRequestResult>
+  getRuntimeSettingsSyncStatus: () => Promise<KunRuntimeSettingsSyncStatusPayload>
+  uploadRuntimeImageAttachment: (
+    request: RuntimeImageAttachmentUploadRequest
+  ) => Promise<RuntimeImageAttachmentUploadResult>
   resolveKunApproval: (request: KunProtectedApprovalRequest) => Promise<KunProtectedApprovalResult>
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   probeModelProvider: (payload: ModelProviderProbeRequest) => Promise<ModelProviderProbeResult>
+  fetchModelsDevCatalog: (payload: ModelsDevCatalogRequest) => Promise<ModelsDevCatalogResult>
   optimizePrompt: (payload: PromptOptimizationRequest) => Promise<PromptOptimizationResult>
   getClawStatus: () => Promise<ClawRuntimeStatus>
   runClawTask: (taskId: string) => Promise<ClawRunResult>
@@ -400,10 +615,16 @@ export type KunGuiApi = ExtensionIpcApi & {
   startCodexAuth: () => Promise<CodexAuthStartResult>
   pollCodexAuth: (deviceCode: string, userCode: string) => Promise<CodexAuthPollResult>
   startCodexBrowserAuth: () => Promise<CodexBrowserAuthResult>
+  startGrokBrowserAuth: () => Promise<GrokBrowserAuthResult>
+  /** Paste the authorization code (or callback URL) from accounts.x.ai. */
+  submitGrokBrowserAuthCode: (code: string) => Promise<GrokBrowserAuthResult>
+  cancelGrokBrowserAuth: () => Promise<GrokBrowserAuthCancelResult>
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
+  workspaceDirectoryExists: (workspaceRoot: string) => Promise<boolean>
   pickLocalFiles: (defaultPath?: string) => Promise<LocalFilesPickResult>
   /** 在对话工作目录根下创建一个时间戳子目录作为新对话的工作目录。 */
   createConversationWorkspace: (root?: string) => Promise<ConversationWorkspaceCreateResult>
+  alertDialog: (options: AlertDialogOptions) => Promise<void>
   confirmDialog: (options: ConfirmDialogOptions) => Promise<boolean>
   /** Detect importable conversations from a previous DeepSeek GUI install. */
   detectLegacySessions: () => Promise<LegacySessionDetectResult>
@@ -427,9 +648,19 @@ export type KunGuiApi = ExtensionIpcApi & {
   installUiPlugin: () => Promise<UiPluginInstallIpcResult>
   removeUiPlugin: (id: string) => Promise<{ ok: boolean }>
   loadUiPlugin: (id: string) => Promise<UiPluginLoadIpcResult>
+  activateUiPluginTheme: (id: string) => Promise<UiPluginThemeActivateIpcResult>
+  deactivateUiPluginTheme: () => Promise<UiPluginThemeDeactivateIpcResult>
   getKunConfigFile: () => Promise<DeepseekConfigFileResult>
   setKunConfigFile: (content: string) => Promise<DeepseekConfigSaveResult>
   openKunConfigDir: () => Promise<PathOpenResult>
+  getKunProjectConfigFile: (workspaceRoot: string) => Promise<KunProjectConfigFileResult>
+  setKunProjectConfigFile: (workspaceRoot: string, content: string) => Promise<KunProjectConfigFileResult>
+  setKunProjectConfigTrust: (
+    workspaceRoot: string,
+    trusted: boolean,
+    expectedDigest?: string
+  ) => Promise<KunProjectConfigFileResult>
+  openKunProjectConfigDir: (workspaceRoot: string) => Promise<PathOpenResult>
   getGitBranches: (workspaceRoot: string) => Promise<GitBranchesResult>
   switchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
   createAndSwitchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
@@ -495,6 +726,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   readWorkspacePdf: (options: WorkspaceFileTarget) => Promise<WorkspacePdfReadResult>
   readLocalPdfText: (options: LocalPdfTextTarget) => Promise<LocalPdfTextReadResult>
   saveWorkspaceFileAs: (payload: WorkspaceFileSaveAsPayload) => Promise<WorkspaceFileSaveAsResult>
+  openExtensionArtifact: (
+    payload: ExtensionArtifactActionPayload
+  ) => Promise<ExtensionArtifactActionResult>
   writeWorkspaceFile: (payload: WorkspaceFileWritePayload) => Promise<WorkspaceFileWriteResult>
   createWorkspaceFile: (payload: WorkspaceFileCreatePayload) => Promise<WorkspaceFileCreateResult>
   createWorkspaceDirectory: (
@@ -554,6 +788,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   listWriteInlineCompletionDebugEntries: () => Promise<WriteInlineCompletionDebugEntry[]>
   clearWriteInlineCompletionDebugEntries: () => Promise<boolean>
   exportWriteDocument: (payload: WriteExportPayload) => Promise<WriteExportResult>
+  exportConversation: (payload: ConversationExportPayload) => Promise<ConversationExportResult>
   exportMemoryMarkdown: (payload: MemoryMarkdownExportSavePayload) => Promise<MemoryMarkdownExportSaveResult>
   exportDesignPrototype: (payload: DesignExportPayload) => Promise<DesignExportResult>
   copyWriteDocumentAsRichText: (
@@ -573,6 +808,9 @@ export type KunGuiApi = ExtensionIpcApi & {
   onClawChannelActivity: (handler: (payload: ClawChannelActivityPayload) => void) => () => void
   onTrayAction: (handler: (payload: TrayActionPayload) => void) => () => void
   onRuntimeStatus: (handler: (payload: KunRuntimeStatusPayload) => void) => () => void
+  onRuntimeSettingsSyncStatus: (
+    handler: (payload: KunRuntimeSettingsSyncStatusPayload) => void
+  ) => () => void
   mirrorClawChannelMessage: (
     threadId: string,
     text: string,

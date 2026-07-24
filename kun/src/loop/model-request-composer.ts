@@ -14,6 +14,7 @@ import {
 import { applyRequestHistoryHygiene } from './request-history-hygiene.js'
 import { estimateModelRequestInputTokens } from './model-request-estimator.js'
 import { capToolResultImages } from './tool-result-image.js'
+import { buildThreadProfileInstruction } from '../prompt/kun-prompt-context.js'
 
 const MAX_FORWARDED_TOOL_IMAGES = 3
 
@@ -50,18 +51,15 @@ export type ComposedModelRequest = Readonly<{
  */
 export function composeModelRequest(input: ModelRequestComposerInput): ComposedModelRequest {
   const tokenEconomy = normalizeTokenEconomyConfig(input.tokenEconomy)
-  const persona = input.threadSystemPrompt?.trim()
+  const threadProfileInstruction = buildThreadProfileInstruction(input.threadSystemPrompt)
   const baseRequest: ModelRequest = {
     threadId: input.threadId,
     turnId: input.turnId,
     model: input.model,
     ...(input.providerId ? { providerId: input.providerId } : {}),
     ...(input.accountId ? { accountId: input.accountId } : {}),
-    // A thread persona augments Kun's stable runtime prompt. Whitespace-only
-    // values retain the immutable prefix verbatim for prompt-cache stability.
-    systemPrompt: persona
-      ? `${input.immutablePrefix.systemPrompt}\n\n${persona}`
-      : input.immutablePrefix.systemPrompt,
+    systemPrompt: input.immutablePrefix.systemPrompt,
+    ...(threadProfileInstruction ? { threadProfileInstruction } : {}),
     ...(input.modeInstruction ? { modeInstruction: input.modeInstruction } : {}),
     ...(input.contextInstructions.length
       ? { contextInstructions: [...input.contextInstructions] }

@@ -5,6 +5,7 @@ import {
   Download,
   FileCode2,
   FileImage,
+  Film,
   Frame,
   Hand,
   ImagePlus,
@@ -29,6 +30,7 @@ import { useDesignSystemStore } from '../../../design/canvas/design-system-store
 import type { CanvasTool } from '../../../design/canvas/canvas-types'
 import type { CanvasExportFormat } from '../../../design/canvas/canvas-export'
 import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
+import { useCanvasMotionStore } from '../../../design/motion/canvas-motion-store'
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
 import {
   buildRecommendedDesignWorkflowAction,
@@ -96,6 +98,8 @@ function CanvasToolbarInner({
   const artifacts = useDesignWorkspaceStore((s) => s.artifacts)
   const activeTool = useCanvasViewportStore((s) => s.activeTool)
   const setActiveTool = useCanvasViewportStore((s) => s.setActiveTool)
+  const motionOpen = useCanvasMotionStore((s) => s.open)
+  const toggleMotionOpen = useCanvasMotionStore((s) => s.toggleOpen)
   const vbox = useCanvasViewportStore((s) => s.vbox)
   const selectedIds = useCanvasSelectionStore((s) => s.selectedIds)
   const setFileError = useDesignWorkspaceStore((s) => s.setFileError)
@@ -197,7 +201,7 @@ function CanvasToolbarInner({
 
   return (
     <div className="relative pointer-events-auto">
-      <div className="flex flex-col items-center gap-1 rounded-full border border-ds-border bg-white/82 px-1.5 py-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.13)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none">
+      <div className="design-canvas-toolbar flex flex-col items-center gap-1 rounded-full border border-ds-border bg-white/82 px-1.5 py-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.13)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none">
         {visibleTools.map((tool) => {
           const label = t(surface === 'code' && tool.codeLabelKey ? tool.codeLabelKey : tool.labelKey)
           return (
@@ -246,6 +250,20 @@ function CanvasToolbarInner({
         {designSurface ? (
           <>
             <div className={divider} />
+
+            <button
+              type="button"
+              className={`${iconBtnBase} ${motionOpen ? btnActive : btnInactive}`}
+              onClick={() => {
+                setActiveTool('select')
+                toggleMotionOpen()
+              }}
+              title={t('canvasMotionMode', 'Motion')}
+              aria-label={t('canvasMotionMode', 'Motion')}
+              aria-pressed={motionOpen}
+            >
+              <Film className="h-4 w-4" strokeWidth={1.9} />
+            </button>
 
             <button
               type="button"

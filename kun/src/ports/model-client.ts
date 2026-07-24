@@ -1,12 +1,22 @@
 import type { TurnItem } from '../contracts/items.js'
 import type { UsageSnapshot } from '../contracts/usage.js'
+import type { ToolProviderKind } from './tool-host.js'
+import type { ModelFailureMetadata } from '../contracts/model-route-pool.js'
 
 /**
  * One streaming chunk from a model response. The loop consumes these
  * chunks to drive assistant text and reasoning deltas, tool call
  * accumulation, and usage reporting.
  */
-export type ModelStreamChunk =
+export type ModelRouteTargetMetadata = {
+  routePoolId: string
+  targetId: string
+  providerId: string
+  modelId: string
+  requestedModelId: string
+}
+
+export type ModelStreamChunk = (
   | { kind: 'assistant_text_delta'; text: string }
   | { kind: 'assistant_reasoning_delta'; text: string }
   | { kind: 'tool_call_delta'; callId: string; toolName?: string; argumentsDelta?: string }
@@ -15,7 +25,8 @@ export type ModelStreamChunk =
   | { kind: 'image_generation_complete'; imageBase64: string; mimeType: string }
   | { kind: 'usage'; usage: UsageSnapshot }
   | { kind: 'completed'; stopReason: 'stop' | 'tool_calls' | 'length' | 'error' }
-  | { kind: 'error'; message: string; code?: string }
+  | { kind: 'error'; message: string; code?: string; failure?: ModelFailureMetadata }
+) & { route?: ModelRouteTargetMetadata }
 
 /**
  * A single model turn request: the immutable prefix items, the running
@@ -34,14 +45,22 @@ export type ModelRequest = {
    * reusing the single Kun process (kun#workflow-multi-provider).
    */
   providerId?: string
+  /** Runtime-owned diagnostic run id used to correlate route-test progress. */
+  routeTestId?: string
   /** Opaque account selection for custom/extension providers. Never a credential. */
   accountId?: string
   systemPrompt?: string
   /**
+   * Optional thread-scoped persona/profile. Emitted as a separate system
+   * message after the stable Kun contract so per-thread customization never
+   * mutates the immutable prefix field.
+   */
+  threadProfileInstruction?: string
+  /**
    * Optional mode-scoped instruction (e.g. Plan mode guidance). Emitted
-   * as a second system message immediately after the byte-stable
-   * `systemPrompt` so the cached prefix stays unchanged while the mode
-   * note still rides at the front of the request.
+   * after the byte-stable `systemPrompt` and optional thread profile so
+   * the cached prefix stays unchanged while the mode note still rides at
+   * the front of the request.
    */
   modeInstruction?: string
   /**
@@ -116,6 +135,10 @@ export type ModelToolSpec = {
   description: string
   inputSchema: Record<string, unknown>
   toolKind?: 'tool_call' | 'command_execution' | 'file_change'
+  /** Local execution provenance. Provider serializers must not forward it. */
+  providerKind?: ToolProviderKind
+  /** Stable local provider id (for example `builtin` or `mcp:filesystem`). */
+  providerId?: string
 }
 
 /**

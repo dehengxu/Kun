@@ -134,6 +134,7 @@ describe('submitDesignTurn', () => {
     expect(takeLastCanvasErrors).toHaveBeenCalledWith('/workspace:doc:board')
     expect(sendMessage).toHaveBeenCalledWith('DESIGN PROMPT', 'agent', {
       displayText: 'Create a dashboard',
+      agentSurface: 'design',
       model: 'deepseek-chat',
       providerId: 'deepseek',
       reasoningEffort: 'medium',

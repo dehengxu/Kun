@@ -10,6 +10,7 @@ import { isBackgroundShellNoticeUserMessage } from '@shared/background-shell-not
 import type { ChatState } from './chat-store-types'
 import {
   isOptimisticUserBlockId,
+  matchingOptimisticUserBlockId,
   reconcileOptimisticUserBlock,
   upsertUserBlock
 } from './chat-store-runtime-helpers'
@@ -21,6 +22,7 @@ export type ChatProjectionReducerContext = {
   runtimeStatusText: (event: RuntimeStatusEventPayload) => string
   runtimeErrorView: (event: RuntimeErrorEventPayload) => {
     summary: string
+    message: string
     code?: string
     detail?: string
   }
@@ -70,17 +72,22 @@ export function reduceChatProjection(
       const baseBlocks = flushed.blocks ?? state.blocks
       const optimisticUserId = state.currentTurnUserId
       const backgroundNotice = isBackgroundShellNoticeUserMessage({ text: event.text, meta: event.meta })
-      const reconcileOptimistic = Boolean(
+      const currentOptimisticUserId =
         !backgroundNotice &&
         optimisticUserId &&
         optimisticUserId !== event.itemId &&
         isOptimisticUserBlockId(optimisticUserId) &&
         baseBlocks.some((block) => block.kind === 'user' && block.id === optimisticUserId)
+          ? optimisticUserId
+          : null
+      const optimisticMatchId = currentOptimisticUserId ?? (
+        backgroundNotice ? null : matchingOptimisticUserBlockId(baseBlocks, event)
       )
-      const reconciledBlocks = reconcileOptimistic && optimisticUserId
+      const reconcileOptimistic = Boolean(optimisticMatchId && optimisticMatchId !== event.itemId)
+      const reconciledBlocks = reconcileOptimistic && optimisticMatchId
         ? reconcileOptimisticUserBlock(
             baseBlocks,
-            optimisticUserId,
+            optimisticMatchId,
             event.itemId,
             event.text,
             event.modelLabel
@@ -226,6 +233,20 @@ export function reduceChatProjection(
         error: context.clearRecoveringError(state.error)
       }
     }
+    case 'approval_status_changed': {
+      const event = action.payload
+      return {
+        blocks: state.blocks.map((block) => {
+          if (block.kind !== 'approval' || block.approvalId !== event.approvalId) return block
+          const next = { ...block, status: event.status }
+          delete next.errorMessage
+          if (event.status === 'expired' && event.errorMessage) {
+            next.errorMessage = event.errorMessage
+          }
+          return next
+        })
+      }
+    }
     case 'user_input_requested': {
       const req = action.payload
       const existing = state.blocks.find(
@@ -309,10 +330,11 @@ export function reduceChatProjection(
         kind: 'system',
         id: event.itemId,
         createdAt: event.createdAt ?? new Date(context.now).toISOString(),
-        text: view.summary,
+        text: view.message,
         ...(view.code ? { code: view.code } : {}),
         ...(view.detail ? { detail: view.detail } : {}),
-        severity: event.severity ?? 'error'
+        severity: event.severity ?? 'error',
+        runtimeError: true
       }
       return {
         ...flushed,
@@ -334,6 +356,7 @@ export function reduceChatProjection(
         const blocks = [...state.blocks]
         blocks[index] = {
           ...current,
+          turnId: event.turnId ?? current.turnId,
           summary: event.summary || current.summary,
           status: event.status,
           detail: event.detail ?? current.detail,
@@ -346,12 +369,21 @@ export function reduceChatProjection(
       }
       const flushed = flushLiveProjection(state, context.now)
       const baseBlocks = flushed.blocks ?? state.blocks
+      const visibleBlocks = event.auto !== false && event.turnId
+        ? baseBlocks.filter((block) => !(
+            block.kind === 'compaction' &&
+            block.id !== event.itemId &&
+            block.auto !== false &&
+            block.turnId === event.turnId
+          ))
+        : baseBlocks
       return {
         ...base,
         ...flushed,
-        blocks: [...baseBlocks, {
+        blocks: [...visibleBlocks, {
           kind: 'compaction',
           id: event.itemId,
+          turnId: event.turnId,
           createdAt: event.createdAt ?? new Date(context.now).toISOString(),
           summary: event.summary,
           status: event.status,

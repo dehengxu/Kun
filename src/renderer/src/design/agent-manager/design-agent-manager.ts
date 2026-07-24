@@ -80,6 +80,20 @@ const ROLE_LABEL_KEYS: Record<DesignAgentManagerRoleId, string> = {
   exporter: 'designAgentManagerExporter'
 }
 
+/** Canonical delegation profiles backing the Design Agent Manager roles. */
+export const DESIGN_AGENT_MANAGER_PROFILE_IDS: Record<DesignAgentManagerRoleId, string> = {
+  planner: 'design-product-planner',
+  generator: 'design-screen-designer',
+  systemizer: 'design-system-architect',
+  critic: 'design-reviewer',
+  'code-binder': 'design-code-binder',
+  exporter: 'design-handoff-specialist'
+}
+
+function delegateInstruction(roleId: DesignAgentManagerRoleId): string {
+  return `Delegate this focused work with profile "${DESIGN_AGENT_MANAGER_PROFILE_IDS[roleId]}".`
+}
+
 function htmlScreenArtifacts(artifacts: readonly DesignArtifact[]): DesignArtifact[] {
   return artifacts.filter((artifact) => artifact.kind === 'html' && !artifact.role)
 }
@@ -146,6 +160,7 @@ function action(intentMode: DesignIntentMode, lines: string[]): RoleAction {
 function plannerAction(counts: AgentManagerCounts): RoleAction {
   return action('generate', [
     'Act as the design planning agent for this design mode board.',
+    delegateInstruction('planner'),
     `Current state: ${counts.directionCount} direction(s), ${counts.screenCount} screen(s), ${counts.objectCount} canvas object(s).`,
     'Create or refine distinct product directions with names, tradeoffs, target users, key screens, and design-system implications.',
     'Use structured design-mode outputs that can become directions, DESIGN.md decisions, and canvas operations.'
@@ -155,6 +170,7 @@ function plannerAction(counts: AgentManagerCounts): RoleAction {
 function generatorAction(counts: AgentManagerCounts): RoleAction {
   return action('generate', [
     'Act as the screen generation agent for this design mode board.',
+    delegateInstruction('generator'),
     `Current state: ${counts.screenCount} screen(s), ${counts.directionCount} direction(s), ${counts.tokenCount} token(s), ${counts.componentCount} component(s).`,
     'Generate the next useful screen or improve the first screen if none exists.',
     'Prefer reusable layout patterns, clear responsive behavior, and canvas operations that preserve Design Graph ids.'
@@ -164,6 +180,7 @@ function generatorAction(counts: AgentManagerCounts): RoleAction {
 function criticAction(counts: AgentManagerCounts): RoleAction {
   return action('modify', [
     'Act as the design critic agent for the current direction.',
+    delegateInstruction('critic'),
     `Current state: ${counts.screenCount} screen(s), ${counts.critiqueEntryCount} critique pass(es), ${counts.journalEntryCount} operation journal entry(s).`,
     'Review visual hierarchy, accessibility, spacing, responsive behavior, interaction states, and design-system consistency.',
     'Attach precise, repairable agent notes to affected canvas objects before making broad changes.'
@@ -173,6 +190,7 @@ function criticAction(counts: AgentManagerCounts): RoleAction {
 function systemizerAction(counts: AgentManagerCounts): RoleAction {
   return action('modify', [
     'Act as the design system agent for this design mode board.',
+    delegateInstruction('systemizer'),
     `Current state: ${counts.screenCount} screen(s), ${counts.tokenCount} token(s), ${counts.componentCount} component(s).`,
     'Extract semantic tokens, reusable components, variants, and states from the current screens.',
     'Apply the system back to repeated patterns so later directions and code binding share one Design Graph contract.'
@@ -182,6 +200,7 @@ function systemizerAction(counts: AgentManagerCounts): RoleAction {
 function codeBinderAction(counts: AgentManagerCounts): RoleAction {
   return action('modify', [
     'Act as the code binding agent for this design board.',
+    delegateInstruction('code-binder'),
     `Current state: ${counts.activeBindingCount} active, ${counts.staleBindingCount} stale, ${counts.missingBindingCount} missing code binding(s).`,
     'Map generated screens or selected frames to source files, routes, components, and DOM anchors.',
     'Repair stale bindings before proposing implementation changes.'
@@ -191,6 +210,7 @@ function codeBinderAction(counts: AgentManagerCounts): RoleAction {
 function exporterAction(counts: AgentManagerCounts): RoleAction {
   return action('preview', [
     'Act as the design handoff agent for this project.',
+    delegateInstruction('exporter'),
     `Current state: ${counts.screenCount} screen(s), ${counts.objectCount} canvas object(s), ${counts.tokenCount} token(s), ${counts.componentCount} component(s).`,
     'Prepare DESIGN.md-ready decisions, direction summaries, implementation notes, reusable tokens/components, and open questions.',
     'Keep handoff content grounded in the Design Graph and current canvas state.'

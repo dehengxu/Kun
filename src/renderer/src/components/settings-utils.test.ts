@@ -135,6 +135,7 @@ describe('diffSettingsPatch', () => {
     })
     expect(mergeSettings(base, patch).agents.kun.subagents).toEqual({
       enabled: true,
+      useExistingAgents: true,
       maxParallel: 3,
       maxChildRuns: 12,
       defaultToolPolicy: 'inherit',

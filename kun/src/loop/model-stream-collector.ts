@@ -13,6 +13,12 @@ export type ModelStreamToolMetadata = {
 export type ModelStreamCollectorConfig = {
   maxToolCallsPerStep: number
   toolMetadata: ReadonlyMap<string, ModelStreamToolMetadata>
+  /**
+   * Provider call ids are not trusted as execution identity. Normalize each id
+   * before persistence so separate model steps cannot collide when a compatible
+   * provider omits or reuses it.
+   */
+  allocateRuntimeCallId: (providerCallId: string) => string
   maxToolArgumentStringBytes?: number
 }
 
@@ -149,7 +155,7 @@ export class ModelStreamCollector {
         : {})
     })
     const call: ToolCallLike = {
-      callId: chunk.callId,
+      callId: this.config.allocateRuntimeCallId(chunk.callId),
       toolName: chunk.toolName,
       ...(metadata?.providerId ? { providerId: metadata.providerId } : {}),
       ...(metadata?.toolKind ? { toolKind: metadata.toolKind } : {}),

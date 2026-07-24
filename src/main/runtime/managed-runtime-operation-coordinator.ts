@@ -8,10 +8,19 @@ export class ManagedRuntimeOperationCoordinator<Settings> {
   private ensureFingerprint: string | null = null
   private restartPromise: Promise<void> | null = null
   private settingsApplyPromise: Promise<void> | null = null
+  private queuedSettingsApply: {
+    operation: () => Promise<void>
+    onError: (error: unknown) => void
+  } | null = null
   private latestSettings: Settings | null = null
 
   hasPendingOperation(): boolean {
-    return Boolean(this.ensurePromise || this.restartPromise || this.settingsApplyPromise)
+    return Boolean(
+      this.ensurePromise ||
+      this.restartPromise ||
+      this.settingsApplyPromise ||
+      this.queuedSettingsApply
+    )
   }
 
   latestOr(fallback: Settings): Settings {
@@ -68,19 +77,39 @@ export class ManagedRuntimeOperationCoordinator<Settings> {
     operation: () => Promise<void>,
     onError: (error: unknown) => void
   ): void {
-    const previous = this.settingsApplyPromise ?? Promise.resolve()
+    // Automatic settings saves can arrive much faster than Kun can apply
+    // them. Keep the in-flight apply, but replace any not-yet-started apply
+    // with the newest projection instead of replaying every intermediate edit.
+    this.queuedSettingsApply = { operation, onError }
+    this.startSettingsApplyDrain()
+  }
+
+  private startSettingsApplyDrain(): void {
+    if (this.settingsApplyPromise || !this.queuedSettingsApply) return
     let tracked: Promise<void>
-    tracked = previous
-      .catch(() => undefined)
-      .then(operation)
-      .catch(onError)
+    tracked = this.drainSettingsApplies()
       .finally(() => {
         if (this.settingsApplyPromise === tracked) this.settingsApplyPromise = null
+        // An enqueue can land after the drain's final empty check but before
+        // this promise settles. Start another drain so that update is not lost.
+        this.startSettingsApplyDrain()
       })
     this.settingsApplyPromise = tracked
   }
 
+  private async drainSettingsApplies(): Promise<void> {
+    while (this.queuedSettingsApply) {
+      const next = this.queuedSettingsApply
+      this.queuedSettingsApply = null
+      try {
+        await next.operation()
+      } catch (error) {
+        next.onError(error)
+      }
+    }
+  }
+
   async waitForSettingsApply(): Promise<void> {
-    await this.settingsApplyPromise
+    while (this.settingsApplyPromise) await this.settingsApplyPromise
   }
 }

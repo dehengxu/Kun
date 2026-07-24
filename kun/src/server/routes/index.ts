@@ -31,6 +31,7 @@ import { resolveUserInput } from './user-inputs.js'
 import { resumeSession } from './sessions.js'
 import { usageJsonResponse } from './usage.js'
 import { llmDebugRoundsResponse } from './debug-llm.js'
+import { modelRequestsResponse } from './model-requests.js'
 import { runtimeInfoJsonResponse, runtimeToolDiagnosticsJsonResponse } from './runtime-info.js'
 import { applyRuntimeConfig } from './runtime-config.js'
 import { listSkills } from './skills.js'
@@ -65,6 +66,23 @@ import { ERRORS } from './runtime-error.js'
 import type { ServerRuntime } from './server-runtime.js'
 import { registerExtensionManagementRoutes } from './extensions.js'
 import { registerExtensionPublicRoutes } from './extension-public.js'
+import {
+  createMigrationExport,
+  commitMigrationImport,
+  preflightMigrationImport,
+  releaseMigrationImport,
+  releaseMigrationExport,
+  rollbackMigrationImport,
+  verifyMigrationImport,
+  streamMigrationExport
+} from './migrations.js'
+import {
+  gatewayChatCompletions,
+  gatewayModels,
+  gatewayResponses,
+  routePoolStatus,
+  testRoutePool
+} from './openai-model-gateway.js'
 
 /**
  * Build the full router used by the HTTP server. The router exposes:
@@ -83,6 +101,7 @@ import { registerExtensionPublicRoutes } from './extension-public.js'
  * - `GET /v1/workspace/status` (auth)
  * - `GET/POST /v1/threads` (auth)
  * - `GET/PATCH/DELETE /v1/threads/{id}` (auth)
+ * - `GET /v1/threads/{id}/model-requests` (auth)
  * - `POST /v1/threads/{id}/fork` (auth)
  * - `POST /v1/threads/{id}/summarize` (auth)
  * - `GET/POST/DELETE /v1/threads/{id}/goal` (auth)
@@ -105,6 +124,17 @@ export function buildRouter(runtime: ServerRuntime): Router {
   const router = new Router()
   const approvalConsent = new ApprovalConsentVerifier(runtime.runtimeToken)
   router.add('GET', '/health', () => healthJsonResponse())
+  router.add('GET', '/v1/models', () => gatewayModels(runtime))
+  router.add('POST', '/v1/chat/completions', (request) => gatewayChatCompletions(runtime, request))
+  router.add('POST', '/v1/responses', (request) => gatewayResponses(runtime, request))
+  router.add('GET', '/v1/model-routes', (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return routePoolStatus(runtime)
+  })
+  router.add('POST', '/v1/model-routes/:id/test', (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return testRoutePool(runtime, ctx.params.id)
+  })
   if (runtime.extensionPlatform) {
     // Static public extension paths must precede `/v1/extensions/:id` because
     // the minimal Router uses first-match ordering.
@@ -116,9 +146,44 @@ export function buildRouter(runtime: ServerRuntime): Router {
       indexClient: runtime.extensionPlatform.indexClient,
       validation: runtime.extensionPlatform.validation,
       runtimeToken: runtime.runtimeToken,
-      insecure: runtime.insecure
+      insecure: runtime.insecure,
+      ...(runtime.extensionPlatform.bundledSeedResults
+        ? { bundledSeedResults: runtime.extensionPlatform.bundledSeedResults }
+        : {})
     })
   }
+  router.add('POST', '/v1/migrations/exports', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return createMigrationExport(runtime.migrationService, request)
+  })
+  router.add('GET', '/v1/migrations/exports/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return streamMigrationExport(runtime.migrationService, ctx.params.id)
+  })
+  router.add('DELETE', '/v1/migrations/exports/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return releaseMigrationExport(runtime.migrationService, ctx.params.id)
+  })
+  router.add('POST', '/v1/migrations/imports/preflight', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return preflightMigrationImport(runtime.migrationImportService, request)
+  })
+  router.add('POST', '/v1/migrations/imports/:id/commit', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return commitMigrationImport(runtime.migrationImportService, ctx.params.id)
+  })
+  router.add('POST', '/v1/migrations/imports/:id/verify', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return verifyMigrationImport(runtime.migrationImportService, ctx.params.id)
+  })
+  router.add('POST', '/v1/migrations/imports/:id/rollback', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return rollbackMigrationImport(runtime.migrationImportService, ctx.params.id)
+  })
+  router.add('DELETE', '/v1/migrations/imports/:id', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return releaseMigrationImport(runtime.migrationImportService, ctx.params.id)
+  })
   router.add('GET', '/v1/runtime/info', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return runtimeInfoJsonResponse(runtime)
@@ -201,7 +266,7 @@ export function buildRouter(runtime: ServerRuntime): Router {
   })
   router.add('GET', '/v1/delegation/profiles', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
-    return delegationProfiles(runtime.delegationRuntime)
+    return delegationProfiles(runtime.delegationRuntime, request)
   })
   router.add('POST', '/v1/delegation/abort/:childId', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -236,6 +301,10 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('GET', '/v1/threads/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return getThread(runtime.threadService, ctx.params.id, runtime.sessionStore, runtime.userInputGate)
+  })
+  router.add('GET', '/v1/threads/:id/model-requests', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return modelRequestsResponse(runtime, ctx.params.id, request)
   })
   router.add('PATCH', '/v1/threads/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

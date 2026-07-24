@@ -70,14 +70,10 @@ describe('canvas image auto attachment helpers', () => {
         width: 800,
         height: 600
       },
-      prepared: {
+      preview: {
         dataBase64: 'Zm9v',
         mimeType: 'image/webp',
-        textFallback: {
-          mimeType: 'image/webp',
-          dataBase64: 'Zm9v',
-          byteSize: 3
-        }
+        byteSize: 3
       }
     })
 

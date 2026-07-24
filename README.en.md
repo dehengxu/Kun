@@ -243,6 +243,8 @@ Thanks to [LobsterAI](https://github.com/netease-youdao/LobsterAI), DeepSeek, Xi
 
 This project is provided for learning and reference only and may not be used for any commercial purpose. Commercial use, commercial distribution, SaaS/hosted services, resale, or integration into commercial products requires separate written authorization from the author.
 
+We strongly support companies that want to use Kun solely within their organization to improve employee productivity. Email [zhongxingyuemail@gmail.com](mailto:zhongxingyuemail@gmail.com) to request written authorization; no license fee will be charged. This free internal-use authorization does not cover external SaaS/hosted services, resale, commercial distribution, or integration into customer-facing commercial products.
+
 Educational institutions and public-interest educational organizations may use the project for noncommercial teaching, research, coursework, experiments, and learning/reference purposes. See [PolyForm Noncommercial License 1.0.0](./LICENSE) for the full terms.
 
 ## Star History

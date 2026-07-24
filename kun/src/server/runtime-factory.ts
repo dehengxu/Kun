@@ -1,5 +1,6 @@
 import { mkdir } from 'node:fs/promises'
-import { isAbsolute, join } from 'node:path'
+import { basename, isAbsolute, join } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { buildRouter } from './routes/index.js'
 import type { ServerRuntime } from './routes/server-runtime.js'
 import { startNodeHttpServer, type NodeHttpServerHandle } from './node-http-server.js'
@@ -14,14 +15,25 @@ import { HybridSessionStore, HybridThreadStore } from '../adapters/hybrid/index.
 import { CompatModelClient } from '../adapters/model/compat-model-client.js'
 import { ExtensionModelProviderRegistry } from '../adapters/model/extension-model-provider.js'
 import { MultiProviderModelClient } from '../adapters/model/multi-provider-model-client.js'
+import { RoutePoolHealthStore, RoutePoolModelClient } from '../adapters/model/route-pool-model-client.js'
 import { CapabilityRegistry } from '../adapters/tool/capability-registry.js'
 import {
   createAgentSdkRuntime,
   type AgentSdkRuntimeFactoryDeps
 } from '../runtime/agent-sdk/agent-sdk-runtime-factory.js'
+import {
+  AntigravityCliRuntime,
+  type AntigravityCliRuntimeDeps
+} from '../runtime/antigravity/antigravity-cli-runtime.js'
+import {
+  CursorSdkRuntime,
+  type CursorSdkRuntimeDeps
+} from '../runtime/cursor/cursor-sdk-runtime.js'
+import { composeDelegatedTurnRuntimes } from '../runtime/delegated-turn-runtime.js'
 import { buildGoalLocalTools } from '../adapters/tool/goal-tools.js'
 import { buildTodoLocalTools } from '../adapters/tool/todo-tools.js'
 import { buildDesignCanvasLocalTools } from '../adapters/tool/design-canvas-tool.js'
+import { buildDesignMotionLocalTools } from '../adapters/tool/design-motion-tool.js'
 import { buildDesignSvgLocalTools } from '../adapters/tool/design-svg-tool.js'
 import { buildPptMasterLocalTools } from '../adapters/tool/ppt-master-tool.js'
 import { LocalToolHost, buildDefaultLocalTools } from '../adapters/tool/local-tool-host.js'
@@ -34,6 +46,7 @@ import { buildMcpToolProviders } from '../adapters/tool/mcp-tool-provider.js'
 import { buildMemoryToolProviders } from '../adapters/tool/memory-tool-provider.js'
 import { buildSkillToolProviders } from '../adapters/tool/skill-tool-provider.js'
 import { buildDelegationToolProviders } from '../adapters/tool/delegation-tool-provider.js'
+import { buildComponentDesignToolProviders } from '../adapters/tool/component-design-tool-provider.js'
 import { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
 import { buildImageGenToolProviders } from '../adapters/tool/image-gen-tool-provider.js'
 import { buildComputerUseToolProviders } from '../adapters/tool/computer-use-tool-provider.js'
@@ -82,6 +95,7 @@ import type { ModelClient } from '../ports/model-client.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { ToolHostContext } from '../ports/tool-host.js'
+import { ScopedMigrationMaintenanceLock } from '../ports/migration-maintenance-lock.js'
 import { KUN_SYSTEM_PROMPT } from '../prompt/kun-system-prompt.js'
 import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import {
@@ -94,6 +108,7 @@ import { ThreadService } from '../services/thread-service.js'
 import { TurnService } from '../services/turn-service.js'
 import { ReviewService } from '../services/review-service.js'
 import { UsageService } from '../services/usage-service.js'
+import { RoutePoolTestService } from '../services/route-pool-test-service.js'
 import type { UsageEvent } from '../contracts/events.js'
 import type {
   RuntimeConfigApplyRequest,
@@ -108,12 +123,21 @@ import { InstructionRuntime } from '../instructions/instruction-runtime.js'
 import { resolveConfiguredHooks, type HooksConfig } from '../hooks/hook-config.js'
 import { FileMemoryStore } from '../memory/memory-store.js'
 import { DelegationRuntime, FileDelegationStore } from '../delegation/delegation-runtime.js'
-import { createChildAgentExecutor } from '../delegation/child-agent-executor.js'
+import {
+  createChildAgentExecutor,
+  type ChildDelegatedRuntimeFactory
+} from '../delegation/child-agent-executor.js'
+import { SubagentRouter } from '../delegation/subagent-router.js'
 import { BackgroundShellRuntime } from '../services/background-shell-runtime.js'
 import { stopBashSessionById, createBashLocalTool } from '../adapters/tool/builtin-bash-tool.js'
 import { createBackgroundShellTool } from '../adapters/tool/background-shell-tool.js'
-import { createSecretEncryptor, defaultSecretCommandRunner } from '../security/secret-store.js'
+import {
+  createSecretEncryptor,
+  defaultSecretCommandRunner,
+  hasPersistedSecretKeyMaterial
+} from '../security/secret-store.js'
 import type { LocalTool } from '../adapters/tool/local-tool-host.js'
+import type { FaultInjectionController } from '../services/fault-injection-controller.js'
 import { InMemoryPublisherTrustStore } from '../supplychain/publisher-trust-store.js'
 import {
   CURRENT_MANIFEST_VERSION,
@@ -128,7 +152,9 @@ import {
   ExtensionPaths,
   ExtensionRegistry,
   ExtensionStateMigrationCoordinator,
-  ExtensionStateStore
+  ExtensionStateStore,
+  seedBundledExtensions,
+  type BundledExtensionSeedResult
 } from '../extensions/index.js'
 import { ExtensionAgentProfileRegistry } from '../services/extension-agent-profile-registry.js'
 import { ExtensionAgentService } from '../services/extension-agent-service.js'
@@ -143,16 +169,33 @@ import {
   LegacyProviderCredentialMigrationService,
   materializeLegacyProviderCredential
 } from '../services/legacy-provider-credential-migration.js'
+import { GrokOAuthCredentialRefresher } from '../services/grok-oauth-credential-refresher.js'
 import { ExtensionViewSessionService } from '../services/extension-view-session-service.js'
 import { ExtensionViewHostGenerationTracker } from '../extensions/view-host-generation-tracker.js'
 import { ExtensionSecretRevealConsentService } from '../services/extension-secret-reveal-consent.js'
 import { ExtensionConfigurationService } from '../services/extension-configuration-service.js'
+import { ExtensionJobStore } from '../services/extension-job-store.js'
+import { ExtensionJobService, type ExtensionJobDiagnostic } from '../services/extension-job-service.js'
+import { ExtensionMediaHandleService } from '../services/extension-media-handle-service.js'
+import { ExtensionMediaProcessService } from '../services/extension-media-process-service.js'
+import { ExtensionMediaFfmpegService } from '../services/extension-media-ffmpeg-service.js'
+import { ExtensionArtifactService } from '../services/extension-artifact-service.js'
+import { ExtensionMediaJobService } from '../services/extension-media-job-service.js'
+import { ExtensionAudioAnalysisJobService } from '../services/extension-audio-analysis-job-service.js'
+import { ExtensionMediaArchiveService } from '../services/extension-media-archive-service.js'
+import { ExtensionMediaArchiveJobService } from '../services/extension-media-archive-job-service.js'
+import { ExtensionVisualAnalysisService } from '../services/extension-visual-analysis-service.js'
+import { RuntimeMigrationService } from '../services/runtime-migration-service.js'
+import { RuntimeMigrationImportService } from '../services/runtime-migration-import-service.js'
+import type { LocalModelGatewayConfig, ModelRoutePoolConfig } from '../contracts/model-route-pool.js'
 
 export type KunServeRuntimeOptions = {
   host: string
   port: number
   configPath?: string
   dataDir: string
+  /** Product-owned catalog of default local .kunx packages. */
+  bundledExtensionsDir?: string
   runtimeToken: string
   apiKey: string
   credentialSourceId?: string
@@ -176,6 +219,8 @@ export type KunServeRuntimeOptions = {
    * Empty/absent → runtime stays single-provider (current behavior).
    */
   providers?: Record<string, ServeProviderConfig>
+  routePools?: ModelRoutePoolConfig[]
+  localModelGateway?: LocalModelGatewayConfig
   model: string
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
@@ -196,6 +241,8 @@ export type KunServeRuntimeOptions = {
   /** Design-quality linter config; drives the builtin PostToolUse hook. */
   quality?: QualityConfig
   startedAt?: string
+  /** Test-only fault injection; absent in normal production startup. */
+  faultInjection?: FaultInjectionController
   /** Test/embedding override; production uses the bundled Host runner. */
   extensionHostRunnerPath?: string
 }
@@ -243,6 +290,9 @@ export async function createKunServeRuntime(
   const ids = new RandomIdGenerator()
   const nowIso = () => new Date().toISOString()
   const allocateSeq = (threadId: string) => eventBus.allocateSeq(threadId)
+  // Agent Perspective covers both HTTP-backed providers and delegated
+  // subscription transports. Records are private, thread-scoped JSONL.
+  const llmDebug = new LlmDebugRecorder({ dataDir: activeOptions.dataDir })
   const agentObservability = createAgentObservabilityRecorder({
     config: activeOptions.observability,
     dataDir: activeOptions.dataDir
@@ -279,11 +329,12 @@ export async function createKunServeRuntime(
       abortThreadExecution?.(threadId)
       await stopThreadAuxiliaryWork?.(threadId)
     },
-    onDeleted: (threadId) => {
+    onDeleted: async (threadId) => {
       eventStreamRegistry.closeThread(threadId)
       usageService.reset(threadId)
       events.clearThread(threadId)
       eventBus.clearThread(threadId)
+      await llmDebug.deleteThread(threadId)
     }
   })
   const artifactStore = new FileArtifactStore(join(activeOptions.dataDir, 'artifacts'), nowIso)
@@ -292,18 +343,19 @@ export async function createKunServeRuntime(
     models: activeOptions.models
   })
   const modelCapabilities = (model: string) => modelCapabilitiesForModel(model, modelProfiles)
-  const llmDebug = activeOptions.runtime?.llmDebug?.enabled ? new LlmDebugRecorder() : undefined
-  // Providers whose kind is 'agent-sdk' don't get an HTTP client — their turns
-  // are delegated to the embedded Claude Agent SDK (subscription) instead.
+  // Provider-native subscription transports don't get an HTTP client.
   const agentSdkProviderIds = agentSdkProviderIdsForOptions(activeOptions)
-  let agentSdkSignature = agentSdkProviderSignature(activeOptions)
+  const antigravityProviderIds = antigravityProviderIdsForOptions(activeOptions)
+  const cursorSdkProviderIds = cursorSdkProviderIdsForOptions(activeOptions)
+  let delegatedProviderSignature = delegatedProviderSignatureForOptions(activeOptions)
   const extensionProviderAccounts = new ExtensionProviderAccountStore({
     dataDir: activeOptions.dataDir,
     nowIso
   })
   const extensionCredentialKeyProvider = await createSecretEncryptor({
     keyFilePath: join(activeOptions.dataDir, 'secret.key'),
-    run: defaultSecretCommandRunner
+    run: defaultSecretCommandRunner,
+    canBootstrapKeyFileFallback: async () => !(await hasPersistedSecretKeyMaterial(activeOptions.dataDir))
   })
   const extensionCredentials = new ExtensionCredentialStore({
     dataDir: activeOptions.dataDir,
@@ -329,6 +381,24 @@ export async function createKunServeRuntime(
     credentials: extensionCredentials,
     nowIso
   })
+  const grokCredentialRefresher = new GrokOAuthCredentialRefresher(
+    legacyCredentialMigration
+  )
+  const resolveLegacyRequestCredentials = async (
+    sourceId: string,
+    rejectedAccessToken?: string
+  ): Promise<{
+    apiKey: string
+    headers?: Record<string, string>
+    refreshable: boolean
+  }> => {
+    const resolved = await grokCredentialRefresher.resolve(sourceId, rejectedAccessToken)
+    const material = materializeLegacyProviderCredential(resolved.rawApiKey)
+    return {
+      ...material,
+      refreshable: resolved.refreshable
+    }
+  }
   const migrateLegacyProviderCredentials = async (): Promise<void> => {
     const sources = [
       ...(activeOptions.apiKey.trim() && !activeOptions.credentialSourceId ? [{
@@ -357,15 +427,54 @@ export async function createKunServeRuntime(
   }
   await migrateLegacyProviderCredentials()
   activeOptions = await hydrateLegacyCredentialOptions(activeOptions, legacyCredentialMigration)
-  const modelClient = new MultiProviderModelClient(
-    buildModelClientRouterInput(activeOptions, modelCapabilities, llmDebug)
+  const directModelClient = new MultiProviderModelClient(
+    buildModelClientRouterInput(
+      activeOptions,
+      modelCapabilities,
+      llmDebug,
+      resolveLegacyRequestCredentials
+    )
   )
+  const routeHealth = new RoutePoolHealthStore(join(activeOptions.dataDir, 'model-routing', 'health.json'))
+  await routeHealth.load()
+  const modelClient = new RoutePoolModelClient(
+    directModelClient,
+    activeOptions.routePools ?? [],
+    modelCapabilities,
+    routeHealth
+  )
+  const routePoolTests = new RoutePoolTestService(
+    modelClient,
+    () => modelClient.routePools(),
+    routeHealth
+  )
+  const subagentRouter = new SubagentRouter({
+    modelClient,
+    roles: () => activeOptions.roles,
+    defaultModel: () => activeOptions.model,
+    recordUsage: async ({ threadId, turnId, model, usage }) => {
+      const cumulative = usageService.record(threadId, usage)
+      await events.record({
+        kind: 'usage',
+        threadId,
+        turnId,
+        model,
+        usage: cumulative
+      })
+    }
+  })
   const replaceRoutedModelClients = (): void => {
-    const next = buildModelClientRouterInput(activeOptions, modelCapabilities, llmDebug)
+    const next = buildModelClientRouterInput(
+      activeOptions,
+      modelCapabilities,
+      llmDebug,
+      resolveLegacyRequestCredentials
+    )
     for (const [providerId, client] of extensionModelProviders.clientMap()) {
       next.providers.set(providerId, client)
     }
-    modelClient.replace(next)
+    directModelClient.replace(next)
+    modelClient.replacePools(activeOptions.routePools ?? [])
   }
   const stopExtensionModelListener = extensionModelProviders.onDidChange(replaceRoutedModelClients)
   const hasMcpOAuth = Object.values(activeOptions.capabilities?.mcp?.servers ?? {}).some((server) =>
@@ -384,6 +493,7 @@ export async function createKunServeRuntime(
     seedUsageCarryover({ threadStore, sessionStore, usageService })
   ])
   const instructionRuntime = new InstructionRuntime(activeOptions.capabilities?.instructions)
+  const migrationMaintenance = new ScopedMigrationMaintenanceLock()
   const turnService = new TurnService({
     threadStore,
     sessionStore,
@@ -398,6 +508,7 @@ export async function createKunServeRuntime(
     contextCompaction: options.contextCompaction,
     maxConcurrentTurns: activeOptions.runtime?.turnLimits?.maxConcurrentTurns,
     lifecycleFence,
+    migrationMaintenance,
     ids,
     nowIso
   })
@@ -464,6 +575,27 @@ export async function createKunServeRuntime(
 	        nowIso
 	      })
 	    : undefined
+	  const migrationService = new RuntimeMigrationService({
+	    rootDir: join(activeOptions.dataDir, 'migrations', 'exports'),
+	    threads: threadService,
+	    turns: turnService,
+	    sessions: sessionStore,
+	    approvals: approvalGate,
+	    userInputs: userInputGate,
+	    artifactStore,
+	    attachmentStore: () => attachmentStore,
+	    memoryStore: () => memoryStore,
+	    nowIso
+	  })
+	  const migrationImportService = new RuntimeMigrationImportService({
+	    rootDir: join(activeOptions.dataDir, 'migrations', 'imports'),
+	    threadStore: rawThreadStore,
+	    sessionStore: rawSessionStore,
+	    maintenance: migrationMaintenance,
+	    attachmentStore: () => attachmentStore,
+	    artifactStore,
+	    memoryStore: () => memoryStore
+	  })
 	  let imageGenProviders = buildImageGenToolProviders(activeOptions.capabilities?.imageGen, {
 	    attachmentStore,
 	    nowIso
@@ -479,7 +611,11 @@ export async function createKunServeRuntime(
     available: true,
     // Safe to include in child runs: the tool is still gated per turn by
     // `context.guiDesignCanvas`, so only design-canvas child turns see it.
-    tools: [...buildDesignCanvasLocalTools(), ...buildDesignSvgLocalTools()]
+    tools: [
+      ...buildDesignCanvasLocalTools(),
+      ...buildDesignMotionLocalTools(),
+      ...buildDesignSvgLocalTools()
+    ]
   }
   const pptMasterProvider = {
     id: 'ppt-master',
@@ -534,6 +670,86 @@ export async function createKunServeRuntime(
     readTracker: true,
     ...(resolvedHooks.length ? { hooks: resolvedHooks } : {})
   })
+  const defaultIsAgentSdk = process.env.KUN_RUNTIME_PROVIDER_KIND === 'agent-sdk'
+  const defaultIsAntigravity = process.env.KUN_RUNTIME_PROVIDER_KIND === 'antigravity-cli'
+  const defaultIsCursorSdk = process.env.KUN_RUNTIME_PROVIDER_KIND === 'cursor-sdk'
+  const createChildDelegatedRuntime: ChildDelegatedRuntimeFactory = (child) =>
+    composeDelegatedTurnRuntimes([
+    ...(agentSdkProviderIds.size > 0 || defaultIsAgentSdk
+      ? [createAgentSdkRuntime({
+          registry: childRegistry,
+          toolHost: childToolHost,
+          turns: child.turns,
+          sessionStore: child.sessionStore,
+          threadStore: child.threadStore,
+          events: child.events,
+          ids: child.ids,
+          prefix: child.prefix,
+          providerConfigs: activeOptions.providers ?? {},
+          agentSdkProviderIds,
+          defaultApprovalPolicy: activeOptions.approvalPolicy,
+          defaultSandboxMode: activeOptions.sandboxMode,
+          defaultModel: activeOptions.model,
+          defaultIsAgentSdk,
+          defaultToken: activeOptions.apiKey,
+          turnLimits: activeOptions.runtime?.turnLimits,
+          approvalGate,
+          instructionRuntime,
+          allowSdkBuiltins: false,
+          toolContextBoundary: {
+            ...(child.allowedProviderIds ? { allowedProviderIds: child.allowedProviderIds } : {}),
+            ...(child.allowedToolNames ? { allowedToolNames: child.allowedToolNames } : {}),
+            ...(child.blockedProviderIds ? { blockedProviderIds: child.blockedProviderIds } : {}),
+            ...(child.blockedToolNames ? { blockedToolNames: child.blockedToolNames } : {}),
+            ...(child.blockedSkillIds ? { blockedSkillIds: child.blockedSkillIds } : {})
+          },
+          ...(child.skillsEnabled ? { skillRuntime } : {}),
+          ...(child.memoryEnabled && memoryStore ? { memoryStore } : {}),
+          ...(attachmentStore ? { attachmentStore } : {}),
+          ...(process.env.KUN_CLAUDE_BINARY
+            ? { pathToClaudeCodeExecutable: process.env.KUN_CLAUDE_BINARY }
+            : {}),
+          nowIso
+        })]
+      : []),
+    ...(antigravityProviderIds.size > 0 || defaultIsAntigravity
+      ? [new AntigravityCliRuntime({
+          providerConfigs: activeOptions.providers ?? {},
+          providerIds: antigravityProviderIds,
+          defaultIsAntigravity,
+          defaultModel: activeOptions.model,
+          systemPrompt: child.prefix.systemPrompt,
+          binaryPath: process.env.KUN_ANTIGRAVITY_BINARY,
+          threadStore: child.threadStore,
+          sessionStore: child.sessionStore,
+          turns: child.turns,
+          events: child.events,
+          ids: child.ids,
+          debugSink: llmDebug,
+          turnLimits: activeOptions.runtime?.turnLimits,
+          enforceReadOnly: child.toolPolicy === 'readOnly'
+        })]
+      : []),
+    ...(cursorSdkProviderIds.size > 0 || defaultIsCursorSdk
+      ? [new CursorSdkRuntime({
+          providerConfigs: activeOptions.providers ?? {},
+          providerIds: cursorSdkProviderIds,
+          defaultIsCursor: defaultIsCursorSdk,
+          defaultApiKey: activeOptions.apiKey,
+          defaultModel: activeOptions.model,
+          systemPrompt: child.prefix.systemPrompt,
+          threadStore: child.threadStore,
+          sessionStore: child.sessionStore,
+          turns: child.turns,
+          events: child.events,
+          ids: child.ids,
+          debugSink: llmDebug,
+          ...(attachmentStore ? { attachmentStore } : {}),
+          turnLimits: activeOptions.runtime?.turnLimits,
+          enforceReadOnly: child.toolPolicy === 'readOnly'
+        })]
+      : [])
+    ])
 	  let delegationRuntime = activeOptions.capabilities?.subagents.enabled
 	    ? new DelegationRuntime({
 	        config: mergeBuiltinSubagentProfiles(activeOptions.capabilities.subagents),
@@ -555,6 +771,8 @@ export async function createKunServeRuntime(
 	          skillRuntime,
 	          instructionRuntime,
 	          tokenEconomy,
+          approvalGate,
+          createDelegatedRuntime: createChildDelegatedRuntime,
           // Persist the child as a hidden `side` thread on the shared stores +
           // event bus so its session is loadable and streams live in the GUI.
           sessionStore,
@@ -656,7 +874,8 @@ export async function createKunServeRuntime(
       available: true,
       tools: [taskGraphTool]
     },
-    ...buildDelegationToolProviders(delegationRuntime)
+    ...buildDelegationToolProviders(delegationRuntime, subagentRouter),
+    ...buildComponentDesignToolProviders(delegationRuntime)
   ])
   let prepareExtensionContributions: ((context?: ToolHostContext) => Promise<void>) | undefined
   const toolHost = new LocalToolHost({
@@ -682,12 +901,8 @@ export async function createKunServeRuntime(
       // ignore duplicate/colliding registration
     }
   })
-  // Subscription engine: only constructed when at least one provider is the
-  // 'agent-sdk' kind. Owns the delegated turn for those providers' threads.
-  // The runtime's own default provider can itself be agent-sdk (the Claude
-  // subscription set as the main model). kun-process signals that via env so we
-  // route default-provider turns to the SDK too, not just per-provider ones.
-	  const defaultIsAgentSdk = process.env.KUN_RUNTIME_PROVIDER_KIND === 'agent-sdk'
+  // Provider-native subscription engines own whole turns and share the same
+  // narrow delegated runtime boundary.
 	  let sdkRuntimeDeps: AgentSdkRuntimeFactoryDeps | undefined
 	  if (agentSdkProviderIds.size > 0 || defaultIsAgentSdk) {
 	    sdkRuntimeDeps = {
@@ -719,6 +934,43 @@ export async function createKunServeRuntime(
 	        : {})
 	    }
 	  }
+	  let antigravityRuntimeDeps: AntigravityCliRuntimeDeps | undefined
+	  if (antigravityProviderIds.size > 0 || defaultIsAntigravity) {
+	    antigravityRuntimeDeps = {
+	      providerConfigs: activeOptions.providers ?? {},
+	      providerIds: antigravityProviderIds,
+	      defaultIsAntigravity,
+	      defaultModel: activeOptions.model,
+        systemPrompt: prefix.systemPrompt,
+	      binaryPath: process.env.KUN_ANTIGRAVITY_BINARY,
+	      threadStore,
+	      sessionStore,
+	      turns: turnService,
+	      events,
+	      ids,
+	      debugSink: llmDebug,
+	      turnLimits: activeOptions.runtime?.turnLimits
+	    }
+	  }
+	  let cursorRuntimeDeps: CursorSdkRuntimeDeps | undefined
+	  if (cursorSdkProviderIds.size > 0 || defaultIsCursorSdk) {
+	    cursorRuntimeDeps = {
+	      providerConfigs: activeOptions.providers ?? {},
+	      providerIds: cursorSdkProviderIds,
+	      defaultIsCursor: defaultIsCursorSdk,
+	      defaultApiKey: activeOptions.apiKey,
+	      defaultModel: activeOptions.model,
+	      systemPrompt: prefix.systemPrompt,
+	      threadStore,
+	      sessionStore,
+	      turns: turnService,
+	      events,
+	      ids,
+	      debugSink: llmDebug,
+	      ...(attachmentStore ? { attachmentStore } : {}),
+	      turnLimits: activeOptions.runtime?.turnLimits
+	    }
+	  }
 
   // The main turn abort signal already reaches foreground children. Detached
   // children and background shells intentionally have independent lifetimes,
@@ -730,7 +982,11 @@ export async function createKunServeRuntime(
       Promise.resolve(delegationRuntime?.abortDetachedChildrenForThread(threadId) ?? 0)
     ])
   }
-	  const sdkRuntime = sdkRuntimeDeps ? createAgentSdkRuntime(sdkRuntimeDeps) : undefined
+	  const sdkRuntime = composeDelegatedTurnRuntimes([
+	    ...(sdkRuntimeDeps ? [createAgentSdkRuntime(sdkRuntimeDeps)] : []),
+	    ...(antigravityRuntimeDeps ? [new AntigravityCliRuntime(antigravityRuntimeDeps)] : []),
+	    ...(cursorRuntimeDeps ? [new CursorSdkRuntime(cursorRuntimeDeps)] : [])
+	  ])
 	  const loopOptions: AgentLoopOptions = {
 	    threadStore,
 	    sessionStore,
@@ -802,8 +1058,8 @@ export async function createKunServeRuntime(
 	    runTurn: runAgentTurn,
 	    defaultBinding: { providerId: 'default', modelId: activeOptions.model },
 	    headless: true,
-	    resolveToolCatalogEpoch: async ({ principal, allowedTools }) => {
-	      const owned = extensionTools.list(principal.extensionId)
+	    resolveToolCatalogEpoch: async ({ principal, workspace, allowedTools }) => {
+	      const owned = extensionTools.list(principal.extensionId, workspace)
 	      const allowed = new Set(allowedTools)
 	      const eligibleCanonicalToolIds = owned
 	        .filter((entry) => allowed.size === 0 ||
@@ -811,7 +1067,7 @@ export async function createKunServeRuntime(
 	          allowed.has(entry.modelAlias) ||
 	          allowed.has(entry.declaration.name))
 	        .map((entry) => entry.canonicalToolId)
-	      return extensionTools.createCatalogEpoch({ eligibleCanonicalToolIds })
+	      return extensionTools.createCatalogEpoch({ eligibleCanonicalToolIds, workspace })
 	    }
 	  })
 	  const extensionPaths = new ExtensionPaths({
@@ -821,15 +1077,20 @@ export async function createKunServeRuntime(
 	  const extensionRegistry = new ExtensionRegistry(extensionPaths)
 	  const extensionApiCapabilities = [
 	    'commands', 'storage', 'configuration', 'network', 'ui', 'agent', 'threads', 'tools',
-	    'modelProviders', 'authentication', 'workspace'
+	    'modelProviders', 'authentication', 'workspace', 'media', 'jobs'
 	  ]
+	  const legacyExtensionApiCapabilities = extensionApiCapabilities.filter((capability) =>
+	    capability !== 'media' && capability !== 'jobs')
 	  const extensionValidation = {
 	    compatibility: {
 	      kunVersion: '0.1.0',
 	      supportedManifestVersions: [CURRENT_MANIFEST_VERSION],
 	      supportedApiVersions: SUPPORTED_EXTENSION_API_VERSIONS,
 	      capabilitiesByApiVersion: Object.fromEntries(
-	        SUPPORTED_EXTENSION_API_VERSIONS.map((version) => [version, extensionApiCapabilities])
+	        SUPPORTED_EXTENSION_API_VERSIONS.map((version) => [
+	          version,
+	          version === '1.0.0' ? legacyExtensionApiCapabilities : extensionApiCapabilities
+	        ])
 	      )
 	    }
 	  }
@@ -840,6 +1101,65 @@ export async function createKunServeRuntime(
 	  )
 	  const extensionState = new ExtensionStateStore(extensionPaths)
 	  const extensionConfiguration = new ExtensionConfigurationService(extensionState)
+	  const extensionMediaHandles = new ExtensionMediaHandleService({ dataDir: activeOptions.dataDir })
+	  const extensionMediaProcesses = new ExtensionMediaProcessService({
+	    handleService: extensionMediaHandles,
+	    ...(process.env.KUN_FFPROBE_PATH ? { ffprobePath: process.env.KUN_FFPROBE_PATH } : {}),
+	    ...(process.env.KUN_FFMPEG_PATH ? { ffmpegPath: process.env.KUN_FFMPEG_PATH } : {})
+	  })
+	  const extensionArtifacts = new ExtensionArtifactService({
+	    dataDir: activeOptions.dataDir,
+	    handleService: extensionMediaHandles
+	  })
+	  const extensionJobDiagnostics: ExtensionJobDiagnostic[] = []
+	  const extensionJobStore = new ExtensionJobStore({
+	    path: join(activeOptions.dataDir, 'extensions', 'jobs.json')
+	  })
+	  const extensionJobs = new ExtensionJobService({
+	    store: extensionJobStore,
+	    reauthorize: async (snapshot, workspaceRoot) => {
+	      const entry = await extensionRegistry.get(snapshot.ownerExtensionId)
+	      if (!entry) return false
+	      const manifest = entry.useDevelopment
+	        ? entry.development?.manifest
+	        : entry.selectedVersion ? entry.versions[entry.selectedVersion]?.manifest : undefined
+	      if (!manifest) return false
+	      const workspaceKey = extensionPaths.workspaceKey(workspaceRoot)
+	      if (workspaceKey !== snapshot.workspaceId) return false
+	      return workspaceKey in entry.workspaceEnablement
+	        ? entry.workspaceEnablement[workspaceKey] === true
+	        : entry.globallyEnabled === true
+	    },
+	    onDiagnostic: (diagnostic) => {
+	      extensionJobDiagnostics.push(diagnostic)
+	      if (extensionJobDiagnostics.length > 128) extensionJobDiagnostics.shift()
+	    }
+	  })
+	  const extensionFfmpeg = new ExtensionMediaFfmpegService({
+	    handleService: extensionMediaHandles,
+	    processService: extensionMediaProcesses
+	  })
+	  const extensionMediaJobs = new ExtensionMediaJobService({
+	    jobs: extensionJobs,
+	    ffmpeg: extensionFfmpeg,
+	    media: extensionMediaProcesses,
+	    artifacts: extensionArtifacts
+	  })
+	  const extensionAudioAnalysisJobs = new ExtensionAudioAnalysisJobService({
+	    jobs: extensionJobs,
+	    media: extensionMediaProcesses
+	  })
+	  const extensionVisualAnalysis = new ExtensionVisualAnalysisService({
+	    dataDir: activeOptions.dataDir,
+	    media: extensionMediaProcesses
+	  })
+	  const extensionMediaArchive = new ExtensionMediaArchiveService({
+	    handles: extensionMediaHandles
+	  })
+	  const extensionMediaArchiveJobs = new ExtensionMediaArchiveJobService({
+	    jobs: extensionJobs,
+	    archive: extensionMediaArchive
+	  })
 	  const extensionViewSessions = new ExtensionViewSessionService()
 	  const extensionViewHostGenerations = new ExtensionViewHostGenerationTracker()
 	  const extensionSecretReveals = new ExtensionSecretRevealConsentService()
@@ -859,18 +1179,32 @@ export async function createKunServeRuntime(
 	    onStream: (principal, requestId, sequence, payload, terminal) =>
 	      extensionBroker.stream(principal, requestId, sequence, payload, terminal),
 	    onHostActivated: (principal) => {
+	      extensionJobs.clearExtensionFence(principal.extensionId)
+	      for (const workspaceRoot of principal.workspaceRoots) {
+	        extensionJobs.clearWorkspaceFence(
+	          principal.extensionId,
+	          extensionPaths.workspaceKey(workspaceRoot)
+	        )
+	      }
 	      extensionViewHostGenerations.bindExtension(
 	        principal.extensionId,
+	        principal.workspaceRoots,
 	        principal.lifecycleNonce
 	      )
 	    },
-	    onHostExit: async (exit) => {
+	    onHostExit: async (exit, principal) => {
 	      // Unexpected exits invalidate every guest bound to the crashed Host.
 	      // Expected lifecycle stops are already coordinated by disable/version/
 	      // shutdown paths. Keeping their sessions here also prevents an idle
 	      // teardown from deleting a newly retained View that is waiting for the
 	      // old Host cleanup to finish before reactivation.
 	      if (!exit.expected) {
+	        const workspaceIds = principal.workspaceRoots.map((root) =>
+	          extensionPaths.workspaceKey(root))
+	        await extensionJobs.handleExtensionHostCrash(
+	          exit.extensionId,
+	          workspaceIds.length === 0 ? undefined : workspaceIds
+	        )
 	        for (const sessionId of extensionViewHostGenerations.takeExitedGeneration(
 	          exit.extensionId,
 	          exit.lifecycleNonce
@@ -878,7 +1212,7 @@ export async function createKunServeRuntime(
 	          extensionViewSessions.disposeSession(sessionId)
 	        }
 	      }
-	      await extensionBroker.disposeExtension(exit.extensionId)
+	      await extensionBroker.disposeHost(principal)
 	      // A crash does not change the registry revision, so explicitly drop
 	      // successful lazy-preparation entries and allow clean reactivation.
 	      extensionPreparations.clear()
@@ -900,10 +1234,20 @@ export async function createKunServeRuntime(
 	    credentials: extensionCredentials,
 	    state: extensionState,
 	    configuration: extensionConfiguration,
+	    artifacts: extensionArtifacts,
+	    mediaHandles: extensionMediaHandles,
+	    mediaProcesses: extensionMediaProcesses,
+	    mediaJobs: extensionMediaJobs,
+	    audioAnalysisJobs: extensionAudioAnalysisJobs,
+	    visualAnalysis: extensionVisualAnalysis,
+	    archiveJobs: extensionMediaArchiveJobs,
+	    jobs: extensionJobs,
 	    invokeExtension: (extensionId, activationEvent, method, params, invokeOptions) =>
 	      extensionManager.invoke(extensionId, activationEvent, method, params, invokeOptions),
-	    notifyExtension: (extensionId, method, params) =>
-	      extensionManager.notify(extensionId, method, params),
+	    notifyExtension: (principal, method, params) =>
+	      extensionManager.notify(principal.extensionId, method, params, {
+	        workspaceRoots: [...principal.workspaceRoots]
+	      }),
 	    notifyView: (input) => extensionViewSessions.publishBridgeNotification(input),
 	    resolveManifest: resolveExtensionManifest,
 	    onUiRequest: extensionViewSessions.onUiRequest,
@@ -917,12 +1261,19 @@ export async function createKunServeRuntime(
 	      extensionViewHostGenerations.register(
 	        session.sessionId,
 	        session.extensionId,
-	        extensionManager.activeHostGeneration(session.extensionId)
+	        session.workspaceRoot,
+	        extensionManager.activeHostGeneration(session.extensionId, {
+	          ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {})
+	        })
 	      )
-	      extensionManager.retainView(session.extensionId)
+	      extensionManager.retainView(session.extensionId, {
+	        ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {})
+	      })
 	    } else {
 	      extensionViewHostGenerations.unregister(session.sessionId)
-	      extensionManager.releaseView(session.extensionId)
+	      extensionManager.releaseView(session.extensionId, {
+	        ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {})
+	      })
 	    }
 	  })
 	  extensionConfiguration.onDidChange(async (change) => {
@@ -932,15 +1283,19 @@ export async function createKunServeRuntime(
 	      scope: change.scope,
 	      value: change.value
 	    }
+	    const deliveryScope = change.scope === 'workspace'
+	      ? { workspaceKey: change.workspaceKey }
+	      : undefined
 	    await extensionManager.notify(
 	      change.extensionId,
 	      'configuration.changed',
-	      event
+	      event,
+	      deliveryScope
 	    ).catch(() => undefined)
 	    extensionViewSessions.publish(change.extensionId, 'bridge', {
 	      method: 'configuration.changed',
 	      params: event
-	    })
+	    }, deliveryScope)
 	  })
 	  const extensionStateMigrations = new ExtensionStateMigrationCoordinator(
 	    extensionState,
@@ -950,6 +1305,8 @@ export async function createKunServeRuntime(
 	  const extensionLifecycle = extensionStateMigrations.lifecycle()
 	  extensionPackageManager.setLifecycle({
 	    runVersionSwitch: async (context, commitSelection) => {
+	      await extensionJobs.handleExtensionRollback(context.extensionId)
+	      await extensionMediaHandles.revokeExtension(context.extensionId)
 	      extensionViewSessions.disposeExtension(context.extensionId)
 	      await extensionBroker.disposeExtension(context.extensionId)
 	      if (extensionLifecycle.runVersionSwitch === undefined) {
@@ -961,31 +1318,82 @@ export async function createKunServeRuntime(
 	      extensionLifecycle.recoverVersionSwitch?.(extensionId) ?? Promise.resolve(),
 	    recoverVersionSwitches: () =>
 	      extensionLifecycle.recoverVersionSwitches?.() ?? Promise.resolve(),
-	    beforeDisable: async (extensionId, workspaceKey) => {
+	    beforeDisable: async (extensionId, workspaceKey, workspaceRoot) => {
+	      if (workspaceKey === undefined) {
+	        await extensionJobs.handleExtensionDisabled(extensionId)
+	        await extensionMediaHandles.revokeExtension(extensionId)
+	      } else {
+	        await extensionJobs.handleWorkspaceRevoked(extensionId, workspaceKey)
+	        await extensionMediaHandles.revokeExtensionWorkspace(
+	          extensionId,
+	          workspaceKey,
+	          workspaceRoot
+	        )
+	      }
 	      await extensionLifecycle.beforeDisable?.(extensionId, workspaceKey)
-	      extensionViewSessions.disposeExtension(extensionId)
-	      await extensionBroker.disposeExtension(extensionId)
+	      if (workspaceKey === undefined) {
+	        extensionViewSessions.disposeExtension(extensionId)
+	        await extensionBroker.disposeExtension(extensionId)
+	      } else {
+	        extensionViewSessions.disposeExtensionWorkspace(extensionId, workspaceKey)
+	        await extensionBroker.disposeExtensionWorkspace(extensionId, workspaceKey)
+	      }
 	    },
-	    beforePermissionChange: async (extensionId) => {
-	      extensionViewSessions.disposeExtension(extensionId)
-	      await extensionManager.deactivate(extensionId)
-	      await extensionBroker.disposeExtension(extensionId)
+	    beforePermissionChange: async (extensionId, workspaceKey, workspaceRoot) => {
+	      await extensionJobs.handleWorkspaceRevoked(extensionId, workspaceKey)
+	      await extensionMediaHandles.revokeExtensionWorkspace(
+	        extensionId,
+	        workspaceKey,
+	        workspaceRoot
+	      )
+	      extensionViewSessions.disposeExtensionWorkspace(extensionId, workspaceKey)
+	      await extensionManager.deactivateWorkspace(extensionId, workspaceKey)
+	      await extensionBroker.disposeExtensionWorkspace(extensionId, workspaceKey)
 	    },
 	    beforeUninstall: async (extensionId) => {
+	      await extensionJobs.handleExtensionUninstalled(extensionId)
+	      await extensionMediaHandles.revokeExtension(extensionId)
 	      await extensionLifecycle.beforeUninstall?.(extensionId)
 	      extensionViewSessions.disposeExtension(extensionId)
 	      await extensionBroker.disposeExtension(extensionId)
 	    }
 	  })
 	  await extensionPackageManager.recover()
+	  let bundledSeedResults: BundledExtensionSeedResult[] = []
+	  await extensionJobs.initialize()
+	  if (activeOptions.bundledExtensionsDir) {
+	    try {
+	      const bundledResults = await seedBundledExtensions({
+	        directory: activeOptions.bundledExtensionsDir,
+	        packageManager: extensionPackageManager
+	      })
+	      bundledSeedResults = bundledResults
+	      for (const result of bundledResults) {
+	        if (result.outcome === 'unchanged') continue
+	        const suffix = result.code ? ` (${result.code})` : ''
+	        const message = `[extensions] bundled ${result.extensionId}@${result.version}: ${result.outcome}${suffix}`
+	        if (result.outcome === 'failed' || result.outcome.startsWith('skipped-')) {
+	          console.warn(message)
+	        } else {
+	          console.info(message)
+	        }
+	      }
+	    } catch (error) {
+	      const message = error instanceof Error ? error.message : 'unknown bundled extension error'
+	      console.warn(`[extensions] bundled catalog unavailable: ${message}`)
+	    }
+	  }
 	  const extensionIndexClient = new ExtensionIndexClient()
 	  const activateDeclaredHeadlessContributions = async (
 	    document: Awaited<ReturnType<ExtensionRegistry['read']>>,
 	    context?: ToolHostContext
 	  ): Promise<boolean> => {
 	    const outcomes = await Promise.allSettled(Object.values(document.extensions).map(async (entry) => {
-	      const workspaceKey = context?.workspace && isAbsolute(context.workspace)
-	        ? extensionPaths.workspaceKey(context.workspace)
+	      const workspaceRoot = context?.workspace && isAbsolute(context.workspace)
+	        ? context.workspace
+	        : undefined
+	      const workspaceKey = workspaceRoot
+	        ? extensionPaths.workspaceKey(workspaceRoot)
 	        : undefined
 	      const enabled = workspaceKey && workspaceKey in entry.workspaceEnablement
 	        ? entry.workspaceEnablement[workspaceKey]
@@ -1004,7 +1412,18 @@ export async function createKunServeRuntime(
 	        manifest.activationEvents.includes(candidate)
 	      ) ?? (manifest.activationEvents.includes('onStartup') ? 'onStartup' : undefined)
 	      if (event) await extensionManager.activate(entry.id, event, {
-	        ...(context?.workspace ? { workspaceRoot: context.workspace } : {})
+	        ...(workspaceRoot
+	          ? {
+	              workspaceRoot,
+	              workspaceContext: {
+	                id: workspaceKey!,
+	                name: basename(workspaceRoot) || workspaceRoot,
+	                root: workspaceRoot,
+	                trusted: true,
+	                active: true
+	              }
+	            }
+	          : {})
 	      })
 	    }))
 	    return outcomes.every((outcome) => outcome.status === 'fulfilled')
@@ -1109,16 +1528,33 @@ export async function createKunServeRuntime(
 	  const applyConfigOnce = async (
 	    request: RuntimeConfigApplyRequest
 	  ): Promise<RuntimeConfigApplyResponse> => {
+	    if (
+	      request.serve?.observability !== undefined &&
+	      !isDeepStrictEqual(request.serve.observability, activeOptions.observability ?? {})
+	    ) {
+	      return {
+	        ok: false,
+	        code: 'restart_required',
+	        message: 'observability exporter changes require a runtime restart'
+	      }
+	    }
 	    const nextOptions = await hydrateLegacyCredentialOptions(
 	      mergeRuntimeConfigApplyOptions(activeOptions, request),
 	      legacyCredentialMigration
 	    )
-	    const nextAgentSdkSignature = agentSdkProviderSignature(nextOptions)
-	    if (nextAgentSdkSignature !== agentSdkSignature) {
+	    if (nextOptions.localModelGateway?.enabled && !isLoopbackHost(nextOptions.host)) {
+	      return {
+	        ok: false,
+	        code: 'invalid_config',
+	        message: 'unauthenticated local model gateway requires a loopback serve host'
+	      }
+	    }
+	    const nextDelegatedProviderSignature = delegatedProviderSignatureForOptions(nextOptions)
+	    if (nextDelegatedProviderSignature !== delegatedProviderSignature) {
 	      return {
 	        ok: false,
 	        code: 'restart_required',
-	        message: 'agent-sdk provider routing changed and requires a runtime restart'
+	        message: 'delegated subscription provider routing changed and requires a runtime restart'
 	      }
 	    }
 	    const nextSubagentsEnabled = nextOptions.capabilities?.subagents.enabled === true
@@ -1239,14 +1675,15 @@ export async function createKunServeRuntime(
 	        available: true,
 	        tools: [taskGraphTool]
 	      },
-	      ...buildDelegationToolProviders(delegationRuntime)
+	      ...buildDelegationToolProviders(delegationRuntime, subagentRouter),
+	      ...buildComponentDesignToolProviders(delegationRuntime)
 	    ])
 
 	    const previousMcpProviders = mcpProviders
 	    activeOptions = nextOptions
 	    modelProfiles = nextModelProfiles
 	    tokenEconomy = nextTokenEconomy
-	    agentSdkSignature = nextAgentSdkSignature
+	    delegatedProviderSignature = nextDelegatedProviderSignature
 	    replaceRoutedModelClients()
 	    await migrateLegacyProviderCredentials()
 	    skillRuntime.replaceWith(nextSkillRuntime)
@@ -1286,6 +1723,22 @@ export async function createKunServeRuntime(
 	        sdkRuntimeDeps.memoryStore = memoryStore
 	      } else {
 	        delete sdkRuntimeDeps.memoryStore
+	      }
+	    }
+	    if (antigravityRuntimeDeps) {
+	      antigravityRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
+	      antigravityRuntimeDeps.defaultModel = activeOptions.model
+	      antigravityRuntimeDeps.turnLimits = activeOptions.runtime?.turnLimits
+	    }
+	    if (cursorRuntimeDeps) {
+	      cursorRuntimeDeps.providerConfigs = activeOptions.providers ?? {}
+	      cursorRuntimeDeps.defaultApiKey = activeOptions.apiKey
+	      cursorRuntimeDeps.defaultModel = activeOptions.model
+	      cursorRuntimeDeps.turnLimits = activeOptions.runtime?.turnLimits
+	      if (attachmentStore) {
+	        cursorRuntimeDeps.attachmentStore = attachmentStore
+	      } else {
+	        delete cursorRuntimeDeps.attachmentStore
 	      }
 	    }
 	    turnService.updateRuntimeConfig({
@@ -1359,6 +1812,8 @@ export async function createKunServeRuntime(
 	    get memoryStore() {
 	      return memoryStore
 	    },
+	    migrationService,
+	    migrationImportService,
 	    get delegationRuntime() {
 	      return delegationRuntime
 	    },
@@ -1380,10 +1835,19 @@ export async function createKunServeRuntime(
 	      credentials: extensionCredentials,
 	      state: extensionState,
 	      configuration: extensionConfiguration,
+	      mediaHandles: extensionMediaHandles,
+	      artifacts: extensionArtifacts,
 	      viewSessions: extensionViewSessions,
-	      secretReveals: extensionSecretReveals
+	      secretReveals: extensionSecretReveals,
+	      bundledSeedResults
 	    },
 	    modelClient,
+	    modelGateway: {
+	      enabled: () => activeOptions.localModelGateway?.enabled === true,
+	      pools: () => modelClient.routePools(),
+	      health: routeHealth,
+	      tests: routePoolTests
+	    },
 	    get defaultModel() {
 	      return activeOptions.model
 	    },
@@ -1460,7 +1924,12 @@ export async function createKunServeRuntime(
 	        tools: extensionTools.list(),
 	        providers: [...extensionModelProviders.clientMap().keys()].sort(),
 	        providerDiagnostics: extensionModelProviders.diagnostics(),
-	        hosts: await extensionManager.listDiagnostics()
+	        hosts: await extensionManager.listDiagnostics(),
+	        jobs: {
+	          activeCount: extensionJobs.activeCount,
+	          subscriptionCount: extensionJobs.subscriptionCount,
+	          recent: extensionJobDiagnostics.map((diagnostic) => ({ ...diagnostic }))
+	        }
 	      }
 	    }),
     mcpOAuth: async () => mcpProviders.oauth,
@@ -1472,7 +1941,11 @@ export async function createKunServeRuntime(
         shuttingDown = true
         eventStreamRegistry.closeAll()
         loop.shutdownGoalResume()
-        await backgroundShellRuntime.shutdown()
+	        await backgroundShellRuntime.shutdown()
+	        await extensionJobs.handleRuntimeShutdown()
+	        extensionMediaJobs.dispose()
+	        extensionAudioAnalysisJobs.dispose()
+	        extensionMediaArchiveJobs.dispose()
         await turnService.interruptActiveTurns()
         await waitForActiveRuns(activeRuntimeRuns)
 	        stopExtensionModelListener()
@@ -1484,9 +1957,16 @@ export async function createKunServeRuntime(
 	        extensionTools.disposeAll()
 	        await extensionModelProviders.disposeAll()
         shutdownAllLspSessions()
-        await mcpProviders.close()
+	        await mcpProviders.close()
+	        await migrationService.shutdown()
+	        await migrationImportService.shutdown()
       } finally {
-        await stores.shutdown?.()
+        try {
+          await llmDebug.shutdown()
+          await agentObservability?.shutdown()
+        } finally {
+          await stores.shutdown?.()
+        }
       }
     }
   }
@@ -1555,13 +2035,21 @@ async function hydrateLegacyCredentialOptions(
 function buildModelClientRouterInput(
   options: KunServeRuntimeOptions,
   modelCapabilities: (model: string) => ReturnType<typeof modelCapabilitiesForModel>,
-  llmDebug?: LlmDebugRecorder
-): { default: CompatModelClient; providers: Map<string, ModelClient> } {
+  llmDebug?: LlmDebugRecorder,
+  credentialResolver?: (
+    sourceId: string,
+    rejectedAccessToken?: string
+  ) => Promise<{
+    apiKey: string
+    headers?: Record<string, string>
+    refreshable: boolean
+  }>
+): { default: ModelClient; providers: Map<string, ModelClient> } {
   const streamIdleOverride =
     options.runtime?.streamIdleTimeoutMs !== undefined
       ? { streamIdleTimeoutMs: options.runtime.streamIdleTimeoutMs }
       : {}
-  const defaultClient = new CompatModelClient({
+  const defaultClient: ModelClient = new CompatModelClient({
     baseUrl: options.baseUrl,
     apiKey: options.apiKey,
     modelProxyUrl: options.modelProxyUrl,
@@ -1570,28 +2058,38 @@ function buildModelClientRouterInput(
     model: options.model,
     modelCapabilities,
     headers: options.headers,
+    ...(options.credentialSourceId && credentialResolver
+      ? {
+          resolveCredentials: (rejectedAccessToken?: string) =>
+            credentialResolver(options.credentialSourceId!, rejectedAccessToken)
+        }
+      : {}),
     ...(llmDebug ? { debugSink: llmDebug } : {}),
     ...streamIdleOverride
   })
   const providerClients = new Map<string, ModelClient>()
   for (const [providerId, provider] of Object.entries(options.providers ?? {})) {
     const trimmedId = providerId.trim()
-    if (!trimmedId || (provider.kind ?? 'http') === 'agent-sdk') continue
-    providerClients.set(
-      trimmedId,
-      new CompatModelClient({
-        baseUrl: provider.baseUrl ?? options.baseUrl ?? '',
-        apiKey: provider.apiKey,
-        modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
-        endpointFormat: provider.endpointFormat ?? options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
-        retry: provider.retry ?? options.retry,
-        model: options.model,
-        modelCapabilities,
-        headers: provider.headers,
-        ...(llmDebug ? { debugSink: llmDebug } : {}),
-        ...streamIdleOverride
-      })
-    )
+    if (!trimmedId || (provider.kind ?? 'http') !== 'http') continue
+    const client: ModelClient = new CompatModelClient({
+      baseUrl: provider.baseUrl ?? options.baseUrl ?? '',
+      apiKey: provider.apiKey,
+      modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,
+      endpointFormat: provider.endpointFormat ?? options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
+      retry: provider.retry ?? options.retry,
+      model: options.model,
+      modelCapabilities,
+      headers: provider.headers,
+      ...(provider.credentialSourceId && credentialResolver
+        ? {
+            resolveCredentials: (rejectedAccessToken?: string) =>
+              credentialResolver(provider.credentialSourceId!, rejectedAccessToken)
+          }
+        : {}),
+      ...(llmDebug ? { debugSink: llmDebug } : {}),
+      ...streamIdleOverride
+    })
+    providerClients.set(trimmedId, client)
   }
   return { default: defaultClient, providers: providerClients }
 }
@@ -1605,8 +2103,30 @@ function agentSdkProviderIdsForOptions(options: KunServeRuntimeOptions): Set<str
   return out
 }
 
-function agentSdkProviderSignature(options: KunServeRuntimeOptions): string {
-  return [...agentSdkProviderIdsForOptions(options)].sort().join('\n')
+function antigravityProviderIdsForOptions(options: KunServeRuntimeOptions): Set<string> {
+  const out = new Set<string>()
+  for (const [providerId, provider] of Object.entries(options.providers ?? {})) {
+    const trimmedId = providerId.trim()
+    if (trimmedId && (provider.kind ?? 'http') === 'antigravity-cli') out.add(trimmedId)
+  }
+  return out
+}
+
+function cursorSdkProviderIdsForOptions(options: KunServeRuntimeOptions): Set<string> {
+  const out = new Set<string>()
+  for (const [providerId, provider] of Object.entries(options.providers ?? {})) {
+    const trimmedId = providerId.trim()
+    if (trimmedId && (provider.kind ?? 'http') === 'cursor-sdk') out.add(trimmedId)
+  }
+  return out
+}
+
+function delegatedProviderSignatureForOptions(options: KunServeRuntimeOptions): string {
+  return [
+    ...[...agentSdkProviderIdsForOptions(options)].map((id) => `agent-sdk:${id}`),
+    ...[...antigravityProviderIdsForOptions(options)].map((id) => `antigravity-cli:${id}`),
+    ...[...cursorSdkProviderIdsForOptions(options)].map((id) => `cursor-sdk:${id}`)
+  ].sort().join('\n')
 }
 
 function mergeRuntimeConfigApplyOptions(
@@ -1624,6 +2144,8 @@ function mergeRuntimeConfigApplyOptions(
     retry: serve.retry ?? current.retry,
     headers: serve.headers ?? current.headers,
     providers: serve.providers ?? current.providers,
+    routePools: serve.routePools ?? current.routePools,
+    localModelGateway: serve.localModelGateway ?? current.localModelGateway,
     model: serve.model ?? current.model,
     approvalPolicy: serve.approvalPolicy ?? current.approvalPolicy,
     sandboxMode: serve.sandboxMode ?? current.sandboxMode,
@@ -1742,7 +2264,8 @@ export async function startKunServe(
   const server = await startNodeHttpServer({
     router,
     host: options.host,
-    port: options.port
+    port: options.port,
+    ...(options.faultInjection ? { faultInjection: options.faultInjection } : {})
   })
   // Background sweep after listen: settle turns orphaned by a crash so
   // clients stop spinning on them, without delaying readiness. Then resume

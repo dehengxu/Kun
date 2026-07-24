@@ -38,6 +38,10 @@ import {
   type KunThreadMode
 } from '@shared/kun-endpoints'
 import { parseRuntimeErrorBody, runtimeErrorToError, type RuntimeError } from '@shared/runtime-error'
+import {
+  workspaceDirectoryExists,
+  workspaceMissingError
+} from '../lib/workspace-availability'
 import type {
   CoreAttachmentDiagnosticsJson,
   CoreAttachmentContentResponseJson,
@@ -76,6 +80,7 @@ import {
   threadFromCore
 } from './kun-mapper'
 import { rendererRuntimeClient } from './runtime-client'
+import type { ComposerContextAttachment } from '@kun/extension-api'
 
 const MAX_PENDING_SSE_DISPATCH_BATCHES = 32
 
@@ -172,11 +177,15 @@ export class KunRuntimeProvider implements AgentProvider {
   }): Promise<NormalizedThread> {
     const settings = await rendererRuntimeClient.getSettings()
     const runtime = getKunRuntimeSettings(settings)
+    const workspace = (input.workspace || settings.workspaceRoot || '').trim()
+    if (!workspace || !(await workspaceDirectoryExists(workspace))) {
+      throw new Error(workspaceMissingError())
+    }
     const response = await rendererRuntimeClient.runtimeRequest(
       '/v1/threads',
       'POST',
       JSON.stringify({
-        workspace: input.workspace || settings.workspaceRoot || '~',
+        workspace,
         title: input.title,
         ...(input.titleAuto !== undefined ? { titleAuto: input.titleAuto } : {}),
         model: input.model?.trim() || runtime.model,
@@ -289,6 +298,7 @@ export class KunRuntimeProvider implements AgentProvider {
       }
       guiDesignCanvas?: boolean
       guiDesignMode?: boolean
+      agentSurface?: 'code' | 'write' | 'design'
       guiDesignArtifact?: {
         kind: 'svg'
         artifactId: string
@@ -297,15 +307,23 @@ export class KunRuntimeProvider implements AgentProvider {
       attachmentIds?: string[]
       workspaceCheckpointId?: string
       fileReferences?: Array<{ path: string; relativePath: string; name: string; kind?: 'file' | 'directory' }>
+      composerContexts?: ComposerContextAttachment[]
     }
   ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string }> {
     const settings = await rendererRuntimeClient.getSettings()
     const runtime = getKunRuntimeSettings(settings)
+    const mode = options?.mode
+    const selectedModel = options?.model?.trim() ||
+      (mode === 'plan' ? runtime.planModel?.trim() : '')
+    const selectedProviderId = options?.providerId?.trim() ||
+      (mode === 'plan' ? runtime.planProviderId?.trim() : '')
+    const selectedAccountId = options?.accountId?.trim() ||
+      (mode === 'plan' ? runtime.planAccountId?.trim() : '')
     const body: Record<string, unknown> = {
       prompt: text,
-      model: options?.model,
-      providerId: options?.providerId,
-      accountId: options?.accountId,
+      ...(selectedModel ? { model: selectedModel } : {}),
+      ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
+      ...(selectedAccountId ? { accountId: selectedAccountId } : {}),
       approvalPolicy: runtime.approvalPolicy,
       sandboxMode: runtime.sandboxMode
     }
@@ -315,7 +333,6 @@ export class KunRuntimeProvider implements AgentProvider {
     if (options?.displayText?.trim() && options.displayText.trim() !== text.trim()) {
       body.displayText = options.displayText.trim()
     }
-    const mode = options?.mode
     if (mode === 'agent' || mode === 'plan') {
       body.mode = mode
     }
@@ -335,6 +352,9 @@ export class KunRuntimeProvider implements AgentProvider {
     if (options?.guiDesignMode) {
       body.guiDesignMode = true
     }
+    if (options?.agentSurface) {
+      body.agentSurface = options.agentSurface
+    }
     if (options?.guiDesignArtifact) {
       body.guiDesignArtifact = options.guiDesignArtifact
     }
@@ -346,6 +366,9 @@ export class KunRuntimeProvider implements AgentProvider {
     }
     if (options?.fileReferences?.length) {
       body.fileReferences = options.fileReferences
+    }
+    if (options?.composerContexts?.length) {
+      body.composerContexts = options.composerContexts
     }
     const response = await rendererRuntimeClient.runtimeRequest(
       kunThreadTurnsPath(threadId),
@@ -412,11 +435,17 @@ export class KunRuntimeProvider implements AgentProvider {
     }
   }
 
-  async steerUserMessage(threadId: string, turnId: string, text: string): Promise<void> {
+  async steerUserMessage(
+    threadId: string,
+    turnId: string,
+    text: string,
+    options?: { displayText?: string }
+  ): Promise<void> {
+    const displayText = options?.displayText?.trim()
     const response = await rendererRuntimeClient.runtimeRequest(
       kunThreadSteerPath(threadId, turnId),
       'POST',
-      JSON.stringify({ text })
+      JSON.stringify({ text, ...(displayText ? { displayText } : {}) })
     )
     if (!response.ok) {
       throw runtimeErrorToError(readRuntimeError(response.body, 'failed to queue message'))
@@ -743,6 +772,21 @@ export class KunRuntimeProvider implements AgentProvider {
     threadId?: string
     workspace?: string
   }): Promise<CoreAttachmentMetadataJson> {
+    if (
+      input.mimeType?.startsWith('image/') &&
+      typeof window.kunGui?.uploadRuntimeImageAttachment === 'function'
+    ) {
+      const result = await window.kunGui.uploadRuntimeImageAttachment({
+        source: input.localFilePath
+          ? { kind: 'localPath', path: input.localFilePath }
+          : { kind: 'base64', dataBase64: input.dataBase64, mimeType: input.mimeType },
+        name: input.name,
+        ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.workspace ? { workspace: input.workspace } : {})
+      })
+      if (!result.ok) throw new Error(result.message)
+      return result.attachment
+    }
     const response = await rendererRuntimeClient.runtimeRequest(
       KUN_ATTACHMENTS_PATH,
       'POST',

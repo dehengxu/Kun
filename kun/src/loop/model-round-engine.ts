@@ -62,6 +62,8 @@ export type ModelRoundEngineDeps = {
 
 const ASSISTANT_DELTA_EVENT_MAX_BYTES = 4 * 1024
 const ASSISTANT_DELTA_EVENT_MAX_DELAY_MS = 40
+const MAX_TRACKED_TOOL_CALL_TURNS = 128
+const COMPAT_FALLBACK_CALL_ID_PATTERN = /^call_\d+$/
 
 type AssistantDeltaEvent = {
   kind: 'assistant_text_delta' | 'assistant_reasoning_delta'
@@ -75,12 +77,16 @@ type AssistantDeltaEvent = {
  * dispatch, and terminal lifecycle ownership.
  */
 export class ModelRoundEngine {
+  private readonly runtimeCallIdsByTurn = new Map<string, Set<string>>()
+
   constructor(private readonly deps: ModelRoundEngineDeps) {}
 
   async run(input: ModelRoundEngineInput): Promise<ModelRoundStreamResult> {
+    const allocateRuntimeCallId = this.runtimeCallIdAllocator(input)
     const collector = new ModelStreamCollector({
       maxToolCallsPerStep: input.maxToolCallsPerStep,
       toolMetadata: input.streamToolMetadata,
+      allocateRuntimeCallId,
       ...(input.maxToolArgumentStringBytes !== undefined
         ? { maxToolArgumentStringBytes: input.maxToolArgumentStringBytes }
         : {})
@@ -324,6 +330,40 @@ export class ModelRoundEngine {
     return snapshot.toolCalls.length > 0
       ? { kind: 'tool_calls', snapshot }
       : { kind: 'completed', snapshot }
+  }
+
+  clearTurn(turnId: string): void {
+    this.runtimeCallIdsByTurn.delete(turnId)
+  }
+
+  private runtimeCallIdAllocator(input: ModelRoundEngineInput): (providerCallId: string) => string {
+    const used = this.runtimeCallIdsByTurn.get(input.turnId) ?? new Set<string>()
+    for (const item of input.request.history) {
+      if (item.kind === 'tool_call' || item.kind === 'tool_result') used.add(item.callId)
+    }
+    this.runtimeCallIdsByTurn.delete(input.turnId)
+    this.runtimeCallIdsByTurn.set(input.turnId, used)
+    if (this.runtimeCallIdsByTurn.size > MAX_TRACKED_TOOL_CALL_TURNS) {
+      const oldest = this.runtimeCallIdsByTurn.keys().next().value
+      if (oldest !== undefined) this.runtimeCallIdsByTurn.delete(oldest)
+    }
+
+    return (providerCallId) => {
+      if (
+        providerCallId.trim() &&
+        !COMPAT_FALLBACK_CALL_ID_PATTERN.test(providerCallId)
+      ) {
+        if (!used.has(providerCallId)) {
+          used.add(providerCallId)
+          return providerCallId
+        }
+      }
+
+      let runtimeCallId = this.deps.ids.next('call_tool')
+      while (used.has(runtimeCallId)) runtimeCallId = this.deps.ids.next('call_tool')
+      used.add(runtimeCallId)
+      return runtimeCallId
+    }
   }
 }
 

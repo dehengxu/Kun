@@ -1,0 +1,391 @@
+import type { ModelRequestTraceRecord } from './model-request-traces'
+import {
+  resolveToolProvenance,
+  type ToolProvenance
+} from './agent-tool-provenance'
+
+export type AgentPerspectiveEventKind = 'llm_request' | 'tool_call' | 'title_generation'
+
+export type SemanticPrompt = {
+  id: string
+  source: 'instructions' | 'system' | 'message'
+  text: string
+}
+
+export type SemanticSkill = {
+  id: string
+  name: string
+  description: string
+  path?: string
+  active: boolean
+}
+
+export type SemanticToolDefinition = {
+  name: string
+  description: string
+  inputSchema?: Record<string, unknown>
+  provenance: ToolProvenance
+}
+
+export type SemanticMessage = {
+  id: string
+  role: string
+  text: string
+  callId?: string
+  name?: string
+  kind?: string
+}
+
+export type SemanticParameter = {
+  name: string
+  value: unknown
+}
+
+export type SemanticRequest = {
+  body: Record<string, unknown> | null
+  model: string
+  prompts: SemanticPrompt[]
+  skills: SemanticSkill[]
+  tools: SemanticToolDefinition[]
+  messages: SemanticMessage[]
+  parameters: SemanticParameter[]
+  parseError?: string
+}
+
+export type AgentLlmRequestEvent = {
+  id: string
+  kind: 'llm_request'
+  startedAt: string
+  record: ModelRequestTraceRecord
+  semantic: SemanticRequest
+}
+
+export type AgentTitleGenerationEvent = {
+  id: string
+  kind: 'title_generation'
+  startedAt: string
+  record: ModelRequestTraceRecord
+  semantic: SemanticRequest
+  title: string
+}
+
+export type AgentToolCallEvent = {
+  id: string
+  kind: 'tool_call'
+  startedAt: string
+  record: ModelRequestTraceRecord
+  callId: string
+  toolName: string
+  arguments: Record<string, unknown>
+  provenance: ToolProvenance
+  result?: SemanticMessage
+}
+
+export type AgentPerspectiveEvent =
+  | AgentLlmRequestEvent
+  | AgentTitleGenerationEvent
+  | AgentToolCallEvent
+
+const TITLE_SYSTEM_SIGNATURE = 'You generate a concise title for a chat conversation.'
+const TITLE_TURN_SUFFIX = '_title'
+const STRUCTURAL_KEYS = new Set([
+  'model', 'messages', 'input', 'instructions', 'system', 'tools'
+])
+
+export function projectAgentPerspectiveEvents(
+  records: readonly ModelRequestTraceRecord[]
+): AgentPerspectiveEvent[] {
+  const ordered = [...records].sort(oldestRecordFirst)
+  const semanticByRecord = new Map(ordered.map((record) => [record.id, parseSemanticRequest(record)]))
+  const toolResults = collectToolResults([...semanticByRecord.values()])
+  const events: AgentPerspectiveEvent[] = []
+
+  for (const record of ordered) {
+    const semantic = semanticByRecord.get(record.id) ?? parseSemanticRequest(record)
+    if (isTitleGenerationRequest(record, semantic)) {
+      events.push({
+        id: record.id,
+        kind: 'title_generation',
+        startedAt: record.startedAt,
+        record,
+        semantic,
+        title: record.decoded?.text.trim() ?? ''
+      })
+      continue
+    }
+
+    events.push({
+      id: record.id,
+      kind: 'llm_request',
+      startedAt: record.startedAt,
+      record,
+      semantic
+    })
+    for (const [index, call] of (record.decoded?.toolCalls ?? []).entries()) {
+      events.push({
+        id: `tool:${record.id}:${call.callId || index}`,
+        kind: 'tool_call',
+        startedAt: record.finishedAt ?? record.startedAt,
+        record,
+        callId: call.callId,
+        toolName: call.toolName,
+        arguments: call.arguments,
+        provenance: resolveToolProvenance(call.toolName, record.toolCatalog),
+        ...(toolResults.get(call.callId) ? { result: toolResults.get(call.callId) } : {})
+      })
+    }
+  }
+  return events
+}
+
+export function parseSemanticRequest(record: ModelRequestTraceRecord): SemanticRequest {
+  let body: Record<string, unknown>
+  try {
+    const value: unknown = JSON.parse(record.request.body.text)
+    if (!isRecord(value)) throw new Error('request body is not an object')
+    body = value
+  } catch (error) {
+    return {
+      body: null,
+      model: record.model,
+      prompts: [],
+      skills: [],
+      tools: [],
+      messages: [],
+      parameters: [],
+      parseError: error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  const prompts = parsePrompts(body)
+  const messages = parseMessages(body)
+  return {
+    body,
+    model: stringValue(body.model) || record.model,
+    prompts,
+    skills: parseSkills(prompts),
+    tools: parseToolDefinitions(body, record.toolCatalog),
+    messages,
+    parameters: Object.entries(body)
+      .filter(([key]) => !STRUCTURAL_KEYS.has(key))
+      .map(([name, value]) => ({ name, value }))
+  }
+}
+
+export function isTitleGenerationRequest(
+  record: ModelRequestTraceRecord,
+  semantic = parseSemanticRequest(record)
+): boolean {
+  if (record.turnId.endsWith(TITLE_TURN_SUFFIX)) return true
+  return semantic.prompts.some((prompt) => prompt.text.includes(TITLE_SYSTEM_SIGNATURE)) ||
+    semantic.messages.some((message) => message.text.includes(TITLE_SYSTEM_SIGNATURE))
+}
+
+export function usageNumber(
+  usage: Record<string, unknown> | undefined,
+  key: string
+): number | undefined {
+  const value = usage?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function parsePrompts(body: Record<string, unknown>): SemanticPrompt[] {
+  const prompts: SemanticPrompt[] = []
+  pushPrompt(prompts, 'instructions', 'instructions', body.instructions)
+  pushPrompt(prompts, 'system', 'system', body.system)
+  for (const key of ['messages', 'input'] as const) {
+    const entries = body[key]
+    if (!Array.isArray(entries)) continue
+    entries.forEach((entry, index) => {
+      if (!isRecord(entry) || !['system', 'developer'].includes(stringValue(entry.role))) return
+      const text = contentText(entry.content)
+      if (text) prompts.push({ id: `${key}-${index}`, source: 'message', text })
+    })
+  }
+  return prompts
+}
+
+function pushPrompt(
+  prompts: SemanticPrompt[],
+  id: string,
+  source: SemanticPrompt['source'],
+  value: unknown
+): void {
+  const text = contentText(value)
+  if (text) prompts.push({ id, source, text })
+}
+
+function parseMessages(body: Record<string, unknown>): SemanticMessage[] {
+  const source = Array.isArray(body.messages)
+    ? body.messages
+    : Array.isArray(body.input)
+      ? body.input
+      : typeof body.input === 'string'
+        ? [{ role: 'user', content: body.input }]
+        : []
+  const messages: SemanticMessage[] = []
+  source.forEach((entry, index) => {
+    if (typeof entry === 'string') {
+      messages.push({ id: `message-${index}`, role: 'user', text: entry })
+      return
+    }
+    if (!isRecord(entry)) return
+    const type = stringValue(entry.type)
+    const role = stringValue(entry.role) || roleForItemType(type)
+    if (['system', 'developer'].includes(role)) return
+    const text = contentText(entry.content ?? entry.output ?? entry.input ?? entry.arguments)
+    const nestedToolResults = parseNestedToolResults(entry.content, index)
+    const contentOnlyContainsToolResults = Array.isArray(entry.content) &&
+      entry.content.length > 0 && entry.content.every((block) => (
+        isRecord(block) && stringValue(block.type) === 'tool_result'
+      ))
+    if (!contentOnlyContainsToolResults) {
+      messages.push({
+        id: `message-${index}`,
+        role: role || 'unknown',
+        text,
+        ...(stringValue(entry.call_id ?? entry.tool_call_id) ? {
+          callId: stringValue(entry.call_id ?? entry.tool_call_id)
+        } : {}),
+        ...(stringValue(entry.name) ? { name: stringValue(entry.name) } : {}),
+        ...(type ? { kind: type } : {})
+      })
+    }
+    nestedToolResults.forEach((message) => messages.push(message))
+  })
+  return messages
+}
+
+function parseNestedToolResults(value: unknown, parentIndex: number): SemanticMessage[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((block, index) => {
+    if (!isRecord(block) || stringValue(block.type) !== 'tool_result') return []
+    return [{
+      id: `message-${parentIndex}-tool-result-${index}`,
+      role: 'tool',
+      text: contentText(block.content),
+      callId: stringValue(block.tool_use_id ?? block.call_id),
+      kind: 'tool_result'
+    }]
+  })
+}
+
+function roleForItemType(type: string): string {
+  if (type === 'function_call_output' || type === 'tool_result') return 'tool'
+  if (type === 'function_call' || type === 'tool_use') return 'assistant'
+  return ''
+}
+
+function collectToolResults(requests: readonly SemanticRequest[]): Map<string, SemanticMessage> {
+  const results = new Map<string, SemanticMessage>()
+  for (const request of requests) {
+    for (const message of request.messages) {
+      if (message.role === 'tool' && message.callId) results.set(message.callId, message)
+    }
+  }
+  return results
+}
+
+function parseToolDefinitions(
+  body: Record<string, unknown>,
+  catalog: ModelRequestTraceRecord['toolCatalog']
+): SemanticToolDefinition[] {
+  const definitions: unknown[] = Array.isArray(body.tools) ? [...body.tools] : []
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (!isRecord(item) || stringValue(item.type) !== 'additional_tools') continue
+      if (Array.isArray(item.tools)) definitions.push(...item.tools)
+    }
+  }
+
+  const tools = new Map<string, SemanticToolDefinition>()
+  for (const entry of definitions) {
+    if (!isRecord(entry)) continue
+    const nested = isRecord(entry.function) ? entry.function : entry
+    const name = stringValue(nested.name)
+    if (!name) continue
+    const schema = nested.parameters ?? nested.input_schema ?? nested.inputSchema
+    tools.set(name, {
+      name,
+      description: stringValue(nested.description),
+      provenance: resolveToolProvenance(name, catalog),
+      ...(isRecord(schema) ? { inputSchema: schema } : {})
+    })
+  }
+  return [...tools.values()]
+}
+
+function parseSkills(prompts: readonly SemanticPrompt[]): SemanticSkill[] {
+  const skills = new Map<string, SemanticSkill>()
+  for (const prompt of prompts) {
+    const match = prompt.text.match(/### Available skills\s*\n([\s\S]*?)(?=\n### |$)/i)
+    if (match?.[1]) {
+      for (const line of match[1].split('\n')) {
+        if (!line.startsWith('- ') || line.startsWith('- ...and ')) continue
+        const pathMatch = line.match(/\s+\(file:\s*([^\n)]+)\)\s*$/)
+        const withoutPath = pathMatch ? line.slice(2, pathMatch.index).trim() : line.slice(2).trim()
+        const header = withoutPath.match(/^(.+?)\s+\(([^()]+)\)(?::\s*([\s\S]*))?$/)
+        if (!header) continue
+        const name = header[1]?.trim() ?? ''
+        const id = header[2]?.trim() ?? name
+        if (!id) continue
+        skills.set(id, {
+          id,
+          name: name || id,
+          description: header[3]?.trim() ?? '',
+          active: false,
+          ...(pathMatch?.[1] ? { path: pathMatch[1].trim() } : {})
+        })
+      }
+    }
+    const activePattern = /Active Skill:\s*(.+?)\s+\(([^)]+)\)\s*\n\nActivation:\s*([^\n]+)(?:\n\nDescription:\s*([^\n]+))?/g
+    for (const active of prompt.text.matchAll(activePattern)) {
+      const name = active[1]?.trim() ?? ''
+      const id = active[2]?.trim() ?? name
+      if (!id) continue
+      const existing = skills.get(id)
+      skills.set(id, {
+        id,
+        name: name || existing?.name || id,
+        description: active[4]?.trim() || existing?.description || active[3]?.trim() || '',
+        active: true,
+        ...(existing?.path ? { path: existing.path } : {})
+      })
+    }
+  }
+  return [...skills.values()]
+}
+
+function contentText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === null || value === undefined) return ''
+  if (Array.isArray(value)) return value.map((part) => contentText(part)).filter(Boolean).join('\n')
+  if (!isRecord(value)) return String(value)
+  for (const key of ['text', 'input_text', 'output_text', 'content', 'output'] as const) {
+    const candidate: unknown = value[key]
+    if (candidate !== undefined && candidate !== value) {
+      const text = contentText(candidate)
+      if (text) return text
+    }
+  }
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function oldestRecordFirst(left: ModelRequestTraceRecord, right: ModelRequestTraceRecord): number {
+  const byTime = Date.parse(left.startedAt) - Date.parse(right.startedAt)
+  return Number.isNaN(byTime) || byTime === 0
+    ? left.sequence - right.sequence || left.id.localeCompare(right.id)
+    : byTime
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}

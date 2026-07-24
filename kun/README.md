@@ -68,6 +68,39 @@ npm run benchmark:replay -- --suite benchmarks/agent-core.json --repeat 2 \
   --baseline replay-baseline.json --output replay-current.json --fail-on-regression
 ```
 
+Use a comparison policy when providers or local models need different variance tolerances:
+
+```bash
+npm run benchmark:replay -- --suite benchmarks/agent-core.json \
+  --baseline replay-baseline.json --comparison-policy replay-policy.json \
+  --output replay-current.json --fail-on-regression
+```
+
+```json
+{
+  "defaults": {
+    "maxSuccessRateDrop": 0,
+    "maxTtftRelativeIncrease": 0.2,
+    "maxTtftAbsoluteIncreaseMs": 300
+  },
+  "models": {
+    "local-model": {
+      "maxTtftRelativeIncrease": 0.5,
+      "maxTtftAbsoluteIncreaseMs": 800
+    }
+  }
+}
+```
+
+Reports must use the same suite, task iterations, repeat count, concurrency, thread-retention mode, and tag. Model changes are rejected
+unless the policy sets `allowModelChange` to `true`. Each run records its effective task/suite/runtime model, so
+mixed-model suites resolve and evaluate thresholds separately for every current model. New reports also include a
+stable hash of normalized prompts, expectations, timeouts, provider/reasoning selections, and non-model suite defaults; regenerate
+legacy baselines that do not contain this hash before comparing them with a new report.
+
+Peak RSS is a process-lifetime metric, so its regression thresholds are evaluated once from policy `defaults` for
+the whole suite. It is intentionally not attributed to individual models in a mixed-model run.
+
 Replay threads always use the `read-only` sandbox and disable interactive input. Reports include success rate,
 TTFT, full latency, tool time, SSE delivery delay, token/cache/cost counters, and Kun process peak RSS. The runtime
 token is accepted only through `KUN_RUNTIME_TOKEN`, so it does not leak through process arguments.
@@ -297,6 +330,29 @@ Feature flags are intentionally explicit:
 - `capabilities.attachments` stores image bytes outside thread logs and allows turns to reference `attachmentIds`. Vision-capable models receive image parts; text-only models receive a bounded compressed base64 text fallback.
 - `capabilities.memory` stores long-term records under the data dir, retrieves scoped matches before turns, and exposes `memory_create`, `memory_update`, and `memory_delete` tools.
 - `capabilities.subagents` exposes `delegate_task` with `maxParallel` and `maxChildRuns` concurrency budgets.
+  Workspace overlays under `<workspace>/.kun/agents/*.md` enter automatic
+  BM25/LLM routing (id/name/description only), appear in Settings and the
+  workbench subagent sidebar with a Custom tag, default to read-only, and may
+  set `toolPolicy: inherit` or `omit_base_prompt: true`. Model/provider overrides
+  and nested delegation stay blocked.
+
+Kun installs 33 fixed standalone subagent profiles. Nine are Kun's existing
+general/design and specialist personas; 24 engineering workflows adapted from
+`addyosmani/agent-skills` are rebuilt as independent agents with their own
+self-contained system prompts. They do not load a Skill by id and remain usable
+when Skills are disabled. Interactive upstream workflows are child-safe:
+`interview-me` produces prioritized requirement questions for the parent, and
+`doubt-driven-development` performs one fresh-context adversarial review.
+
+The main agent can choose an exact `profile`, provide a one-run `custom_agent`,
+or omit both. Automatic routing runs BM25 Top-5 over agent profiles and uses a
+small-model judge to select an existing agent. If none fits, a separate
+generator recalls up to three trusted built-in agent examples, creates a
+self-contained temporary role, and runs it. `generate_subagent` exposes that
+same design-and-run path explicitly. Generated roles are not installed into
+settings or the reusable catalog; their exact definitions remain in the
+permission-protected child-run audit record. They cannot delegate or load Skills. Router and generator usage are recorded
+separately. See `../THIRD_PARTY_NOTICES.md` for attribution.
 
 Use `GET /v1/runtime/info` for the runtime capability manifest and
 `GET /v1/runtime/tools` for redacted provider diagnostics. The GUI
@@ -475,6 +531,28 @@ and replay exactly as before. If a constraint should become
 cross-thread recall, create an explicit memory record through the
 GUI memory review surface or the `memory_create` tool. If it should
 stay local to one thread, leave it as a pinned constraint.
+
+## Agent observability
+
+Sanitized agent spans can stay in the default local JSONL file or be
+exported to an OpenTelemetry collector with OTLP/HTTP JSON. The OTLP
+exporter is opt-in, bounded, batched, and runs outside the runtime event
+persistence path. Runtime shutdown drains queued batches within the configured
+export timeout and leaves no background retry timer behind. Set the standard variables below before starting Kun:
+
+```sh
+OTEL_TRACES_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_PROTOCOL=http/json
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+```
+
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is used as-is when set. Otherwise
+Kun appends `/v1/traces` to `OTEL_EXPORTER_OTLP_ENDPOINT`. Standard
+`OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TIMEOUT` values are
+also supported, including their trace-specific variants. Prompts,
+assistant text, tool arguments, tool output, commands, and arbitrary
+error messages are excluded by default. `includeSensitiveContent` must
+be explicitly enabled before arbitrary error messages are exported.
 
 ## Troubleshooting
 

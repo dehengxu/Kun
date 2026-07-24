@@ -58,7 +58,7 @@ export function DesignWorkspaceView({
   }, [loadDesignSettings])
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className="design-workspace-view flex min-h-0 min-w-0 flex-1 flex-col">
       {fileError ? (
         <div className="ds-no-drag flex shrink-0 items-center justify-between gap-2 bg-[#c0392b]/10 px-3 py-1.5 text-[12px] text-[#c0392b] shadow-[inset_0_-1px_0_rgba(192,57,43,0.25)] dark:text-[#f0a0a0]">
           <span className="min-w-0 flex-1 truncate">{fileError}</span>

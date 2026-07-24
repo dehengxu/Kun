@@ -15,12 +15,23 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-export function createTaskGraphTool(options: { rootDir?: string } = {}): LocalTool {
+export type TaskGraphToolOptions = {
+  rootDir?: string
+  concurrency?: number
+  maxAttempts?: number
+}
+
+export function createTaskGraphTool(options: TaskGraphToolOptions = {}): LocalTool {
   const graphs = new Map<string, TaskGraph>()
+  const concurrency = positiveInteger(options.concurrency, 1)
+  const maxAttempts = positiveInteger(options.maxAttempts, 1)
   const graphFor = async (threadId: string): Promise<TaskGraph> => {
     let graph = graphs.get(threadId)
     if (graph) return graph
-    graph = options.rootDir ? await loadGraph(options.rootDir, threadId) : new TaskGraph({ concurrency: 1 })
+    graph = options.rootDir
+      ? await loadGraph(options.rootDir, threadId)
+      : new TaskGraph({ concurrency })
+    graph.setConcurrency(concurrency)
     graphs.set(threadId, graph)
     return graph
   }
@@ -41,20 +52,18 @@ export function createTaskGraphTool(options: { rootDir?: string } = {}): LocalTo
     name: 'task_graph',
     description:
       'Plan and drive a dependency-aware task graph for this thread. actions: ' +
-      '"add" (id,title,dependsOn?,priority?,maxAttempts?), "list", "next" (runnable now), ' +
-      '"start" (id), "complete" (id), "fail" (id,error), "pause"/"resume"/"cancel" (id), ' +
-      '"set_concurrency" (concurrency). Tasks become runnable only when their dependencies succeed.',
+      '"add" (id,title,dependsOn?,priority?), "list", "next" (runnable now), ' +
+      '"start" (id), "complete" (id), "fail" (id,error), and "pause"/"resume"/"cancel" (id). ' +
+      'Retry and concurrency policy are configured by the host. Tasks become runnable only when their dependencies succeed.',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['add', 'list', 'next', 'start', 'complete', 'fail', 'pause', 'resume', 'cancel', 'set_concurrency'] },
+        action: { type: 'string', enum: ['add', 'list', 'next', 'start', 'complete', 'fail', 'pause', 'resume', 'cancel'] },
         id: { type: 'string' },
         title: { type: 'string' },
         dependsOn: { type: 'array', items: { type: 'string' } },
         priority: { type: 'number' },
-        maxAttempts: { type: 'number' },
-        error: { type: 'string' },
-        concurrency: { type: 'number' }
+        error: { type: 'string' }
       },
       required: ['action'],
       additionalProperties: false
@@ -75,7 +84,7 @@ export function createTaskGraphTool(options: { rootDir?: string } = {}): LocalTo
               title: args.title.trim(),
               ...(Array.isArray(args.dependsOn) ? { dependsOn: args.dependsOn.filter((d): d is string => typeof d === 'string') } : {}),
               ...(typeof args.priority === 'number' ? { priority: args.priority } : {}),
-              ...(typeof args.maxAttempts === 'number' ? { maxAttempts: args.maxAttempts } : {})
+              maxAttempts
             })
             await save(context.threadId, graph)
             return { output: { action, added: id, ...snapshot(graph) } }
@@ -99,10 +108,6 @@ export function createTaskGraphTool(options: { rootDir?: string } = {}): LocalTo
           case 'pause': graph.pause(id); await save(context.threadId, graph); return { output: { action, id, ...snapshot(graph) } }
           case 'resume': graph.resume(id); await save(context.threadId, graph); return { output: { action, id, ...snapshot(graph) } }
           case 'cancel': graph.cancel(id); await save(context.threadId, graph); return { output: { action, id, ...snapshot(graph) } }
-          case 'set_concurrency':
-            graph.setConcurrency(typeof args.concurrency === 'number' ? args.concurrency : 1)
-            await save(context.threadId, graph)
-            return { output: { action, ...snapshot(graph) } }
           default:
             return { output: { error: `unknown action: ${action}` }, isError: true }
         }
@@ -111,6 +116,12 @@ export function createTaskGraphTool(options: { rootDir?: string } = {}): LocalTo
       }
     }
   })
+}
+
+function positiveInteger(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback
 }
 
 async function loadGraph(rootDir: string, threadId: string): Promise<TaskGraph> {

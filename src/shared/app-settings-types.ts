@@ -1,3 +1,4 @@
+import type { AppLocale } from './app-locales'
 import type { GuiUpdateChannel } from './gui-update'
 import type { KeyboardShortcutsConfigV1 } from './keyboard-shortcuts'
 import type { LocalWhisperDownloadSourceId } from './local-whisper'
@@ -82,7 +83,12 @@ export type ClawModel = 'auto' | ScheduleModel
 
 export const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 export const CUSTOM_IMAGE_GENERATION_PROVIDER_ID = 'custom'
-export const IMAGE_GENERATION_PROTOCOLS = ['openai-images', 'minimax-image', 'codex-responses-image'] as const
+export const IMAGE_GENERATION_PROTOCOLS = [
+  'openai-images',
+  'minimax-image',
+  'codex-responses-image',
+  'grok-imagine-image'
+] as const
 export type ImageGenerationProtocol = (typeof IMAGE_GENERATION_PROTOCOLS)[number]
 export const DEFAULT_IMAGE_GENERATION_PROTOCOL: ImageGenerationProtocol = 'openai-images'
 export const IMAGE_GENERATION_RESOLUTIONS = ['auto', '1K', '2K'] as const
@@ -103,7 +109,7 @@ export const MUSIC_GENERATION_PROTOCOLS = ['minimax-music'] as const
 export type MusicGenerationProtocol = (typeof MUSIC_GENERATION_PROTOCOLS)[number]
 export const DEFAULT_MUSIC_GENERATION_PROTOCOL: MusicGenerationProtocol = 'minimax-music'
 export const CUSTOM_VIDEO_GENERATION_PROVIDER_ID = 'custom'
-export const VIDEO_GENERATION_PROTOCOLS = ['minimax-video'] as const
+export const VIDEO_GENERATION_PROTOCOLS = ['minimax-video', 'grok-imagine-video'] as const
 export type VideoGenerationProtocol = (typeof VIDEO_GENERATION_PROTOCOLS)[number]
 export const DEFAULT_VIDEO_GENERATION_PROTOCOL: VideoGenerationProtocol = 'minimax-video'
 export const DEFAULT_CLAW_MODEL = 'auto'
@@ -232,9 +238,16 @@ export type ModelProviderVideoCapabilityV1 = {
   baseUrl: string
   models: string[]
 }
+export type ModelProviderPresetMode = 'api' | 'token-plan'
+export type ModelProviderPresetSourceV1 = {
+  presetId: string
+  mode: ModelProviderPresetMode
+}
 export type ModelProviderProfileV1 = {
   id: string
   name: string
+  /** Stable built-in preset identity, independent from a multi-account profile id/name. */
+  presetSource?: ModelProviderPresetSourceV1
   apiKey: string
   baseUrl: string
   endpointFormat: ModelEndpointFormat
@@ -243,9 +256,14 @@ export type ModelProviderProfileV1 = {
   /**
    * Transport kind. `agent-sdk` delegates whole turns to the embedded Claude
    * Agent SDK (Claude Pro/Max subscription); `apiKey` then carries the
-   * CLAUDE_CODE_OAUTH_TOKEN (empty => host Claude Code login). Absent = http.
+   * CLAUDE_CODE_OAUTH_TOKEN (empty => host Claude Code login).
+   * `antigravity-cli` delegates whole turns to Google's official Antigravity
+   * CLI, which uses the user's Gemini subscription login. The retired
+   * `gemini-code-assist` value is accepted only for settings migration.
+   * `cursor-sdk` delegates whole turns to the official Cursor SDK and requires
+   * a Cursor API key in `apiKey`.
    */
-  kind?: 'http' | 'agent-sdk'
+  kind?: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist'
   models: string[]
   modelProfiles: Record<string, ModelProviderModelProfileV1>
   image?: ModelProviderImageCapabilityV1
@@ -254,11 +272,59 @@ export type ModelProviderProfileV1 = {
   music?: ModelProviderMusicCapabilityV1
   video?: ModelProviderVideoCapabilityV1
 }
+export const MODEL_ROUTE_STRATEGIES = [
+  'priority',
+  'round-robin',
+  'weighted-round-robin',
+  'least-latency',
+  'adaptive'
+] as const
+export type ModelRouteStrategy = (typeof MODEL_ROUTE_STRATEGIES)[number]
+export type ModelRouteTargetV1 = {
+  id: string
+  providerId: string
+  modelId: string
+  enabled: boolean
+  weight: number
+}
+export type ModelRouteTargetReferenceStatus = 'valid' | 'provider-missing' | 'model-missing'
+export type ModelRouteTargetResolutionV1 = {
+  status: ModelRouteTargetReferenceStatus
+  provider?: ModelProviderProfileV1
+  modelId?: string
+}
+export type ModelRouteFailurePolicyV1 = {
+  failoverHttpStatusCodes: number[]
+  failoverOnNetworkError: boolean
+  failoverOnTimeout: boolean
+  failoverOnAuthError: boolean
+}
+export type ModelRouteHealthPolicyV1 = {
+  failureThreshold: number
+  cooldownMs: number
+  halfOpenMaxAttempts: number
+}
+export type ModelRoutePoolV1 = {
+  id: string
+  name: string
+  modelId: string
+  enabled: boolean
+  strategy: ModelRouteStrategy
+  targets: ModelRouteTargetV1[]
+  failurePolicy: ModelRouteFailurePolicyV1
+  healthPolicy: ModelRouteHealthPolicyV1
+}
+export type LocalModelGatewaySettingsV1 = {
+  enabled: boolean
+  name: string
+}
 export type ModelProviderSettingsV1 = {
   apiKey: string
   baseUrl: string
   proxy: NetworkProxySettingsV1
   providers: ModelProviderProfileV1[]
+  routePools: ModelRoutePoolV1[]
+  localGateway: LocalModelGatewaySettingsV1
 }
 
 export type ModelProviderImageCapabilityPatchV1 = Partial<ModelProviderImageCapabilityV1>
@@ -277,11 +343,15 @@ export type ModelProviderProfilePatchV1 = Partial<Omit<ModelProviderProfileV1, '
   video?: ModelProviderVideoCapabilityPatchV1 | null
 }
 export type ModelProviderSettingsPatchV1 = Partial<
-  Omit<ModelProviderSettingsV1, 'providers' | 'proxy'>
+  Omit<ModelProviderSettingsV1, 'providers' | 'proxy' | 'routePools' | 'localGateway'>
 > & {
   proxy?: Partial<NetworkProxySettingsV1>
   providers?: ModelProviderProfilePatchV1[]
+  routePools?: Partial<ModelRoutePoolV1>[]
+  localGateway?: Partial<LocalModelGatewaySettingsV1>
 }
+
+export type KunSubagentSurfaceV1 = 'shared' | 'code' | 'write' | 'design'
 
 export type KunSubagentProfileV1 = {
   /** Stable key; becomes the Record key in kun SubagentsCapabilityConfig.profiles. */
@@ -293,6 +363,8 @@ export type KunSubagentProfileV1 = {
   color?: string
   /** 'subagent' = delegate_task only; 'primary' = session persona only; 'all' = both. */
   mode: 'subagent' | 'primary' | 'all'
+  /** `shared` is inherited by Code, Write, and Design. Empty disables routing. */
+  surfaces?: KunSubagentSurfaceV1[]
   model?: string
   providerId?: string
   /** Appended to the base system prompt (augment, not replace). */
@@ -315,6 +387,8 @@ export type KunSubagentProfileV1 = {
 
 export type KunSubagentsSettingsV1 = {
   enabled: boolean
+  /** Defaults to true when absent for settings written by older app versions. */
+  useExistingAgents?: boolean
   maxParallel?: number
   maxChildRuns?: number
   defaultToolPolicy?: 'readOnly' | 'inherit'
@@ -362,6 +436,8 @@ export type KunRuntimeSettingsV1 = {
   insecure: boolean
   /** GUI-managed MCP progressive discovery/search settings written into Kun config.json. */
   mcpSearch: KunMcpSearchSettingsV1
+  /** User-local, digest-bound grants for repository `.kun/project.json` MCP declarations. */
+  projectConfig: KunProjectConfigSettingsV1
   /** Persistent store backend used by Kun. */
   storage: KunStorageSettingsV1
   /** Fallback compaction thresholds and summary behavior. Per-model thresholds live in Kun config models.profiles. */
@@ -413,6 +489,12 @@ export type KunRuntimeSettingsV1 = {
   /** Provider id paired with codeReviewModel. */
   codeReviewProviderId?: string
   codeReviewAccountId?: string
+  /** Optional model override for Plan-mode turns. Empty = the main conversation model. */
+  planModel?: string
+  /** Provider id paired with planModel. */
+  planProviderId?: string
+  /** Opaque account id paired with planProviderId. */
+  planAccountId?: string
   /** Reasoning depth for thread-title generation. Default 'off'. */
   titleReasoningEffort?: ModelReasoningEffort
   /** Reasoning depth for whole-session summary generation. Default 'off'. */
@@ -602,6 +684,17 @@ export type KunMcpSearchSettingsV1 = {
   minScore: number
 }
 
+export type KunProjectConfigGrantV1 = {
+  /** Canonical real workspace path. Project files never persist this grant. */
+  workspaceRoot: string
+  /** SHA-256 of the normalized versioned `.kun/project.json` document. */
+  configDigest: string
+}
+
+export type KunProjectConfigSettingsV1 = {
+  grants: KunProjectConfigGrantV1[]
+}
+
 export type KunStorageBackend = 'hybrid' | 'file'
 
 export type KunStorageSettingsV1 = {
@@ -654,6 +747,12 @@ export type KunToolArgumentRepairSettingsV1 = {
 }
 
 export type KunRuntimeTuningSettingsV1 = {
+  /** Global admission cap for concurrently active turns in one Kun runtime. */
+  maxConcurrentTurns: number
+  /**
+   * 单轮代理任务的总运行时长上限（毫秒），包含模型响应和工具执行。
+   */
+  maxWallTimeMs: number
   /**
    * Max idle gap (ms) between streaming chunks before a turn fails with
    * `stream_idle_timeout`. `0` disables the guard — useful for local LLM
@@ -677,6 +776,8 @@ export type KunSettingsEnvelopeV1 = {
 export type AgentRuntimeSettingsMapV1 = KunSettingsEnvelopeV1
 
 export type KunRuntimeTuningSettingsPatchV1 = {
+  maxConcurrentTurns?: number
+  maxWallTimeMs?: number
   streamIdleTimeoutMs?: number
   toolStorm?: Partial<KunToolStormSettingsV1>
   toolArgumentRepair?: Partial<KunToolArgumentRepairSettingsV1>
@@ -691,10 +792,11 @@ export type KunTokenEconomySettingsPatchV1 = Partial<
 export type KunRuntimeSettingsPatchV1 = Partial<
   Omit<
     KunRuntimeSettingsV1,
-    'mcpSearch' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'quality' | 'modelProfiles' | 'subagents'
+    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'quality' | 'modelProfiles' | 'subagents'
   >
 > & {
   mcpSearch?: Partial<KunMcpSearchSettingsV1>
+  projectConfig?: Partial<KunProjectConfigSettingsV1>
   tokenEconomy?: KunTokenEconomySettingsPatchV1
   toolOutputLimits?: Partial<KunToolOutputLimitsSettingsV1>
   storage?: Partial<KunStorageSettingsV1>
@@ -1951,7 +2053,7 @@ export type TerminalSettingsPatchV1 = {
 
 export type AppSettingsV1 = {
   version: 1
-  locale: 'en' | 'zh'
+  locale: AppLocale
   theme: 'system' | 'light' | 'dark'
   uiFontScale: UiFontScale
   chatContentMaxWidthPx: ChatContentMaxWidthPx

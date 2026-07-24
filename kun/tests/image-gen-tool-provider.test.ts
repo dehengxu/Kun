@@ -11,6 +11,7 @@ import {
   codexResponsesImageUrl,
   createImageGenClient,
   mapImageSize,
+  GrokImagineImageClient,
   MiniMaxImageClient,
   minimaxImageDimensionFields,
   OpenAiCompatImageClient,
@@ -323,6 +324,53 @@ describe('Image gen tool provider', () => {
       },
       stream: true,
       store: false
+    })
+  })
+
+  it('posts Grok subscription image requests with the Grok Build Imagine contract', async () => {
+    expect(createImageGenClient({
+      protocol: 'grok-imagine-image',
+      baseUrl: 'https://api.x.ai/v1',
+      apiKey: 'grok-access'
+    }).id).toBe('grok-imagine-image')
+
+    const requests: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(url),
+        headers: new Headers(init?.headers),
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>
+      })
+      return new Response(JSON.stringify({
+        data: [{ b64_json: png(8, 8).toString('base64') }]
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    const client = new GrokImagineImageClient('https://api.x.ai/v1', 'grok-access', {
+      'x-grok-client-version': '0.2.106',
+      'x-grok-client-identifier': 'kun'
+    })
+
+    const image = await client.generate({
+      prompt: 'cinematic mountain lake',
+      model: 'grok-imagine-image-quality',
+      aspectRatio: '16:9',
+      size: '1024x576',
+      timeoutMs: 1_000,
+      signal: new AbortController().signal
+    })
+
+    expect(image.data.byteLength).toBeGreaterThan(0)
+    expect(requests[0].url).toBe('https://api.x.ai/v1/images/generations')
+    expect(requests[0].headers.get('authorization')).toBe('Bearer grok-access')
+    expect(requests[0].headers.get('x-grok-client-version')).toBe('0.2.106')
+    expect(requests[0].headers.get('x-grok-client-identifier')).toBe('kun')
+    expect(requests[0].body).toEqual({
+      model: 'grok-imagine-image-quality',
+      prompt: 'cinematic mountain lake',
+      n: 1,
+      aspect_ratio: '16:9',
+      resolution: '1k',
+      response_format: 'b64_json'
     })
   })
 
@@ -781,6 +829,7 @@ describe('Image gen tool provider', () => {
     expect(protocolSupportsImageEdit('codex-responses-image')).toBe(true)
     expect(protocolSupportsImageEdit(undefined)).toBe(true)
     expect(protocolSupportsImageEdit('minimax-image')).toBe(false)
+    expect(protocolSupportsImageEdit('grok-imagine-image')).toBe(false)
   })
 
   it('returns edits_unsupported BEFORE any network call when references are passed on a non-edit protocol (MiniMax)', async () => {

@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { grokRequestHeaders } from './grok-auth'
 
 const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const CODEX_ISSUER = 'https://auth.openai.com'
@@ -464,5 +465,20 @@ export function resolveCodexOAuthApiKey(rawApiKey: string): { apiKey: string; he
   const key = rawApiKey.trim()
   const codex = isCodexOAuthCredentials(key) ? parseCodexCredentials(key) : null
   if (codex) return { apiKey: codex.accessToken, headers: codexRequestHeaders(codex) }
+  // Grok subscription credentials also serialize into provider.apiKey as JSON.
+  // Reuse this resolve helper so existing callers unwrap either subscription kind.
+  if (key.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(key) as Record<string, unknown>
+      if (parsed.kind === 'grok-oauth' && typeof parsed.accessToken === 'string' && parsed.accessToken.trim()) {
+        return {
+          apiKey: parsed.accessToken.trim(),
+          headers: grokRequestHeaders()
+        }
+      }
+    } catch {
+      /* plain key */
+    }
+  }
   return { apiKey: key }
 }

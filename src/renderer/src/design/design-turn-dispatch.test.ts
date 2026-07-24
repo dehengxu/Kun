@@ -32,6 +32,7 @@ describe('design turn dispatch', () => {
 
     expect(overrides).toEqual({
       displayText: 'Create a design',
+      agentSurface: 'design',
       model: 'deepseek-chat',
       providerId: 'deepseek',
       reasoningEffort: 'medium',
@@ -58,6 +59,7 @@ describe('design turn dispatch', () => {
 
     expect(overrides).toEqual({
       displayText: 'Refine home',
+      agentSurface: 'design',
       providerId: 'openai'
     })
     expect(resolveProviderId).not.toHaveBeenCalled()
@@ -78,6 +80,7 @@ describe('design turn dispatch', () => {
 
     expect(overrides).toEqual({
       displayText: 'Animate the logo',
+      agentSurface: 'design',
       guiDesignMode: true,
       guiDesignArtifact: {
         kind: 'svg',
@@ -94,11 +97,13 @@ describe('design turn dispatch', () => {
       reasoningEffort: 'high'
     })).toEqual({
       displayText: 'Apply markup',
+      agentSurface: 'code',
       guiDesignCanvas: true,
       reasoningEffort: 'high'
     })
 
     expect(buildCodeCanvasSendOverrides({})).toEqual({
+      agentSurface: 'code',
       guiDesignCanvas: true
     })
   })

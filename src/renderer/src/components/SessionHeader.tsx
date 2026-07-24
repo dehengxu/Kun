@@ -1,10 +1,11 @@
 import type { ReactElement } from 'react'
 import { useEffect, useState } from 'react'
-import { GitFork } from 'lucide-react'
+import { ChevronRight, Folder, GitFork } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../store/chat-store'
 import { formatRelativeTime } from '../lib/format-relative-time'
 import { workspaceLabelFromPath } from '../lib/workspace-label'
+import { SessionExportMenu } from './SessionExportMenu'
 import {
   formatCompactNumber,
   formatCacheMissReason,
@@ -24,6 +25,9 @@ export function SessionHeader({ compact = false, className = '' }: Props): React
   const threads = useChatStore((s) => s.threads)
   const activeThreadId = useChatStore((s) => s.activeThreadId)
   const busy = useChatStore((s) => s.busy)
+  const blocks = useChatStore((s) => s.blocks)
+  const currentTurnId = useChatStore((s) => s.currentTurnId)
+  const currentTurnUserId = useChatStore((s) => s.currentTurnUserId)
   const runtimeConnection = useChatStore((s) => s.runtimeConnection)
   const workspaceLabel = useChatStore((s) => s.workspaceLabel)
   const renameActiveThread = useChatStore((s) => s.renameActiveThread)
@@ -78,42 +82,46 @@ export function SessionHeader({ compact = false, className = '' }: Props): React
         className={`session-header-compact flex min-h-0 min-w-0 flex-1 items-center gap-2 text-left ${className}`}
       >
         {active ? (
-          <div className="min-w-0 flex-1">
-            <div
-              className="truncate text-[13px] font-semibold leading-[18px] tracking-[-0.01em] text-ds-ink opacity-95"
-              title={active.title}
-            >
-              {active.title}
-            </div>
-            <div className="session-header-compact-meta flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10.5px] leading-[15px] text-ds-faint">
-              <span className="session-meta-workspace max-w-[min(42vw,240px)] truncate">{activeWorkspaceLabel}</span>
-              <span className="session-meta-workspace-separator opacity-70">·</span>
-              <span className="session-meta-mode shrink-0 capitalize">{active.mode}</span>
-              <span className="session-meta-mode-separator opacity-70">·</span>
-              <span className="session-meta-time shrink-0 tabular-nums">
-                {formatRelativeTime(active.updatedAt, i18n.language)}
+          <>
+            <div className="session-header-compact-identity flex min-w-0 flex-1 items-center gap-2">
+              <span
+                className="session-header-compact-workspace inline-flex min-w-0 max-w-[min(36%,220px)] shrink items-center gap-1.5 text-[12px] font-medium leading-5 text-ds-faint"
+                title={activeWorkspaceLabel}
+              >
+                <Folder className="h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                <span className="truncate">{activeWorkspaceLabel}</span>
               </span>
+              <ChevronRight
+                className="session-header-compact-chevron h-3.5 w-3.5 shrink-0 text-ds-faint/70"
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
+              <div
+                className="session-header-compact-title min-w-0 flex-1 truncate text-[14px] font-semibold leading-5 tracking-[-0.01em] text-ds-ink"
+                title={active.forkedFromThreadId ? `${active.title} · ${forkLabel}` : active.title}
+              >
+                {active.title}
+              </div>
               {active.forkedFromThreadId ? (
-                <>
-                  <span className="session-meta-fork-separator opacity-70">·</span>
-                  <span
-                    className="session-meta-fork inline-flex min-w-0 max-w-[min(34vw,220px)] items-center gap-1 truncate"
-                    title={forkLabel}
-                  >
-                    <GitFork className="h-3 w-3 shrink-0" strokeWidth={1.8} />
-                    <span className="truncate">
-                      {forkedFromTitle
-                        ? t('sessionForkedFromCompact', { title: forkedFromTitle })
-                        : t('sessionForked')}
-                    </span>
-                  </span>
-                </>
+                <GitFork
+                  className="session-header-compact-fork h-3.5 w-3.5 shrink-0 text-ds-faint"
+                  strokeWidth={1.8}
+                  aria-label={forkLabel}
+                />
               ) : null}
             </div>
-          </div>
+            <SessionExportMenu
+              title={active.title}
+              blocks={blocks}
+              busy={busy}
+              currentTurnId={currentTurnId}
+              currentTurnUserId={currentTurnUserId}
+            />
+          </>
         ) : (
-          <div className="min-w-0 pt-0.5">
-            <div className="truncate text-[12.5px] font-medium text-ds-faint">{workspaceLabel}</div>
+          <div className="session-header-compact-empty flex min-w-0 items-center gap-1.5 text-[12.5px] font-medium text-ds-faint">
+            <Folder className="h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+            <span className="truncate">{workspaceLabel}</span>
           </div>
         )}
       </div>

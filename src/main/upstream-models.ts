@@ -6,10 +6,13 @@ import {
   isComposerChatModelId,
   listModelProviderModelIds,
   listNonTextModelIds,
+  listProviderNonTextModelIds,
   modelProfileSupportsTextChat,
   modelProviderModelProfile,
+  projectExecutableModelRoutePools,
   resolveKunRuntimeSettings,
-  type AppSettingsV1
+  type AppSettingsV1,
+  type ModelProviderModelProfileV1
 } from '../shared/app-settings'
 import { DEFAULT_COMPOSER_MODEL_IDS } from '../shared/default-composer-models'
 import type { ModelProviderModelGroup } from '../shared/kun-gui-api'
@@ -44,10 +47,14 @@ export async function fetchUpstreamModelIds(
 ): Promise<FetchUpstreamModelsResult> {
   const configuredModelIds = await readConfiguredKunModelIds(settings)
   const configuredGroups = await readConfiguredModelGroups(settings)
-  const nonTextModelIds = listNonTextModelIds(settings)
+  const providerSettings = getModelProviderSettings(settings)
   const runtime = resolveKunRuntimeSettings(settings)
   const runtimeModel = runtime.model.trim()
-  const defaultModelId = isComposerChatModelId(runtimeModel, nonTextModelIds) ? runtimeModel : ''
+  const runtimeProvider = providerSettings.providers.find((provider) => provider.id === runtime.providerId)
+  const runtimeNonTextModelIds = runtimeProvider
+    ? listProviderNonTextModelIds(runtimeProvider)
+    : listNonTextModelIds(settings)
+  const defaultModelId = isComposerChatModelId(runtimeModel, runtimeNonTextModelIds) ? runtimeModel : ''
   return modelListOrError(
     configuredModelIds,
     configuredGroups,
@@ -60,9 +67,10 @@ export async function readConfiguredKunModelIds(settings: AppSettingsV1): Promis
   const runtime = resolveKunRuntimeSettings(settings)
   const configPath = join(expandHome(runtime.dataDir), 'config.json')
   const nonTextModelIds = listNonTextModelIds(settings)
-  const ids = [runtime.model, ...listModelProviderModelIds(settings)].filter((id) =>
-    isComposerChatModelId(id, nonTextModelIds)
-  )
+  const ids = [
+    ...(isComposerChatModelId(runtime.model, nonTextModelIds) ? [runtime.model] : []),
+    ...listModelProviderModelIds(settings)
+  ]
   let parsed: unknown
   try {
     parsed = JSON.parse(await readFile(configPath, 'utf8')) as unknown
@@ -92,8 +100,8 @@ function modelListOrError(
 
 async function readConfiguredModelGroups(settings: AppSettingsV1): Promise<ModelProviderModelGroup[]> {
   const groups: ModelProviderModelGroup[] = []
-  const nonTextModelIds = listNonTextModelIds(settings)
   for (const provider of getModelProviderSettings(settings).providers) {
+    const nonTextModelIds = listProviderNonTextModelIds(provider)
     const modelIds = provider.models.filter((id) =>
       isComposerChatModelId(id, nonTextModelIds)
       && modelProfileSupportsTextChat(modelProviderModelProfile(provider, id))
@@ -104,6 +112,42 @@ async function readConfiguredModelGroups(settings: AppSettingsV1): Promise<Model
       label: provider.name,
       modelIds,
       modelProfiles: provider.modelProfiles
+    })
+  }
+  const providerSettings = getModelProviderSettings(settings)
+  const routeModelIds: string[] = []
+  const routeModelProfiles: Record<string, ModelProviderModelProfileV1> = {}
+  for (const pool of projectExecutableModelRoutePools(providerSettings)) {
+    if (!pool.enabled || pool.targets.length === 0) continue
+    const profiles = pool.targets.flatMap((target) => {
+      const provider = providerSettings.providers.find((candidate) => candidate.id === target.providerId)
+      return provider ? [modelProviderModelProfile(provider, target.modelId) ?? {
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        supportsToolCalling: true,
+        messageParts: ['text']
+      } satisfies ModelProviderModelProfileV1] : []
+    })
+    if (profiles.length === 0) continue
+    const inputModalities = [...new Set(profiles.flatMap((profile) => profile.inputModalities))]
+    const outputModalities = [...new Set(profiles.flatMap((profile) => profile.outputModalities))]
+    const messageParts = [...new Set(profiles.flatMap((profile) => profile.messageParts))]
+    routeModelIds.push(pool.modelId)
+    routeModelProfiles[pool.modelId] = {
+      inputModalities,
+      outputModalities,
+      messageParts,
+      supportsToolCalling: profiles.some((profile) => profile.supportsToolCalling),
+      contextWindowTokens: Math.max(...profiles.map((profile) => profile.contextWindowTokens ?? 0)) || undefined,
+      maxOutputTokens: Math.max(...profiles.map((profile) => profile.maxOutputTokens ?? 0)) || undefined
+    }
+  }
+  if (routeModelIds.length > 0) {
+    groups.push({
+      providerId: 'route-gateway:local',
+      label: providerSettings.localGateway.name,
+      modelIds: routeModelIds,
+      modelProfiles: routeModelProfiles
     })
   }
   return mergeModelGroups(groups)

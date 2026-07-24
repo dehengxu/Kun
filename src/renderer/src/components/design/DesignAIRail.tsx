@@ -316,7 +316,7 @@ function DesignAIRailInner({
     <aside
       className={`design-ai-panel ds-no-drag relative flex min-h-0 flex-col overflow-hidden border-l border-ds-border-muted bg-white text-ds-ink backdrop-blur-xl dark:bg-ds-canvas ${className}`}
     >
-        <div className="shrink-0 border-b border-ds-border-muted bg-white/92 px-3 py-3 dark:bg-ds-card">
+        <div className="design-ai-header shrink-0 border-b border-ds-border-muted bg-white/92 px-3 py-3 dark:bg-ds-card">
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
@@ -411,7 +411,7 @@ function DesignAIRailInner({
           </div>
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-white/36 dark:bg-transparent">
+        <div className="design-ai-body min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-white/36 dark:bg-transparent">
           {viewingChildThread ? (
             <div className="sticky top-0 z-20 border-b border-ds-border-muted/80 bg-white/88 px-4 py-3 backdrop-blur-xl dark:bg-ds-card/88">
               <div className="flex items-center gap-2">
@@ -473,7 +473,7 @@ function DesignAIRailInner({
 
       <div
         data-design-rail-composer
-        className="shrink-0 border-t border-ds-border-muted bg-white/92 px-4 pb-4 pt-3 dark:bg-ds-card"
+        className="design-ai-footer shrink-0 border-t border-ds-border-muted bg-white/92 px-4 pb-4 pt-3 dark:bg-ds-card"
       >
         {!viewingChildThread ? (
           <div className="mb-2 flex flex-wrap items-center gap-2">

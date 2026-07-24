@@ -4,7 +4,6 @@ import { basename, dirname, join } from 'node:path'
 import { atomicWriteFile } from '../../kun/src/adapters/file/atomic-write.js'
 import {
   applyKunRuntimePatch,
-  kunSettingsEnvelope,
   DEFAULT_GUI_UPDATE_CHANNEL,
   DEFAULT_CHECKPOINT_CLEANUP_ENABLED,
   DEFAULT_CHECKPOINT_CLEANUP_INTERVAL_DAYS,
@@ -12,6 +11,7 @@ import {
   DEFAULT_GIT_BRANCH_PREFIX,
   DEFAULT_LOG_RETENTION_DAYS,
   DEFAULT_WRITE_WORKSPACE_ROOT,
+  DEFAULT_WRITE_WELCOME_FILE_NAME,
   defaultClawSettings,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
@@ -19,7 +19,6 @@ import {
   defaultScheduleSettings,
   defaultWorkflowSettings,
   getKunRuntimeSettings,
-  mergeKunRuntimeSettings,
   mergeModelProviderSettings,
   defaultWriteSettings,
   mergeClawSettings,
@@ -36,7 +35,6 @@ import {
   normalizeCheckpointCleanupSettings,
   normalizeGitBranchPrefix,
   normalizeKeyboardShortcuts,
-  migrateLegacyAppSettings,
   normalizeAppSettings,
   type AppSettingsPatch,
   type AppSettingsV1,
@@ -83,7 +81,6 @@ const LEGACY_SETTINGS_FILE_NAME = 'deepseek-gui-settings.json'
 // 正常情况下迁移模块已把它们 rename 走,这里是迁移失败/被跳过时的
 // 跨目录兜底。
 const COMPATIBLE_USER_DATA_DIR_NAMES = ['deepseek-gui', 'DeepSeek GUI'] as const
-const RECOVERABLE_WORKSPACE_ROOT_ERROR_CODES = new Set(['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'])
 const WELCOME_MARKDOWN = `# Welcome to Write
 
 This is your default writing workspace.
@@ -201,80 +198,29 @@ function serializeSettingsForDisk(settings: AppSettingsV1): string {
   return JSON.stringify(normalizeStoredSettings(settings), null, 2)
 }
 
-function errnoCode(error: unknown): string {
-  return isErrnoException(error) && typeof error.code === 'string' ? error.code : ''
-}
+async function ensureManagedWorkspaceRootsExist(settings: AppSettingsV1): Promise<void> {
+  await mkdir(DEFAULT_WORKSPACE_ROOT, { recursive: true })
+  await mkdir(DEFAULT_WRITE_WORKSPACE_ROOT_ABSOLUTE, { recursive: true })
+  await mkdir(DEFAULT_CONVERSATION_WORKSPACE_ROOT_ABSOLUTE, { recursive: true })
 
-function isRecoverableWorkspaceRootError(error: unknown): boolean {
-  return RECOVERABLE_WORKSPACE_ROOT_ERROR_CODES.has(errnoCode(error))
-}
-
-export async function ensureWorkspaceRootExists(workspaceRoot: string): Promise<string> {
-  const normalized = normalizeWorkspaceRoot(workspaceRoot)
-  await mkdir(normalized, { recursive: true })
-  return normalized
-}
-
-async function ensureSettingsWorkspaceRoot(settings: AppSettingsV1): Promise<AppSettingsV1> {
-  const workspaceRoot = normalizeWorkspaceRoot(settings.workspaceRoot)
-  try {
-    await ensureWorkspaceRootExists(workspaceRoot)
-    return settings.workspaceRoot === workspaceRoot ? settings : { ...settings, workspaceRoot }
-  } catch (error) {
-    const defaultWorkspaceRoot = normalizeWorkspaceRoot(DEFAULT_WORKSPACE_ROOT)
-    if (workspaceRoot === defaultWorkspaceRoot || !isRecoverableWorkspaceRootError(error)) throw error
-
-    console.warn('[kun-gui] Workspace root is unavailable; falling back to default workspace.', {
-      workspaceRoot,
-      defaultWorkspaceRoot,
-      code: errnoCode(error),
-      message: error instanceof Error ? error.message : String(error)
-    })
-
-    await ensureWorkspaceRootExists(defaultWorkspaceRoot)
-    return { ...settings, workspaceRoot: defaultWorkspaceRoot }
-  }
-}
-
-async function ensureWriteWorkspaceRootsExist(settings: AppSettingsV1): Promise<void> {
-  for (const workspaceRoot of settings.write.workspaces) {
-    if (!workspaceRoot) continue
-    await mkdir(workspaceRoot, { recursive: true })
-  }
-
-  const welcomePath = join(settings.write.defaultWorkspaceRoot, 'welcome.md')
+  const welcomePath = join(DEFAULT_WRITE_WORKSPACE_ROOT_ABSOLUTE, DEFAULT_WRITE_WELCOME_FILE_NAME)
   try {
     await writeFile(welcomePath, WELCOME_MARKDOWN, { encoding: 'utf8', flag: 'wx' })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
   }
-}
 
-async function ensureConversationWorkspaceRootExists(settings: AppSettingsV1): Promise<void> {
-  const root = normalizeConversationWorkspaceRoot(settings.conversationWorkspaceRoot)
-  if (!root) return
-  await mkdir(root, { recursive: true })
-}
-
-async function ensureClawChannelWorkspaceRootsExist(settings: AppSettingsV1): Promise<void> {
   for (const channel of settings.claw.channels) {
-    const workspaceRoot = normalizeClawChannelWorkspaceRoot(channel)
-    if (!workspaceRoot) continue
-    await mkdir(workspaceRoot, { recursive: true })
+    const managedChannelRoot = defaultClawChannelWorkspaceRoot(channel)
+    if (normalizeClawChannelWorkspaceRoot(channel) !== managedChannelRoot) continue
+    await mkdir(managedChannelRoot, { recursive: true })
     for (const conversation of channel.conversations) {
-      const conversationWorkspaceRoot = normalizeClawConversationWorkspaceRoot(channel, conversation)
-      if (!conversationWorkspaceRoot) continue
-      await mkdir(conversationWorkspaceRoot, { recursive: true })
+      const managedConversationRoot = defaultClawConversationWorkspaceRoot(channel, conversation)
+      if (normalizeClawConversationWorkspaceRoot(channel, conversation) === managedConversationRoot) {
+        await mkdir(managedConversationRoot, { recursive: true })
+      }
     }
   }
-}
-
-async function prepareSettingsDirectories(settings: AppSettingsV1): Promise<AppSettingsV1> {
-  const prepared = await ensureSettingsWorkspaceRoot(settings)
-  await ensureWriteWorkspaceRootsExist(prepared)
-  await ensureConversationWorkspaceRootExists(prepared)
-  await ensureClawChannelWorkspaceRootsExist(prepared)
-  return prepared
 }
 
 const defaultSettings = (): AppSettingsV1 => ({
@@ -319,42 +265,10 @@ const defaultSettings = (): AppSettingsV1 => ({
 })
 
 function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
-  const migrated = migrateLegacyAppSettings(parsed)
-  const defaults = defaultSettings()
-  return {
-    ...defaults,
-    ...migrated,
-    provider: mergeModelProviderSettings(defaults.provider, migrated.provider),
-    agents: kunSettingsEnvelope(
-      mergeKunRuntimeSettings(getKunRuntimeSettings(defaults), migrated.agents?.kun)
-    ),
-    log: { ...defaults.log, ...migrated.log },
-    checkpointCleanup: normalizeCheckpointCleanupSettings({
-      ...defaults.checkpointCleanup,
-      ...migrated.checkpointCleanup
-    }),
-    gitBranchPrefix: normalizeGitBranchPrefix(migrated.gitBranchPrefix),
-    notifications: { ...defaults.notifications, ...migrated.notifications },
-    appBehavior: mergeAppBehaviorSettings(defaults.appBehavior, migrated.appBehavior),
-    keyboardShortcuts: normalizeKeyboardShortcuts(migrated.keyboardShortcuts),
-    write: mergeWriteSettings(defaults.write, migrated.write),
-    claw: mergeClawSettings(defaults.claw, migrated.claw),
-    schedule: mergeScheduleSettings(defaults.schedule, migrated.schedule),
-    workflow: mergeWorkflowSettings(defaults.workflow, migrated.workflow),
-    design: mergeDesignSettings(defaults.design, migrated.design),
-    terminal: mergeTerminalSettings(defaults.terminal, migrated.terminal),
-    guiUpdate: { ...defaults.guiUpdate, ...migrated.guiUpdate },
-    codePromptPrefix: typeof migrated.codePromptPrefix === 'string' ? migrated.codePromptPrefix : '',
-    disabledSkillIds: normalizeDisabledSkillIds(migrated.disabledSkillIds)
-  }
-}
-
-function normalizeDisabledSkillIds(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return [...new Set(value
-    .filter((id): id is string => typeof id === 'string')
-    .map((id) => id.trim().replace(/^\/?skill:/i, '').trim())
-    .filter(Boolean))]
+  // normalizeAppSettings owns the legacy predicate. Calling the legacy
+  // migrator unconditionally here rebuilt every current provider object and
+  // silently discarded newer extensions such as routePools/localGateway.
+  return normalizeAppSettings(parsed as AppSettingsV1)
 }
 
 function hasLegacyProviderPlaintext(settings: AppSettingsV1): boolean {
@@ -374,7 +288,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function loadDefaultSettings(): Promise<AppSettingsV1> {
   const defaults = normalizeStoredSettings(defaultSettings())
-  return prepareSettingsDirectories(defaults)
+  await ensureManagedWorkspaceRootsExist(defaults)
+  return defaults
 }
 
 async function writeInvalidSettingsBackup(path: string, raw: string): Promise<string | null> {
@@ -520,7 +435,8 @@ export class JsonSettingsStore {
     }
 
     const normalized = normalizeStoredSettings(buildMergedSettings(parsed as Partial<AppSettingsV1>))
-    const prepared = await prepareSettingsDirectories(normalized)
+    await ensureManagedWorkspaceRootsExist(normalized)
+    const prepared = normalized
     if (this.options.credentialMigration && hasLegacyProviderPlaintext(prepared)) {
       const backupPath = await writeLegacyCredentialSettingsBackup(sourcePath, raw)
       if (!backupPath) {
@@ -532,7 +448,7 @@ export class JsonSettingsStore {
     const migration = await this.prepareCredentialMigration(prepared, false)
     if (migration === undefined) {
       this.cache = prepared
-      if (sourcePath !== this.path || prepared.workspaceRoot !== normalized.workspaceRoot) {
+      if (sourcePath !== this.path) {
         await this.save(prepared)
       }
       return this.cache
@@ -542,9 +458,7 @@ export class JsonSettingsStore {
       return this.cache
     }
 
-    const shouldPersist = sourcePath !== this.path ||
-      prepared.workspaceRoot !== normalized.workspaceRoot ||
-      migration.removedPlaintext
+    const shouldPersist = sourcePath !== this.path || migration.removedPlaintext
     if (shouldPersist) {
       try {
         await this.persistSettings(migration.persistedSettings)
@@ -568,7 +482,8 @@ export class JsonSettingsStore {
 
   async save(data: AppSettingsV1): Promise<void> {
     const normalized = normalizeStoredSettings(data)
-    const prepared = await prepareSettingsDirectories(normalized)
+    await ensureManagedWorkspaceRootsExist(normalized)
+    const prepared = normalized
     if (this.options.credentialMigration && hasLegacyProviderPlaintext(prepared)) {
       const currentRaw = await readFile(this.path, 'utf8').catch((error) => {
         if (isErrnoException(error) && error.code === 'ENOENT') return serializeSettingsForDisk(prepared)

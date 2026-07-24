@@ -16,7 +16,12 @@ import type { ModelClient, ModelRequest, ModelStreamChunk } from '../ports/model
 import { emptyUsageSnapshot } from '../contracts/usage.js'
 import type { TurnItem } from '../contracts/items.js'
 import { RuntimeEventRecorder } from './runtime-event-recorder.js'
-import { TurnCapacityError, TurnConflictError, TurnService } from './turn-service.js'
+import {
+  DEFAULT_MAX_CONCURRENT_TURNS,
+  TurnCapacityError,
+  TurnConflictError,
+  TurnService
+} from './turn-service.js'
 import { ThreadService } from './thread-service.js'
 import { UsageService } from './usage-service.js'
 
@@ -94,6 +99,10 @@ class FailOnceAppendSessionStore extends InMemorySessionStore {
 }
 
 describe('TurnService startTurn', () => {
+  it('defaults to 256 concurrent active turns', () => {
+    expect(DEFAULT_MAX_CONCURRENT_TURNS).toBe(256)
+  })
+
   it('atomically admits only one active turn for a thread', async () => {
     const sessionStore = new InMemorySessionStore()
     const threadStore = new InMemoryThreadStore()
@@ -499,6 +508,49 @@ describe('TurnService startTurn', () => {
     expect(runtimeEvents.filter((event) => event.kind === 'turn_steered')).toHaveLength(1)
     await service.interruptTurn({ threadId, turnId: started.turnId })
   })
+
+  it('rejects guidance after the model loop seals its terminal boundary', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-07-16T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const steering = new SteeringQueue()
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight: new InflightTracker(),
+      steering,
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    const threadId = 'thr_sealed_steering'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Sealed steering',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+    const started = await service.startTurn({ threadId, request: { prompt: 'run' } })
+    expect(steering.sealIfEmpty(started.turnId)).toBe(true)
+
+    await expect(service.steerTurn({
+      threadId,
+      turnId: started.turnId,
+      text: 'too late'
+    })).rejects.toThrow('turn is no longer accepting steering')
+
+    const runtimeEvents = await sessionStore.loadEventsSince(threadId, 0)
+    expect(runtimeEvents.filter((event) => event.kind === 'turn_steered')).toHaveLength(0)
+    await service.interruptTurn({ threadId, turnId: started.turnId })
+  })
 })
 
 describe('TurnService compact', () => {
@@ -544,7 +596,7 @@ describe('TurnService compact', () => {
     const items: TurnItem[] = [
       makeUserItem({ id: 'item_1', threadId, turnId, text: 'Initial task: fix /compact.' }),
       makeAssistantTextItem({ id: 'item_2', threadId, turnId, text: 'I found the service path.', status: 'completed' }),
-      makeUserItem({ id: 'item_3', threadId, turnId, text: 'Please preserve this clue.' }),
+      makeUserItem({ id: 'item_3', threadId, turnId, text: 'Active Skill: retained-manual-tail-only\nPlease preserve this clue.' }),
       makeAssistantTextItem({ id: 'item_4', threadId, turnId, text: 'Recent tail A.', status: 'completed' }),
       makeUserItem({ id: 'item_5', threadId, turnId, text: 'Recent tail B.' }),
       makeAssistantTextItem({ id: 'item_6', threadId, turnId, text: 'Recent tail C.', status: 'completed' })
@@ -590,14 +642,20 @@ describe('TurnService compact', () => {
     expect(model.requests[0].systemPrompt).toBe(COMPACTION_SYSTEM_PROMPT)
     expect(model.requests[0].prefix).toEqual([])
     const summaryHistory = model.requests[0].history
-    expect(summaryHistory[0]?.kind === 'user_message' ? summaryHistory[0].text : '')
-      .toContain('Initial task: fix /compact.')
+    const summaryUserMessages = summaryHistory
+      .filter((item) => item.kind === 'user_message')
+      .map((item) => item.text)
+    expect(summaryUserMessages[0]).toContain('Initial task: fix /compact.')
+    expect(summaryUserMessages).not.toContain('Active Skill: retained-manual-tail-only\nPlease preserve this clue.')
+    expect(summaryUserMessages).not.toContain('Recent tail B.')
+    expect(summaryUserMessages).not.toContain('Recent tail C.')
     const continuationItem = summaryHistory[summaryHistory.length - 1]
     expect(continuationItem?.kind).toBe('user_message')
     if (!continuationItem || continuationItem.kind !== 'user_message') {
       throw new Error('expected compaction continuation message to be a user message')
     }
     expect(continuationItem.text).toContain('Provide a detailed summary of our conversation above')
+    expect(continuationItem.text).not.toContain('Active Skill: retained-manual-tail-only')
     expect(response.summary).toContain('MODEL SUMMARY kept the durable state.')
     expect(response.pinnedConstraints).toEqual(prefix.pinnedConstraints)
 

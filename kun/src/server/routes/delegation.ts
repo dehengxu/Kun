@@ -31,14 +31,25 @@ export async function delegationDiagnostics(
 /**
  * GET /v1/delegation/profiles
  *
- * Returns the merged profile roster (builtin + GUI + future workspace
- * markdown overlay). Lighter than diagnostics — pure config snapshot.
+ * Without `workspace`, returns the static roster (builtin + GUI config).
+ * With `?workspace=...`, returns `.kun/agents/*.md` overlays for the GUI
+ * Settings / Sidebar roster (`source: "workspace"`).
  */
 export async function delegationProfiles(
-  runtime: DelegationRuntime | undefined
+  runtime: DelegationRuntime | undefined,
+  request?: Request
 ): Promise<JsonResponse> {
   if (!runtime) {
     return jsonResponse({ profiles: [], defaultProfile: undefined })
+  }
+  const workspace = request
+    ? new URL(request.url).searchParams.get('workspace')?.trim() || undefined
+    : undefined
+  if (workspace) {
+    return jsonResponse({
+      profiles: await runtime.listWorkspaceProfiles(workspace),
+      defaultProfile: runtime.defaultProfileName
+    })
   }
   return jsonResponse({
     profiles: runtime.listProfiles(),

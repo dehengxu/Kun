@@ -269,7 +269,11 @@ export class AgentSdkRuntime {
     return this.deps.handlesProvider(providerId)
   }
 
-  async runTurn(threadId: string, turnId: string, signal: AbortSignal): Promise<TurnStatus> {
+  async runTurn(
+    threadId: string,
+    turnId: string,
+    signal: AbortSignal
+  ): Promise<'completed' | 'failed' | 'aborted'> {
     const ctx = await this.deps.loadTurnContext(threadId, turnId)
     if (!ctx) {
       await this.deps.finishTurn(threadId, turnId, 'failed', 'no input for subscription turn')
@@ -545,7 +549,8 @@ export class AgentSdkRuntime {
       if (final?.code === 'turn_step_limit') {
         return await failWithLimit('turn_step_limit', `turn exceeded ${limits.maxSteps} model steps`)
       }
-      const status: TurnStatus = final?.status ?? 'completed'
+      const status: 'completed' | 'failed' | 'aborted' =
+        final?.status === 'failed' ? 'failed' : 'completed'
       await this.deps.finishTurn(threadId, turnId, status, final?.message)
       return status
     } catch (err) {

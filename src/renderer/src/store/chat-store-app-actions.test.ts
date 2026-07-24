@@ -6,8 +6,10 @@ import {
   mergeComposerPickList,
   persistComposerMode,
   persistComposerModel,
+  persistComposerReasoningEffort,
   rememberThreadComposerMode,
-  readStoredComposerModel
+  readStoredComposerModel,
+  readStoredComposerReasoningEffort
 } from './chat-store-helpers'
 import { createAppActions } from './chat-store-app-actions'
 
@@ -42,6 +44,7 @@ type FetchModelsResult =
 function buildHarness(fetchModelsResult: FetchModelsResult): {
   actions: ReturnType<typeof createAppActions>
   state: ChatState
+  fetchUpstreamModels: ReturnType<typeof vi.fn>
 } {
   let state = {
     activeThreadId: null,
@@ -49,6 +52,7 @@ function buildHarness(fetchModelsResult: FetchModelsResult): {
     composerMode: 'agent',
     composerModel: '',
     composerProviderId: '',
+    composerReasoningEffort: 'max',
     composerPickList: mergeComposerPickList(false, []),
     composerModelGroups: []
   } as unknown as ChatState
@@ -59,40 +63,54 @@ function buildHarness(fetchModelsResult: FetchModelsResult): {
   }
   const get: ChatStoreGet = () => state
 
+  const fetchUpstreamModels = vi.fn(async () => fetchModelsResult)
   vi.stubGlobal('window', {
     kunGui: {
-      fetchUpstreamModels: vi.fn(async () => fetchModelsResult),
+      fetchUpstreamModels,
       saveSettingsSilent: vi.fn(async () => state)
     }
   })
 
+  const actions = createAppActions({
+    set,
+    get,
+    i18n: { t: (key: string) => key, changeLanguage: vi.fn(async () => undefined) } as unknown as typeof i18next,
+    persistComposerModel,
+    persistComposerMode,
+    persistComposerReasoningEffort,
+    rememberThreadComposerMode,
+    readStoredComposerModel,
+    mergeComposerPickList,
+    fallbackComposerModel,
+    getComposerModelLoadPromise: () => loadPromise,
+    setComposerModelLoadPromise: (promise) => {
+      loadPromise = promise
+    },
+    applyTheme: () => undefined,
+    applyUiFontScale: () => undefined,
+    applyChatContentMaxWidth: () => undefined,
+    applyCursorSpotlight: () => undefined,
+    applyCursorSpotlightColor: () => undefined,
+    applyWriteTypography: () => undefined,
+    applyDocumentLocale: () => undefined,
+    workspaceLabelFromPath: (workspaceRoot) => workspaceRoot,
+    normalizeWorkspaceRoot: (workspaceRoot) => workspaceRoot?.trim() ?? ''
+  })
+  Object.assign(state, actions)
+
   return {
     state,
-    actions: createAppActions({
-      set,
-      get,
-      i18n: { t: (key: string) => key, changeLanguage: vi.fn(async () => undefined) } as unknown as typeof i18next,
-      persistComposerModel,
-      persistComposerMode,
-      rememberThreadComposerMode,
-      readStoredComposerModel,
-      mergeComposerPickList,
-      fallbackComposerModel,
-      getComposerModelLoadPromise: () => loadPromise,
-      setComposerModelLoadPromise: (promise) => {
-        loadPromise = promise
-      },
-      applyTheme: () => undefined,
-      applyUiFontScale: () => undefined,
-      applyChatContentMaxWidth: () => undefined,
-      applyCursorSpotlight: () => undefined,
-      applyCursorSpotlightColor: () => undefined,
-      applyWriteTypography: () => undefined,
-      applyDocumentLocale: () => undefined,
-      workspaceLabelFromPath: (workspaceRoot) => workspaceRoot,
-      normalizeWorkspaceRoot: (workspaceRoot) => workspaceRoot?.trim() ?? ''
-    })
+    fetchUpstreamModels,
+    actions
   }
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((accept) => {
+    resolve = accept
+  })
+  return { promise, resolve }
 }
 
 describe('chat-store app actions composer model loading', () => {
@@ -125,6 +143,51 @@ describe('chat-store app actions composer model loading', () => {
     expect(localStorage.getItem(COMPOSER_PROVIDER_STORAGE_KEY)).toBe('minimax')
   })
 
+  it('reloads the composer list after settings change during an in-flight model read', async () => {
+    const firstRead = deferred<FetchModelsResult>()
+    const { actions, state, fetchUpstreamModels } = buildHarness({
+      ok: true,
+      modelIds: ['gemini-3.1-pro'],
+      modelGroups: [{
+        providerId: 'gemini-subscription',
+        label: 'Gemini subscription',
+        modelIds: ['gemini-3.1-pro']
+      }]
+    })
+    fetchUpstreamModels
+      .mockImplementationOnce(async () => firstRead.promise)
+      .mockResolvedValueOnce({
+        ok: true,
+        modelIds: ['gemini-3.1-pro', 'gemini-3.5-flash', 'gemini-3.6-flash'],
+        modelGroups: [{
+          providerId: 'gemini-subscription',
+          label: 'Gemini subscription',
+          modelIds: ['gemini-3.1-pro', 'gemini-3.5-flash', 'gemini-3.6-flash']
+        }]
+      })
+
+    const initialLoad = actions.loadComposerModels()
+    const refreshAfterSettingsSave = actions.loadComposerModels()
+    firstRead.resolve({
+      ok: true,
+      modelIds: ['gemini-3.1-pro'],
+      modelGroups: [{
+        providerId: 'gemini-subscription',
+        label: 'Gemini subscription',
+        modelIds: ['gemini-3.1-pro']
+      }]
+    })
+
+    await Promise.all([initialLoad, refreshAfterSettingsSave])
+
+    expect(fetchUpstreamModels).toHaveBeenCalledTimes(2)
+    expect(state.composerModelGroups).toEqual([{
+      providerId: 'gemini-subscription',
+      label: 'Gemini subscription',
+      modelIds: ['gemini-3.1-pro', 'gemini-3.5-flash', 'gemini-3.6-flash']
+    }])
+  })
+
   it('updates the composer provider when the picker supplies a provider id', () => {
     const { actions, state } = buildHarness({
       ok: true,
@@ -150,6 +213,41 @@ describe('chat-store app actions composer model loading', () => {
     expect(window.kunGui.saveSettingsSilent).toHaveBeenCalledWith({
       agents: { kun: { model: 'MiniMax-M2', providerId: 'minimax' } }
     })
+  })
+
+  it('restores and updates reasoning preferences independently for each model', async () => {
+    persistComposerReasoningEffort('model-a', 'provider-a', 'off')
+    persistComposerReasoningEffort('model-b', 'provider-b', 'low')
+    const { actions, state } = buildHarness({
+      ok: true,
+      modelIds: ['model-a', 'model-b'],
+      defaultModelId: 'model-a',
+      modelGroups: [
+        {
+          providerId: 'provider-a',
+          label: 'Provider A',
+          modelIds: ['model-a']
+        },
+        {
+          providerId: 'provider-b',
+          label: 'Provider B',
+          modelIds: ['model-b']
+        }
+      ]
+    })
+
+    await actions.loadComposerModels()
+    expect(state.composerModel).toBe('model-a')
+    expect(state.composerReasoningEffort).toBe('off')
+
+    actions.setComposerModel('model-b', 'provider-b')
+    expect(state.composerReasoningEffort).toBe('low')
+    actions.setComposerReasoningEffort('high')
+    expect(readStoredComposerReasoningEffort('model-b', 'provider-b')).toBe('high')
+    expect(readStoredComposerReasoningEffort('model-a', 'provider-a')).toBe('off')
+
+    actions.setComposerModel('model-a', 'provider-a')
+    expect(state.composerReasoningEffort).toBe('off')
   })
 
   it('keeps active-thread plan mode changes out of the global composer default', () => {
@@ -318,7 +416,7 @@ describe('chat-store app actions composer model loading', () => {
     })
   })
 
-  it('blocks switching a chat with image attachments from vision to text-only', () => {
+  it('allows switching a chat with image history from vision to text-only', () => {
     const { actions, state } = buildHarness({
       ok: true,
       modelIds: ['vision-model', 'text-model'],
@@ -366,9 +464,11 @@ describe('chat-store app actions composer model loading', () => {
 
     actions.setComposerModel('text-model', 'test-provider')
 
-    expect(state.composerModel).toBe('vision-model')
+    expect(state.composerModel).toBe('text-model')
     expect(state.composerProviderId).toBe('test-provider')
-    expect(localStorage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY)).toBeNull()
+    expect(JSON.parse(localStorage.getItem(THREAD_COMPOSER_SELECTION_STORAGE_KEY) ?? '{}')).toEqual({
+      'thread-a': { model: 'text-model', providerId: 'test-provider' }
+    })
     expect(window.kunGui.saveSettingsSilent).not.toHaveBeenCalled()
   })
 

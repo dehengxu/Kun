@@ -7,7 +7,7 @@ export type GitCheckpointManifestV1 = {
   threadId: string
   repositoryRootCanonical: string
   workspaceRootCanonical?: string
-  head: string
+  head: string | null
   currentBranch: string | null
   createdAt: string
 }
@@ -16,7 +16,7 @@ export type GitCheckpointMetadataLike = {
   checkpointId: string
   threadId: string
   repositoryRoot: string
-  head: string
+  head: string | null
   currentBranch: string | null
   createdAt: string
 }

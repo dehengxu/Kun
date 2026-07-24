@@ -28,6 +28,7 @@ export type EventSourcedChildRunProjection = {
   /** Observability metrics carried on the child lifecycle events. */
   model?: string
   profile?: string
+  profileName?: string
   toolPolicy?: 'readOnly' | 'inherit'
   prefixReused?: boolean
   inheritedHistoryItems?: number
@@ -260,6 +261,7 @@ function upsertChildRun(
     ...(event.text ? { text: event.text } : {}),
     ...(child.childModel ? { model: child.childModel } : {}),
     ...(child.childProfile ? { profile: child.childProfile } : {}),
+    ...(child.childProfileName ? { profileName: child.childProfileName } : {}),
     ...(child.childToolPolicy ? { toolPolicy: child.childToolPolicy } : {}),
     ...(child.prefixReused !== undefined ? { prefixReused: child.prefixReused } : {}),
     ...(child.inheritedHistoryItems !== undefined ? { inheritedHistoryItems: child.inheritedHistoryItems } : {}),

@@ -3,7 +3,8 @@ export type GitCheckpointCreateResult =
       ok: true
       checkpointId: string
       repositoryRoot: string
-      head: string
+      /** `null` when the repository had no initial commit yet. */
+      head: string | null
       currentBranch: string | null
     }
   | {
@@ -17,7 +18,8 @@ export type GitCheckpointRestoreResult =
       ok: true
       checkpointId: string
       repositoryRoot: string
-      head: string
+      /** `null` when the restored checkpoint predates the first commit. */
+      head: string | null
       currentBranch: string | null
       rescueCheckpointId: string | null
     }

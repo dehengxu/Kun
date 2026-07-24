@@ -13,8 +13,9 @@
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import type { Dirent } from 'node:fs'
+import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 export type SecretEncryptor = {
   encrypt: (plaintext: string, additionalAuthenticatedData?: string | Buffer) => string
@@ -60,6 +61,66 @@ function asBuffer(value: string | Buffer): Buffer {
 
 export function isEncryptedEnvelope(value: string): boolean {
   return value.startsWith(ENVELOPE_PREFIX)
+}
+
+/**
+ * Reports whether a Kun data directory contains credentials that require the
+ * shared secret key. Unknown or unreadable credential state is treated as
+ * encrypted so callers fail closed rather than replace an inaccessible key.
+ */
+export async function hasPersistedSecretKeyMaterial(dataDir: string): Promise<boolean> {
+  return await hasEncryptedExtensionCredentials(dataDir) || await hasEncryptedMcpOAuthState(dataDir)
+}
+
+async function hasEncryptedExtensionCredentials(dataDir: string): Promise<boolean> {
+  const credentialsPath = join(dataDir, 'credentials', 'credentials.enc.json')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await readFile(credentialsPath, 'utf8'))
+  } catch (error) {
+    return !isMissingFileError(error)
+  }
+  if (!isRecord(parsed) || parsed.schemaVersion !== 1 || typeof parsed.profileId !== 'string' || !isRecord(parsed.credentials)) {
+    return true
+  }
+  return Object.keys(parsed.credentials).length > 0
+}
+
+async function hasEncryptedMcpOAuthState(dataDir: string): Promise<boolean> {
+  const oauthDirectory = join(dataDir, 'mcp-oauth')
+  let entries: Dirent<string>[]
+  try {
+    entries = await readdir(oauthDirectory, { withFileTypes: true })
+  } catch (error) {
+    return !isMissingFileError(error)
+  }
+  for (const entry of entries) {
+    // OAuth state is stored as individual JSON files. Unknown entries are
+    // unsafe because they could be a future encrypted storage format.
+    if (!entry.isFile() || !entry.name.endsWith('.json')) return true
+    try {
+      const parsed = JSON.parse(await readFile(join(oauthDirectory, entry.name), 'utf8'))
+      if (containsEncryptedEnvelope(parsed)) return true
+    } catch {
+      return true
+    }
+  }
+  return false
+}
+
+function containsEncryptedEnvelope(value: unknown): boolean {
+  if (typeof value === 'string') return isEncryptedEnvelope(value)
+  if (Array.isArray(value)) return value.some(containsEncryptedEnvelope)
+  return isRecord(value) && Object.values(value).some(containsEncryptedEnvelope)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null &&
+    'code' in error && (error as { code?: unknown }).code === 'ENOENT'
 }
 
 export type CommandResult = { code: number; stdout: string; stderr: string }
@@ -118,19 +179,43 @@ export type KeyProviderResult = {
 const KEYCHAIN_SERVICE = 'kun-secret-key'
 const KEYCHAIN_ACCOUNT = 'kun'
 
-async function tryReadOsKey(platform: NodeJS.Platform, run: CommandRunner): Promise<Buffer | null> {
+type OsKeyLookup =
+  | { status: 'found'; key: Buffer }
+  | { status: 'missing' }
+  | { status: 'unavailable'; reason: string }
+
+async function tryReadOsKey(platform: NodeJS.Platform, run: CommandRunner): Promise<OsKeyLookup> {
   try {
     if (platform === 'darwin') {
       const res = await run('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT, '-w'])
-      if (res.code === 0 && res.stdout.trim()) return Buffer.from(res.stdout.trim(), 'base64')
+      if (res.code === 0 && res.stdout.trim()) {
+        const key = Buffer.from(res.stdout.trim(), 'base64')
+        return key.length === 32
+          ? { status: 'found', key }
+          : { status: 'unavailable', reason: 'macOS keychain returned an invalid Kun key' }
+      }
+      if (res.code === 44 || /(?:could not be found|not found)/i.test(res.stderr)) {
+        return { status: 'missing' }
+      }
+      return { status: 'unavailable', reason: 'macOS keychain lookup failed' }
     } else if (platform === 'linux') {
       const res = await run('secret-tool', ['lookup', 'service', KEYCHAIN_SERVICE, 'account', KEYCHAIN_ACCOUNT])
-      if (res.code === 0 && res.stdout.trim()) return Buffer.from(res.stdout.trim(), 'base64')
+      if (res.code === 0 && res.stdout.trim()) {
+        const key = Buffer.from(res.stdout.trim(), 'base64')
+        return key.length === 32
+          ? { status: 'found', key }
+          : { status: 'unavailable', reason: 'Linux secret service returned an invalid Kun key' }
+      }
+      if (res.code === 1 && !res.stderr.trim()) return { status: 'missing' }
+      return { status: 'unavailable', reason: 'Linux secret service lookup failed' }
     }
-  } catch {
-    // tool missing → caller falls back to the key file
+  } catch (error) {
+    return {
+      status: 'unavailable',
+      reason: `OS credential helper failed: ${error instanceof Error ? error.message : String(error)}`
+    }
   }
-  return null
+  return { status: 'missing' }
 }
 
 async function tryWriteOsKey(platform: NodeJS.Platform, run: CommandRunner, key: Buffer): Promise<boolean> {
@@ -234,13 +319,51 @@ async function writeKeyFileContent(path: string, content: string): Promise<void>
   }
 }
 
+async function createKeyFileFallback(
+  keyFilePath: string,
+  existingKey: Buffer | null,
+  reason: string
+): Promise<KeyProviderResult> {
+  if (existingKey) {
+    return {
+      encryptor: createAesEncryptor(existingKey),
+      osKeychain: false,
+      reason: `${reason}; key loaded from 0600 key file (tokens still encrypted at rest)`
+    }
+  }
+  const fileKey = randomBytes(32)
+  await writeKeyFile(keyFilePath, fileKey)
+  return {
+    encryptor: createAesEncryptor(fileKey),
+    osKeychain: false,
+    reason: `${reason}; created a new 0600 key file (tokens still encrypted at rest)`
+  }
+}
+
 export type CreateKeyProviderOptions = {
   /** Path to the fallback key file (used when the OS keychain is unavailable). */
   keyFilePath: string
   platform?: NodeJS.Platform
   run?: CommandRunner
-  /** Disable OS keychain usage (force the key-file fallback). */
+  /** Disable OS credential-store usage (force the key-file fallback). */
   disableOsKeychain?: boolean
+  /** Injectable environment used to resolve the non-interactive automation override. */
+  environment?: NodeJS.ProcessEnv
+  /**
+   * Confirms that a new local fallback key is safe after an OS credential-store
+   * lookup failure. Omit to preserve the default fail-closed behavior.
+   */
+  canBootstrapKeyFileFallback?: () => boolean | Promise<boolean>
+}
+
+export const DISABLE_OS_CREDENTIAL_STORE_ENV = 'KUN_DISABLE_OS_CREDENTIAL_STORE'
+
+async function canBootstrapKeyFileFallback(options: CreateKeyProviderOptions): Promise<boolean> {
+  try {
+    return await options.canBootstrapKeyFileFallback?.() === true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -251,7 +374,10 @@ export type CreateKeyProviderOptions = {
 export async function createSecretEncryptor(options: CreateKeyProviderOptions): Promise<KeyProviderResult> {
   const platform = options.platform ?? process.platform
   const run = options.run
-  const useKeychain = !options.disableOsKeychain && run && (platform === 'darwin' || platform === 'linux')
+  const environment = options.environment ?? process.env
+  const disableOsCredentialStore = options.disableOsKeychain ??
+    environment[DISABLE_OS_CREDENTIAL_STORE_ENV] === '1'
+  const useKeychain = !disableOsCredentialStore && run && (platform === 'darwin' || platform === 'linux')
   // Migration rule: an existing raw key is authoritative because it may be the
   // only key capable of decrypting already-persisted OAuth credentials. Never
   // generate a fresh OS key before checking it.
@@ -266,8 +392,18 @@ export async function createSecretEncryptor(options: CreateKeyProviderOptions): 
       return { encryptor: createAesEncryptor(legacyFileKey), osKeychain: false, reason: 'OS keychain migration failed; existing 0600 key file preserved' }
     }
     const existing = await tryReadOsKey(platform, run)
-    if (existing && existing.length === 32) {
-      return { encryptor: createAesEncryptor(existing), osKeychain: true, reason: 'key loaded from OS keychain' }
+    if (existing.status === 'found') {
+      return { encryptor: createAesEncryptor(existing.key), osKeychain: true, reason: 'key loaded from OS keychain' }
+    }
+    // A lookup failure is different from a confirmed missing item. Generating
+    // a replacement here would make every credential encrypted by the
+    // temporarily inaccessible key permanently unreadable. Fail closed and
+    // let the caller retry once Keychain/secret-service access is restored.
+    if (existing.status === 'unavailable') {
+      if (await canBootstrapKeyFileFallback(options)) {
+        return createKeyFileFallback(options.keyFilePath, null, existing.reason)
+      }
+      throw new Error(`${existing.reason}; refusing to replace the existing Kun encryption key`)
     }
     const fresh = randomBytes(32)
     if (await tryWriteOsKey(platform, run, fresh)) {
@@ -279,7 +415,7 @@ export async function createSecretEncryptor(options: CreateKeyProviderOptions): 
   // blob in the key file, so the on-disk key cannot be decrypted by another user
   // or off the machine. Falls through to a plain key file if PowerShell/DPAPI is
   // unavailable (tokens are still AES-encrypted at rest either way).
-  if (!options.disableOsKeychain && run && platform === 'win32') {
+  if (!disableOsCredentialStore && run && platform === 'win32') {
     const keyFileText = await readFile(options.keyFilePath, 'utf8').catch(() => '')
     const existing = await readDpapiKeyFile(options.keyFilePath, run)
     if (existing) {
@@ -302,18 +438,8 @@ export async function createSecretEncryptor(options: CreateKeyProviderOptions): 
 
   // Fallback: per-user 0600 key file.
   const existingFileKey = legacyFileKey
-  if (existingFileKey) {
-    return {
-      encryptor: createAesEncryptor(existingFileKey),
-      osKeychain: false,
-      reason: 'OS keychain unavailable; key loaded from 0600 key file (tokens still encrypted at rest)'
-    }
-  }
-  const fileKey = randomBytes(32)
-  await writeKeyFile(options.keyFilePath, fileKey)
-  return {
-    encryptor: createAesEncryptor(fileKey),
-    osKeychain: false,
-    reason: 'OS keychain unavailable; created a new 0600 key file (tokens still encrypted at rest)'
-  }
+  const fallbackReason = disableOsCredentialStore
+    ? 'OS credential store disabled'
+    : 'OS keychain unavailable'
+  return createKeyFileFallback(options.keyFilePath, existingFileKey, fallbackReason)
 }

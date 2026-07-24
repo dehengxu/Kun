@@ -1,7 +1,12 @@
 import { constants, type Dirent } from 'node:fs'
 import { open, readdir, realpath, type FileHandle } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { SubagentProfileConfig, type SubagentMode, type SubagentToolPolicy } from '../contracts/capabilities.js'
+import {
+  SUBAGENT_READ_ONLY_TOOL_NAMES,
+  SubagentProfileConfig,
+  type SubagentMode,
+  type SubagentToolPolicy
+} from '../contracts/capabilities.js'
 
 /**
  * Workspace-level agent overlay.
@@ -15,17 +20,21 @@ import { SubagentProfileConfig, type SubagentMode, type SubagentToolPolicy } fro
  *     name: Code Reviewer
  *     description: One-line "when to use"
  *     mode: subagent          # subagent | primary | all
- *     model: deepseek-chat
- *     providerId: deepseek
- *     toolPolicy: inherit     # readOnly | inherit (default: inherit = follow main agent)
+ *     toolPolicy: readOnly    # default readOnly; set inherit for write tools
  *     allowedTools: [read, grep]
+ *     omit_base_prompt: false # when true, role prompt replaces Kun base
  *     color: "#3b82f6"
  *     ---
  *     Body becomes the systemPrompt verbatim (kun's base prompt is
  *     prepended unless omit_base_prompt: true).
  *
- * Files with invalid frontmatter or missing required fields are dropped
- * silently so a single broken file doesn't take down delegation.
+ * Workspace roles enter automatic BM25/LLM routing (indexed by id/name/
+ * description only — body is never searchable). They may opt into
+ * `toolPolicy: inherit` for write tools under the parent capability
+ * snapshot. They still cannot choose a model/provider/reasoning level,
+ * cannot load skills, and cannot nest `delegate_task` / `generate_subagent`.
+ * Files with invalid frontmatter are dropped silently so a single broken
+ * file doesn't take down delegation.
  */
 export type WorkspaceAgentProfile = {
   id: string
@@ -37,6 +46,7 @@ export type WorkspaceAgentProfile = {
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
 const MAX_WORKSPACE_AGENT_FILES = 32
 const MAX_WORKSPACE_AGENT_FILE_BYTES = 64 * 1024
+const WORKSPACE_AGENT_LOCAL_READ_TOOLS = ['read', 'grep', 'find', 'ls', 'repo_map'] as const
 
 export async function loadWorkspaceAgentProfiles(workspace: string): Promise<WorkspaceAgentProfile[]> {
   if (!workspace) return []
@@ -124,29 +134,38 @@ function parseAgentMarkdown(text: string, defaultId: string): { id: string; prof
   if (!id) return null
   const omitBase = boolField(fields, 'omit_base_prompt') === true || boolField(fields, 'omitBasePrompt') === true
   const systemPromptFromBody = body || undefined
+  const toolPolicy = normalizeToolPolicy(fields.toolPolicy)
+  const requestedAllowedTools = parseListField(fields, 'allowedTools')
+  const safeReadOnlyTools = new Set<string>(SUBAGENT_READ_ONLY_TOOL_NAMES)
+  const localReadTools = new Set<string>(WORKSPACE_AGENT_LOCAL_READ_TOOLS)
+  const allowedTools = toolPolicy === 'readOnly'
+    ? (requestedAllowedTools ?? WORKSPACE_AGENT_LOCAL_READ_TOOLS)
+      .filter((tool) => safeReadOnlyTools.has(tool) && localReadTools.has(tool))
+    : requestedAllowedTools
   const raw: Record<string, unknown> = {
     ...(fields.name ? { name: fields.name } : {}),
     ...(fields.description ? { description: fields.description } : {}),
     ...(fields.color ? { color: fields.color } : {}),
     mode: normalizeMode(fields.mode),
-    ...(fields.model ? { model: fields.model } : {}),
-    ...(fields.providerId ? { providerId: fields.providerId } : {}),
     ...(fields.systemPrompt ? { systemPrompt: fields.systemPrompt } : systemPromptFromBody ? { systemPrompt: systemPromptFromBody } : {}),
+    ...(omitBase ? { omitBasePrompt: true } : {}),
     ...(fields.promptPreamble ? { promptPreamble: fields.promptPreamble } : {}),
-    toolPolicy: normalizeToolPolicy(fields.toolPolicy),
-    ...(parseListField(fields, 'allowedTools') ? { allowedTools: parseListField(fields, 'allowedTools') } : {}),
-    ...(parseListField(fields, 'blockedTools') ? { blockedTools: parseListField(fields, 'blockedTools') } : {}),
+    toolPolicy,
+    ...(toolPolicy === 'readOnly'
+      ? { allowedTools: (allowedTools && allowedTools.length)
+        ? allowedTools
+        : [...WORKSPACE_AGENT_LOCAL_READ_TOOLS] }
+      : allowedTools && allowedTools.length ? { allowedTools } : {}),
+    blockedTools: [...new Set([
+      'delegate_task',
+      'generate_subagent',
+      'load_skill',
+      ...(parseListField(fields, 'blockedTools') ?? [])
+    ])],
     ...(parseListField(fields, 'blockedMcpServers') ? { blockedMcpServers: parseListField(fields, 'blockedMcpServers') } : {}),
     ...(parseListField(fields, 'blockedSkills') ? { blockedSkills: parseListField(fields, 'blockedSkills') } : {}),
-    // Reasoning depth (off|low|medium|high|max). SubagentProfileConfig validates;
-    // an invalid value would fail safeParse, so only known values survive.
-    ...(fields.reasoningEffort ? { reasoningEffort: fields.reasoningEffort } : {})
+    skillsEnabled: false
   }
-  // omit_base_prompt is a hint to the augment strategy; we model it as a
-  // marker the runtime can check if it ever needs to. For now we just keep
-  // the systemPrompt as-is and let the executor's augment-base behavior
-  // append the base prefix.
-  void omitBase
   const parsed = SubagentProfileConfig.safeParse(raw)
   if (!parsed.success) return null
   return { id, profile: parsed.data }
@@ -158,10 +177,7 @@ function normalizeMode(value: string | undefined): SubagentMode {
 }
 
 function normalizeToolPolicy(value: string | undefined): SubagentToolPolicy {
-  // Default follows the main agent (inherit); an overlay must say
-  // `toolPolicy: readOnly` explicitly to restrict the child.
-  if (value === 'readOnly') return 'readOnly'
-  return 'inherit'
+  return value === 'inherit' ? 'inherit' : 'readOnly'
 }
 
 function boolField(fields: Record<string, string>, key: string): boolean | undefined {

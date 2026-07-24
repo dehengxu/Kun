@@ -25,6 +25,7 @@ import {
   type WorkflowSettingsPatchV1,
   type WriteSettingsPatchV1
 } from './app-settings-types'
+import { isAppLocale } from './app-locales'
 import { normalizeKeyboardShortcuts, type KeyboardShortcutsConfigV1 } from './keyboard-shortcuts'
 import {
   defaultKunRuntimeSettings,
@@ -82,7 +83,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
   })
   return {
     version: 1,
-    locale: maybeSettings.locale === 'zh' ? 'zh' : 'en',
+    locale: isAppLocale(maybeSettings.locale) ? maybeSettings.locale : 'en',
     theme:
       maybeSettings.theme === 'light' || maybeSettings.theme === 'dark' || maybeSettings.theme === 'system'
         ? maybeSettings.theme
@@ -311,6 +312,13 @@ function shouldMigrateLegacySettings(settings: AppSettingsV1): boolean {
   if (!raw.agents?.kun) return true
   if ('agentProvider' in raw || 'deepseek' in raw) return true
   if (raw.agents.codewhale || raw.agents.reasonix) return true
+  // Before credentials were centralized under provider profiles, otherwise
+  // current-looking settings could already contain agents.kun but still keep
+  // the API key/base URL in the legacy Runtime slots.
+  if (
+    (typeof raw.agents.kun.apiKey === 'string' && raw.agents.kun.apiKey.trim()) ||
+    (typeof raw.agents.kun.baseUrl === 'string' && raw.agents.kun.baseUrl.trim())
+  ) return true
   const dataDir = typeof raw.agents.kun.dataDir === 'string'
     ? raw.agents.kun.dataDir.replace(/\\/g, '/').toLowerCase()
     : ''

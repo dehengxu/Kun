@@ -1,0 +1,403 @@
+import { spawn, type ChildProcess } from 'node:child_process'
+import type { ServeProviderConfig } from '../../config/kun-config.js'
+import type { TurnReasoningEffort } from '../../contracts/turns.js'
+import { userMessageTextWithComposerContexts } from '../../domain/composer-context.js'
+import { makeAssistantTextItem } from '../../domain/item.js'
+import { normalizeTurnLimits, type TurnLimitsConfig } from '../../loop/turn-limits.js'
+import type { SessionStore } from '../../ports/session-store.js'
+import type { ThreadStore } from '../../ports/thread-store.js'
+import type { ModelRequestTraceRecord } from '../../contracts/model-request-trace.js'
+import type {
+  LlmDebugRound,
+  LlmDebugSink
+} from '../../services/llm-debug-recorder.js'
+import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
+import type { TurnService } from '../../services/turn-service.js'
+import {
+  buildHistoryTranscript,
+  composeSdkPromptText,
+  DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
+} from '../agent-sdk/sdk-context-assembler.js'
+import type { DelegatedTurnRuntime } from '../delegated-turn-runtime.js'
+
+const DEFAULT_MODEL = 'gemini-3.6-flash'
+const MAX_STDOUT_BYTES = 8 * 1024 * 1024
+const MAX_STDERR_BYTES = 256 * 1024
+
+export interface AntigravityCliRuntimeDeps {
+  providerConfigs: Record<string, ServeProviderConfig>
+  providerIds: ReadonlySet<string>
+  defaultIsAntigravity: boolean
+  defaultModel?: string
+  /** Immutable Kun/role prompt supplied by the owning runtime boundary. */
+  systemPrompt?: string
+  binaryPath?: string
+  threadStore: ThreadStore
+  sessionStore: SessionStore
+  turns: TurnService
+  events: RuntimeEventRecorder
+  ids: { next(prefix: string): string }
+  debugSink?: LlmDebugSink
+  turnLimits?: TurnLimitsConfig
+  spawnFn?: typeof spawn
+  /** Delegated read-only children must deny mutation regardless of parent defaults. */
+  enforceReadOnly?: boolean
+}
+
+export function normalizeAntigravityModel(model: string | undefined): string {
+  const normalized = model?.trim().replace(/^models\//, '').replace(/-(?:low|medium|high)$/i, '')
+  return normalized && /^gemini-[a-z0-9][a-z0-9.-]*$/i.test(normalized)
+    ? normalized
+    : DEFAULT_MODEL
+}
+
+export function normalizeAntigravityEffort(
+  effort: TurnReasoningEffort | undefined
+): 'low' | 'medium' | 'high' {
+  if (effort === 'low') return 'low'
+  if (effort === 'high' || effort === 'max') return 'high'
+  return 'medium'
+}
+
+export function buildAntigravityArgs(input: {
+  prompt: string
+  model?: string
+  effort?: TurnReasoningEffort
+  timeoutMs: number
+  planMode: boolean
+  approvalPolicy: string
+  sandboxMode: string
+}): string[] {
+  const prompt = input.prompt.startsWith('-') ? `Current request:\n${input.prompt}` : input.prompt
+  const args = [
+    '--print',
+    prompt,
+    '--model', normalizeAntigravityModel(input.model),
+    '--effort', normalizeAntigravityEffort(input.effort),
+    '--print-timeout', `${Math.max(1, Math.ceil(input.timeoutMs / 1000))}s`
+  ]
+  const denyMutation =
+    input.planMode ||
+    input.approvalPolicy === 'never' ||
+    input.sandboxMode === 'read-only' ||
+    input.sandboxMode === 'external-sandbox'
+  if (denyMutation) {
+    args.push('--mode', 'plan', '--sandbox')
+  } else if (input.approvalPolicy === 'auto') {
+    args.push('--dangerously-skip-permissions')
+    if (input.sandboxMode !== 'danger-full-access') args.push('--sandbox')
+  } else if (input.sandboxMode !== 'danger-full-access') {
+    // Headless Antigravity cannot surface Kun's GUI approval gate. Preserve the
+    // requested sandbox and let the official CLI soft-deny interactive actions.
+    args.push('--sandbox')
+  }
+  return args
+}
+
+export class AntigravityCliRuntime implements DelegatedTurnRuntime {
+  constructor(private readonly deps: AntigravityCliRuntimeDeps) {}
+
+  handlesProvider(providerId: string | undefined): boolean {
+    if (providerId && this.deps.providerIds.has(providerId)) return true
+    if (!this.deps.defaultIsAntigravity) return false
+    return !providerId || !this.deps.providerConfigs[providerId]
+  }
+
+  async runTurn(
+    threadId: string,
+    turnId: string,
+    signal: AbortSignal,
+    providerId?: string
+  ): Promise<'completed' | 'failed' | 'aborted'> {
+    const thread = await this.deps.threadStore.get(threadId)
+    const turn = thread?.turns.find((candidate) => candidate.id === turnId)
+    if (!thread || !turn) {
+      await this.deps.turns.finishTurn({
+        threadId,
+        turnId,
+        status: 'failed',
+        error: 'no input for Antigravity subscription turn'
+      })
+      return 'failed'
+    }
+    const items = await this.deps.sessionStore.loadItems(threadId)
+    const userItem = [...items]
+      .reverse()
+      .find((item) => item.turnId === turnId && item.kind === 'user_message')
+    if (!userItem || userItem.kind !== 'user_message') {
+      await this.deps.turns.finishTurn({
+        threadId,
+        turnId,
+        status: 'failed',
+        error: 'no input for Antigravity subscription turn'
+      })
+      return 'failed'
+    }
+
+    const instructionBlocks = [
+      this.deps.systemPrompt?.trim(),
+      thread.systemPrompt?.trim()
+    ].filter((value, index, all): value is string =>
+      Boolean(value) && all.indexOf(value) === index
+    )
+    const prompt = composeSdkPromptText({
+      historyTranscript: buildHistoryTranscript(
+        items,
+        turnId,
+        DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
+      ),
+      userText: userMessageTextWithComposerContexts(userItem),
+      instructionBlocks
+    })
+    const limits = normalizeTurnLimits(this.deps.turnLimits)
+    const binaryPath = this.deps.binaryPath?.trim() || process.env.KUN_ANTIGRAVITY_BINARY?.trim() || 'agy'
+    const model = normalizeAntigravityModel(turn.model || thread.model || this.deps.defaultModel)
+    const effort = normalizeAntigravityEffort(turn.reasoningEffort)
+    const planMode = this.deps.enforceReadOnly === true || (turn.mode ?? thread.mode) === 'plan'
+    const sandboxMode = this.deps.enforceReadOnly === true ? 'read-only' : thread.sandboxMode
+    const args = buildAntigravityArgs({
+      prompt,
+      model,
+      effort,
+      timeoutMs: limits.maxWallTimeMs,
+      planMode,
+      approvalPolicy: thread.approvalPolicy,
+      sandboxMode
+    })
+    let trace = startAntigravityTrace(this.deps.debugSink, {
+      threadId,
+      turnId,
+      provider: providerId?.trim() || 'antigravity-cli',
+      model,
+      prompt,
+      effort,
+      planMode,
+      approvalPolicy: thread.approvalPolicy,
+      sandboxMode
+    })
+
+    try {
+      const output = await runAntigravityProcess({
+        binaryPath,
+        args,
+        cwd: thread.workspace,
+        signal,
+        timeoutMs: limits.maxWallTimeMs,
+        spawnFn: this.deps.spawnFn
+      })
+      if (signal.aborted) {
+        await finishAntigravityTrace(trace, {
+          kind: 'error',
+          error: new Error('Antigravity CLI turn was aborted')
+        })
+        trace = undefined
+        await this.deps.turns.finishTurn({ threadId, turnId, status: 'aborted' })
+        return 'aborted'
+      }
+      const text = output.trim()
+      if (!text) throw new Error('Antigravity CLI returned an empty response')
+      await finishAntigravityTrace(trace, { kind: 'completed', text })
+      trace = undefined
+      const itemId = this.deps.ids.next('item_assistant')
+      await this.deps.events.record({
+        kind: 'assistant_text_delta',
+        threadId,
+        turnId,
+        itemId,
+        item: makeAssistantTextItem({
+          id: itemId,
+          threadId,
+          turnId,
+          text,
+          status: 'running'
+        })
+      })
+      await this.deps.turns.applyItem(
+        threadId,
+        makeAssistantTextItem({
+          id: itemId,
+          threadId,
+          turnId,
+          text,
+          status: 'completed'
+        })
+      )
+      await this.deps.turns.finishTurn({ threadId, turnId, status: 'completed' })
+      return 'completed'
+    } catch (error) {
+      await finishAntigravityTrace(trace, { kind: 'error', error })
+      trace = undefined
+      if (signal.aborted) {
+        await this.deps.turns.finishTurn({ threadId, turnId, status: 'aborted' })
+        return 'aborted'
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      await this.deps.turns.finishTurn({
+        threadId,
+        turnId,
+        status: 'failed',
+        error: message,
+        code: 'antigravity_cli_failed',
+        severity: 'error'
+      })
+      return 'failed'
+    }
+  }
+}
+
+function runAntigravityProcess(input: {
+  binaryPath: string
+  args: string[]
+  cwd: string
+  signal: AbortSignal
+  timeoutMs: number
+  spawnFn?: typeof spawn
+}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const spawnFn = input.spawnFn ?? spawn
+    let child: ChildProcess
+    try {
+      child = spawnFn(input.binaryPath, input.args, {
+        cwd: input.cwd,
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false
+      })
+    } catch (error) {
+      reject(error)
+      return
+    }
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    let timedOut = false
+    const terminate = (): void => {
+      try {
+        child.kill()
+      } catch {
+        // best effort
+      }
+    }
+    const onAbort = (): void => terminate()
+    const done = (error?: Error): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      input.signal.removeEventListener('abort', onAbort)
+      if (error) reject(error)
+      else resolve(stdout)
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      terminate()
+    }, input.timeoutMs)
+    if (input.signal.aborted) terminate()
+    else input.signal.addEventListener('abort', onAbort, { once: true })
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      stdout += chunk
+      if (Buffer.byteLength(stdout) > MAX_STDOUT_BYTES) {
+        terminate()
+        done(new Error('Antigravity CLI response exceeded the output limit'))
+      }
+    })
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      stderr = `${stderr}${chunk}`.slice(-MAX_STDERR_BYTES)
+    })
+    child.on('error', (error) => done(error))
+    child.on('exit', (code) => {
+      if (input.signal.aborted) {
+        done(new Error('Antigravity CLI turn was aborted'))
+      } else if (timedOut) {
+        done(new Error(`Antigravity CLI turn exceeded ${input.timeoutMs}ms wall time`))
+      } else if (code !== 0) {
+        done(new Error(stderr.trim() || `Antigravity CLI exited with code ${code}`))
+      } else {
+        done()
+      }
+    })
+  })
+}
+
+type AntigravityTrace = {
+  sink: LlmDebugSink
+  round: LlmDebugRound
+  record: ModelRequestTraceRecord
+}
+
+function startAntigravityTrace(
+  sink: LlmDebugSink | undefined,
+  input: {
+    threadId: string
+    turnId: string
+    provider: string
+    model: string
+    prompt: string
+    effort: 'low' | 'medium' | 'high'
+    planMode: boolean
+    approvalPolicy: string
+    sandboxMode: string
+  }
+): AntigravityTrace | undefined {
+  if (!sink) return undefined
+  let round: LlmDebugRound | undefined
+  try {
+    round = sink.start({
+      threadId: input.threadId,
+      turnId: input.turnId,
+      provider: input.provider,
+      model: input.model
+    })
+    const record = sink.beginCliInvocation(round, {
+      endpointFormat: 'antigravity-cli',
+      target: 'antigravity-cli://local/print',
+      bodyText: JSON.stringify({
+        model: input.model,
+        input: input.prompt,
+        effort: input.effort,
+        mode: input.planMode ? 'plan' : 'agent',
+        approvalPolicy: input.approvalPolicy,
+        sandboxMode: input.sandboxMode
+      })
+    })
+    return { sink, round, record }
+  } catch {
+    if (round) void sink.finish(round).catch(() => undefined)
+    warnAntigravityTraceFailure()
+    return undefined
+  }
+}
+
+async function finishAntigravityTrace(
+  trace: AntigravityTrace | undefined,
+  result: { kind: 'completed'; text: string } | { kind: 'error'; error: unknown }
+): Promise<void> {
+  if (!trace) return
+  try {
+    if (result.kind === 'completed') {
+      trace.sink.captureChunk(trace.round, {
+        kind: 'assistant_text_delta',
+        text: result.text
+      })
+      trace.sink.captureChunk(trace.round, { kind: 'completed', stopReason: 'stop' })
+    } else {
+      trace.sink.captureChunk(trace.round, {
+        kind: 'error',
+        message: result.error instanceof Error ? result.error.message : String(result.error)
+      })
+      trace.sink.captureTransportError(trace.record, result.error)
+    }
+    await trace.sink.finish(trace.round)
+  } catch {
+    warnAntigravityTraceFailure()
+  }
+}
+
+let antigravityTraceFailureWarned = false
+
+function warnAntigravityTraceFailure(): void {
+  if (antigravityTraceFailureWarned) return
+  antigravityTraceFailureWarned = true
+  console.warn(
+    '[kun:antigravity] model request observability capture failed; the CLI turn continues unchanged'
+  )
+}

@@ -1,5 +1,5 @@
 import type { AttachmentReference } from '../../agent/types'
-import type { PreparedImageAttachmentUpload } from '../../lib/image-attachment-upload'
+import type { RuntimeImageAttachmentTextFallback } from '@shared/runtime-image-attachment'
 import type { CanvasDocument, CanvasShape } from './canvas-types'
 
 export type CanvasImageAutoAttachmentCandidate = {
@@ -49,7 +49,7 @@ export function parseCanvasImageDataUrl(dataUrl: string): CanvasImageDataPayload
 
 export function canvasAutoAttachmentReference(input: {
   uploaded: CanvasUploadedAttachmentMetadata
-  prepared: PreparedImageAttachmentUpload
+  preview: RuntimeImageAttachmentTextFallback
 }): AttachmentReference {
   return {
     id: input.uploaded.id,
@@ -57,7 +57,7 @@ export function canvasAutoAttachmentReference(input: {
     mimeType: input.uploaded.mimeType,
     width: input.uploaded.width,
     height: input.uploaded.height,
-    previewUrl: `data:${input.prepared.mimeType};base64,${input.prepared.dataBase64}`
+    previewUrl: `data:${input.preview.mimeType};base64,${input.preview.dataBase64}`
   }
 }
 

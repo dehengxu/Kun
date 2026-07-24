@@ -15,6 +15,16 @@ function ctx(threadId = 't1'): ToolHostContext {
 describe('task_graph tool', () => {
   const dirs: string[] = []
   afterEach(async () => Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))))
+
+  it('keeps retry and concurrency policy out of the model schema', () => {
+    const tool = createTaskGraphTool()
+    const properties = tool.inputSchema.properties as Record<string, { enum?: string[] }>
+
+    expect(properties).not.toHaveProperty('maxAttempts')
+    expect(properties).not.toHaveProperty('concurrency')
+    expect(properties.action?.enum).not.toContain('set_concurrency')
+  })
+
   it('adds tasks with dependencies and reports runnable set', async () => {
     const tool = createTaskGraphTool()
     await tool.execute({ action: 'add', id: 'a', title: 'A' }, ctx())
@@ -47,11 +57,24 @@ describe('task_graph tool', () => {
   })
 
   it('reports retry on failure with attempts remaining', async () => {
-    const tool = createTaskGraphTool()
-    await tool.execute({ action: 'add', id: 'a', title: 'A', maxAttempts: 2 }, ctx())
+    const tool = createTaskGraphTool({ maxAttempts: 2 })
+    await tool.execute({ action: 'add', id: 'a', title: 'A', maxAttempts: 1 }, ctx())
     await tool.execute({ action: 'start', id: 'a' }, ctx())
     const failed = await tool.execute({ action: 'fail', id: 'a', error: 'boom' }, ctx())
     expect(failed.output).toMatchObject({ retried: true })
+  })
+
+  it('rejects stale concurrency actions without changing host-owned concurrency', async () => {
+    const tool = createTaskGraphTool({ concurrency: 2 })
+    await tool.execute({ action: 'add', id: 'a', title: 'A' }, ctx())
+    await tool.execute({ action: 'add', id: 'b', title: 'B' }, ctx())
+    await tool.execute({ action: 'add', id: 'c', title: 'C' }, ctx())
+
+    const stale = await tool.execute({ action: 'set_concurrency', concurrency: 99 }, ctx())
+    const listed = await tool.execute({ action: 'list' }, ctx())
+
+    expect(stale).toMatchObject({ isError: true })
+    expect(listed.output).toMatchObject({ runnable: ['a', 'b'] })
   })
 
   it('restores a thread graph from disk', async () => {
