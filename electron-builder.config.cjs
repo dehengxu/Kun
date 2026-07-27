@@ -112,7 +112,11 @@ module.exports = {
     '**/kun/node_modules/**/*',
     '**/packages/extension-api/**/*',
     '**/packages/create-kun-extension/**/*',
-    '**/node_modules/better-sqlite3/**/*',
+    // better-sqlite3: only the prebuilt .node + its load-time deps; exclude
+    // the C source under deps/ and the build/obj/ intermediates (18MB+).
+    '**/node_modules/better-sqlite3/build/Release/*.node',
+    '**/node_modules/better-sqlite3/lib/**/*',
+    '**/node_modules/better-sqlite3/package.json',
     '**/node_modules/node-pty/**/*',
     '**/node_modules/bindings/**/*',
     '**/node_modules/file-uri-to-path/**/*',
@@ -172,6 +176,33 @@ module.exports = {
     // node_modules/openclaw (the vendor/openclaw-shim file: dep) must ship:
     // the WeChat bridge imports @tencent-weixin/openclaw-weixin/dist at
     // runtime to send media, and that chain resolves openclaw/plugin-sdk/*.
+    // ---- Size-optimization excludes (build-time / dev-time only) ----
+    // TypeScript compiler (~19MB): the app uses the pre-built renderer/main
+    // bundles from `out/`, so the runtime never needs the TS toolchain.
+    '!**/node_modules/typescript/**',
+    // Native module C/C++ source + build intermediates. Runtime only needs
+    // the prebuilt .node / .dylib files (kept via asarUnpack above).
+    '!**/node_modules/**/deps/**',
+    '!**/node_modules/**/build/obj/**',
+    '!**/node_modules/**/build/**/*.o',
+    '!**/node_modules/**/build/**/*.obj',
+    '!**/*.c',
+    '!**/*.cpp',
+    '!**/*.cc',
+    '!**/*.h',
+    '!**/*.hpp',
+    // Test fixtures shipped inside npm packages (vitest, etc.) are dead weight.
+    '!**/__tests__/**',
+    '!**/__mocks__/**',
+    '!**/*.test.{js,ts,mjs,cjs}',
+    '!**/*.spec.{js,ts,mjs,cjs}',
+    // Per-package LICENSE / NOTICE files are aggregated into the top-level
+    // THIRD_PARTY_NOTICES.md and shipped via extraResources; the per-package
+    // copies inside node_modules add ~3MB of duplicated text.
+    '!**/node_modules/**/LICENSE*',
+    '!**/node_modules/**/license*',
+    '!**/node_modules/**/NOTICE*',
+    '!**/node_modules/**/notice*'
   ],
   extraResources: [
     {
