@@ -1,6 +1,6 @@
 {
   "name": "kun",
-  "version": "0.2.26-henryx",
+  "version": "0.2.30-henry",
   "description": "Kun local HTTP/SSE agent runtime",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
