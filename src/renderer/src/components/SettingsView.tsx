@@ -3,10 +3,10 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useTranslation } from 'react-i18next'
 import {
   DEFAULT_WRITE_INLINE_COMPLETION_BASE_URL,
+  activeModelProviderNeedsApiKey,
   kunSettingsPatch,
   DEFAULT_WRITE_WORKSPACE_ROOT,
   type AppSettingsPatch,
-  getActiveAgentApiKey,
   getKunRuntimeSettings,
   getModelProviderSettings,
   isKunRuntimeInsecure,
@@ -529,7 +529,7 @@ export function SettingsView(): ReactElement {
   useEffect(() => {
     if (!form || initializedCategory.current) return
     initializedCategory.current = true
-    if (!getActiveAgentApiKey(form).trim()) {
+    if (activeModelProviderNeedsApiKey(form)) {
       setCategory('providers')
     }
   }, [form])
@@ -1203,7 +1203,7 @@ export function SettingsView(): ReactElement {
 
   const kun = getKunRuntimeSettings(form)
   const provider = getModelProviderSettings(form)
-  const activeApiKey = getActiveAgentApiKey(form)
+  const activeProviderNeedsApiKey = activeModelProviderNeedsApiKey(form)
 
   const update = (partial: SettingsPatch): void => {
     const next = mergeSettings(form, partial)
@@ -1362,7 +1362,6 @@ export function SettingsView(): ReactElement {
     form,
     provider,
     kun,
-    activeApiKey,
     saveStatus,
     saveError,
     retrySave: () => { void flushPendingSave() },
@@ -1494,7 +1493,7 @@ export function SettingsView(): ReactElement {
             data-active-category={category}
             data-search-active={searchQuery.trim() ? 'true' : 'false'}
           >
-            {category !== 'extensions' && category !== 'dataMigration' && !activeApiKey.trim() ? (
+            {category !== 'extensions' && category !== 'dataMigration' && activeProviderNeedsApiKey ? (
             <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
               <div className="text-[15px] font-semibold">{t('apiKeyRequiredTitle')}</div>
               <p className="mt-1 text-[13px] leading-6 text-amber-900/90 dark:text-amber-100/90">
